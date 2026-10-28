@@ -1,0 +1,3 @@
+[test]
+# VM creation + image pull + boot can take ~60-120s. Default 5s is too short for any e2e test.
+timeout = 180000

@@ -1,0 +1,4 @@
+# Protobuf stubs generated from proto/api.proto. GitHub collapses
+# linguist-generated files in PR diffs and leaves them out of the language
+# stats. Regenerate them with scripts/compile_proto.sh, never edit by hand.
+src/boxd/_generated/** linguist-generated=true

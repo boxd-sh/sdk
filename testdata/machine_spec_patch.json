@@ -1,0 +1,1428 @@
+{
+  "about": "updateSpec patch rules, shared by the server (crates/boxd-core/src/machine_spec_patch.rs) and both SDKs (sdk/typescript/tests/spec.test.ts, sdk/python/tests/test_spec.py). Each case applies the JSON Merge Patch `patch` to `current` and expects either the checked spec (`result`, stored form) and the changed fields with how each applies (`changes`; `machine` says what the machine is: status, size, its package rows, whether it is a fork; default running 2x8) and, for `packages`, the commands whose rows it skips and un-skips (`skipped`, `unskipped`; none when absent), or the exact error (`error`). With `minimal`, `patch` is also exactly what the SDKs compute from `current` to `result`. Errors with `sdk` are also raised by the SDKs before sending. Change the rules in all three places together.",
+  "cases": [
+    {
+      "name": "a label is added, the others stay",
+      "current": {
+        "version": 1,
+        "labels": {
+          "team": "eng"
+        }
+      },
+      "patch": {
+        "labels": {
+          "owner": "mike"
+        }
+      },
+      "result": {
+        "version": 1,
+        "labels": {
+          "owner": "mike",
+          "team": "eng"
+        }
+      },
+      "changes": [
+        {
+          "field": "labels",
+          "apply": "live"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "a label set to null is removed",
+      "current": {
+        "version": 1,
+        "labels": {
+          "owner": "mike",
+          "team": "eng"
+        }
+      },
+      "patch": {
+        "labels": {
+          "owner": null
+        }
+      },
+      "result": {
+        "version": 1,
+        "labels": {
+          "team": "eng"
+        }
+      },
+      "changes": [
+        {
+          "field": "labels",
+          "apply": "live"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "labels set to null are all removed",
+      "current": {
+        "version": 1,
+        "labels": {
+          "owner": "mike",
+          "team": "eng"
+        }
+      },
+      "patch": {
+        "labels": null
+      },
+      "result": {
+        "version": 1
+      },
+      "changes": [
+        {
+          "field": "labels",
+          "apply": "live"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "a list replaces the current one",
+      "current": {
+        "version": 1,
+        "networks": [
+          "eng",
+          "ops"
+        ]
+      },
+      "patch": {
+        "networks": [
+          "ops",
+          "data"
+        ]
+      },
+      "result": {
+        "version": 1,
+        "networks": [
+          "ops",
+          "data"
+        ]
+      },
+      "changes": [
+        {
+          "field": "networks",
+          "apply": "live"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "an empty list clears it",
+      "current": {
+        "version": 1,
+        "networks": [
+          "eng"
+        ]
+      },
+      "patch": {
+        "networks": []
+      },
+      "result": {
+        "version": 1
+      },
+      "changes": [
+        {
+          "field": "networks",
+          "apply": "live"
+        }
+      ]
+    },
+    {
+      "name": "null clears a list",
+      "current": {
+        "version": 1,
+        "networks": [
+          "eng"
+        ]
+      },
+      "patch": {
+        "networks": null
+      },
+      "result": {
+        "version": 1
+      },
+      "changes": [
+        {
+          "field": "networks",
+          "apply": "live"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "omitted fields are untouched",
+      "current": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "2x8",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "patch": {
+        "env": {
+          "DEBUG": "1"
+        }
+      },
+      "result": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "2x8",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "DEBUG": "1",
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "changes": [
+        {
+          "field": "env",
+          "apply": "reboot_recommended"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "an env value changes",
+      "current": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "2x8",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "patch": {
+        "env": {
+          "NODE_ENV": "production"
+        }
+      },
+      "result": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "2x8",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "production"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "changes": [
+        {
+          "field": "env",
+          "apply": "reboot_recommended"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "secrets replace the list",
+      "current": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "2x8",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "patch": {
+        "secrets": [
+          "NPM_TOKEN",
+          "SENTRY_DSN"
+        ]
+      },
+      "result": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "2x8",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN",
+          "SENTRY_DSN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "changes": [
+        {
+          "field": "secrets",
+          "apply": "reboot_recommended"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "egress is checked and sorted like a create's",
+      "current": {
+        "version": 1
+      },
+      "patch": {
+        "egress": [
+          "Z.example.com",
+          "*.ubuntu.com",
+          "a.example.com"
+        ]
+      },
+      "result": {
+        "version": 1,
+        "egress": [
+          "*.ubuntu.com",
+          "a.example.com",
+          "z.example.com"
+        ]
+      },
+      "changes": [
+        {
+          "field": "egress",
+          "apply": "live"
+        }
+      ]
+    },
+    {
+      "name": "the same value changes nothing",
+      "current": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "2x8",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "patch": {
+        "labels": {
+          "team": "eng"
+        },
+        "size": "2x8"
+      },
+      "result": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "2x8",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "changes": []
+    },
+    {
+      "name": "several fields at once",
+      "current": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "2x8",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "patch": {
+        "labels": {
+          "team": null,
+          "area": "web"
+        },
+        "networks": [
+          "eng",
+          "ops"
+        ],
+        "connections": {
+          "slack": null,
+          "jira": "shared:jira"
+        },
+        "agents": [
+          "claude",
+          "codex"
+        ]
+      },
+      "result": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "2x8",
+        "labels": {
+          "area": "web"
+        },
+        "networks": [
+          "eng",
+          "ops"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "jira": "shared:jira"
+        },
+        "agents": [
+          "claude",
+          "codex"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "changes": [
+        {
+          "field": "labels",
+          "apply": "live"
+        },
+        {
+          "field": "networks",
+          "apply": "live"
+        },
+        {
+          "field": "connections",
+          "apply": "live"
+        },
+        {
+          "field": "agents",
+          "apply": "live"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "a bigger size reboots a running machine",
+      "current": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "2x8",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "patch": {
+        "size": "4x16"
+      },
+      "machine": {
+        "status": "running",
+        "size": "2x8"
+      },
+      "result": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "4x16",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "changes": [
+        {
+          "field": "size",
+          "apply": "reboot"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "a stopped machine starts at the new size",
+      "current": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "2x8",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "patch": {
+        "size": "4x16"
+      },
+      "machine": {
+        "status": "stopped",
+        "size": "2x8"
+      },
+      "result": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "4x16",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "changes": [
+        {
+          "field": "size",
+          "apply": "live"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "a machine in standby can't change size",
+      "current": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "2x8",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "patch": {
+        "size": "4x16"
+      },
+      "machine": {
+        "status": "suspended",
+        "size": "2x8"
+      },
+      "result": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "4x16",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "changes": [
+        {
+          "field": "size",
+          "apply": "refused"
+        }
+      ]
+    },
+    {
+      "name": "naming the machine's own size only changes the spec",
+      "current": {
+        "version": 1
+      },
+      "patch": {
+        "size": "2x8"
+      },
+      "machine": {
+        "status": "running",
+        "size": "2x8"
+      },
+      "result": {
+        "version": 1,
+        "size": "2x8"
+      },
+      "changes": [
+        {
+          "field": "size",
+          "apply": "live"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "base can't change",
+      "current": {
+        "version": 1,
+        "base": {
+          "team": "eng"
+        },
+        "size": "2x8",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "patch": {
+        "base": {
+          "snapshot": "eng-base"
+        }
+      },
+      "result": {
+        "version": 1,
+        "base": {
+          "snapshot": "eng-base"
+        },
+        "size": "2x8",
+        "labels": {
+          "team": "eng"
+        },
+        "networks": [
+          "eng"
+        ],
+        "egress": [
+          "api.example.com"
+        ],
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "secrets": [
+          "NPM_TOKEN"
+        ],
+        "connections": {
+          "github": "shared:eng-bot",
+          "slack": "personal"
+        },
+        "agents": [
+          "claude"
+        ],
+        "packages": [
+          "apt-get install -y nginx"
+        ]
+      },
+      "changes": [
+        {
+          "field": "base",
+          "apply": "refused"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "isolated can't change",
+      "current": {
+        "version": 1
+      },
+      "patch": {
+        "isolated": true
+      },
+      "result": {
+        "version": 1,
+        "isolated": true
+      },
+      "changes": [
+        {
+          "field": "isolated",
+          "apply": "refused"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "assignTo can't change",
+      "current": {
+        "version": 1,
+        "assignTo": "usr-1"
+      },
+      "patch": {
+        "assignTo": "usr-2"
+      },
+      "result": {
+        "version": 1,
+        "assignTo": "usr-2"
+      },
+      "changes": [
+        {
+          "field": "assignTo",
+          "apply": "refused"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "an added command runs now",
+      "current": {
+        "version": 1,
+        "packages": [
+          "echo one"
+        ]
+      },
+      "patch": {
+        "packages": [
+          "echo one",
+          "echo two"
+        ]
+      },
+      "machine": {
+        "packages": [
+          {
+            "command": "echo one",
+            "state": "done"
+          }
+        ]
+      },
+      "result": {
+        "version": 1,
+        "packages": [
+          "echo one",
+          "echo two"
+        ]
+      },
+      "changes": [
+        {
+          "field": "packages",
+          "apply": "live"
+        }
+      ],
+      "warnings": [],
+      "minimal": true
+    },
+    {
+      "name": "a removed command is a warning",
+      "current": {
+        "version": 1,
+        "packages": [
+          "echo one",
+          "echo two"
+        ]
+      },
+      "patch": {
+        "packages": [
+          "echo one"
+        ]
+      },
+      "machine": {
+        "packages": [
+          {
+            "command": "echo one",
+            "state": "done"
+          },
+          {
+            "command": "echo two",
+            "state": "done"
+          }
+        ]
+      },
+      "result": {
+        "version": 1,
+        "packages": [
+          "echo one"
+        ]
+      },
+      "changes": [
+        {
+          "field": "packages",
+          "apply": "live"
+        }
+      ],
+      "warnings": [
+        "removing a command from the spec undoes nothing: what it did stays on the machine, and how it went stays in the machine's packages"
+      ],
+      "minimal": true
+    },
+    {
+      "name": "commands after a failed one won't run",
+      "current": {
+        "version": 1,
+        "packages": [
+          "exit 3"
+        ]
+      },
+      "patch": {
+        "packages": [
+          "exit 3",
+          "echo after"
+        ]
+      },
+      "machine": {
+        "packages": [
+          {
+            "command": "exit 3",
+            "state": "failed"
+          }
+        ]
+      },
+      "result": {
+        "version": 1,
+        "packages": [
+          "exit 3",
+          "echo after"
+        ]
+      },
+      "changes": [
+        {
+          "field": "packages",
+          "apply": "live"
+        }
+      ],
+      "warnings": [
+        "command 1 (\"exit 3\") failed, and a failed command stops every one after it: the new ones won't run"
+      ],
+      "minimal": true
+    },
+    {
+      "name": "dropping a failed command skips it and the rest run",
+      "current": {
+        "version": 1,
+        "packages": [
+          "true",
+          "exit 3",
+          "echo after"
+        ]
+      },
+      "patch": {
+        "packages": [
+          "true",
+          "echo after",
+          "echo fixed"
+        ]
+      },
+      "machine": {
+        "packages": [
+          {
+            "command": "true",
+            "state": "done"
+          },
+          {
+            "command": "exit 3",
+            "state": "failed"
+          },
+          {
+            "command": "echo after",
+            "state": "pending"
+          }
+        ]
+      },
+      "result": {
+        "version": 1,
+        "packages": [
+          "true",
+          "echo after",
+          "echo fixed"
+        ]
+      },
+      "changes": [
+        {
+          "field": "packages",
+          "apply": "live"
+        }
+      ],
+      "skipped": [
+        "exit 3"
+      ],
+      "warnings": [
+        "removing a command from the spec undoes nothing: what it did stays on the machine, and how it went stays in the machine's packages"
+      ],
+      "minimal": true
+    },
+    {
+      "name": "dropping a pending command skips it",
+      "current": {
+        "version": 1,
+        "packages": [
+          "echo one",
+          "echo two"
+        ]
+      },
+      "patch": {
+        "packages": [
+          "echo one"
+        ]
+      },
+      "machine": {
+        "packages": [
+          {
+            "command": "echo one",
+            "state": "running"
+          },
+          {
+            "command": "echo two",
+            "state": "pending"
+          }
+        ]
+      },
+      "result": {
+        "version": 1,
+        "packages": [
+          "echo one"
+        ]
+      },
+      "changes": [
+        {
+          "field": "packages",
+          "apply": "live"
+        }
+      ],
+      "skipped": [
+        "echo two"
+      ],
+      "warnings": [],
+      "minimal": true
+    },
+    {
+      "name": "a running command can't be dropped",
+      "current": {
+        "version": 1,
+        "packages": [
+          "sleep 60",
+          "echo after"
+        ]
+      },
+      "patch": {
+        "packages": [
+          "echo after"
+        ]
+      },
+      "machine": {
+        "packages": [
+          {
+            "command": "sleep 60",
+            "state": "running"
+          },
+          {
+            "command": "echo after",
+            "state": "pending"
+          }
+        ]
+      },
+      "result": {
+        "version": 1,
+        "packages": [
+          "echo after"
+        ]
+      },
+      "changes": [
+        {
+          "field": "packages",
+          "apply": "refused"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "a skipped command listed again runs",
+      "current": {
+        "version": 1,
+        "packages": [
+          "true",
+          "echo after"
+        ]
+      },
+      "patch": {
+        "packages": [
+          "true",
+          "echo after",
+          "exit 3"
+        ]
+      },
+      "machine": {
+        "packages": [
+          {
+            "command": "true",
+            "state": "done"
+          },
+          {
+            "command": "exit 3",
+            "state": "skipped"
+          },
+          {
+            "command": "echo after",
+            "state": "done"
+          }
+        ]
+      },
+      "result": {
+        "version": 1,
+        "packages": [
+          "true",
+          "echo after",
+          "exit 3"
+        ]
+      },
+      "changes": [
+        {
+          "field": "packages",
+          "apply": "live"
+        }
+      ],
+      "unskipped": [
+        "exit 3"
+      ],
+      "warnings": [],
+      "minimal": true
+    },
+    {
+      "name": "a fork runs no new commands",
+      "current": {
+        "version": 1
+      },
+      "patch": {
+        "packages": [
+          "echo one"
+        ]
+      },
+      "machine": {
+        "fork": true
+      },
+      "result": {
+        "version": 1,
+        "packages": [
+          "echo one"
+        ]
+      },
+      "changes": [
+        {
+          "field": "packages",
+          "apply": "refused"
+        }
+      ],
+      "minimal": true
+    },
+    {
+      "name": "an unknown field is refused",
+      "current": {
+        "version": 1
+      },
+      "patch": {
+        "ports": [
+          8080
+        ]
+      },
+      "error": "spec.ports: unknown field; a spec has version, base, size, assignTo, labels, networks, isolated, egress, env, secrets, connections, agents, packages",
+      "sdk": true
+    },
+    {
+      "name": "a patch is an object",
+      "current": {
+        "version": 1
+      },
+      "patch": [
+        "labels"
+      ],
+      "error": "spec: a patch is a JSON object, e.g. {\"labels\": {\"team\": \"ops\"}}",
+      "sdk": true
+    },
+    {
+      "name": "a map value is a string or null",
+      "current": {
+        "version": 1
+      },
+      "patch": {
+        "labels": {
+          "team": 7
+        }
+      },
+      "error": "spec.labels.team: a value is a string, or null to remove the key"
+    },
+    {
+      "name": "a reserved label key can't be removed",
+      "current": {
+        "version": 1,
+        "labels": {
+          "team": "eng"
+        }
+      },
+      "patch": {
+        "labels": {
+          "boxd/login": null
+        }
+      },
+      "error": "spec.labels.boxd/login: label key \"boxd/login\" is reserved: keys starting with \"boxd/\" belong to the platform"
+    },
+    {
+      "name": "a list is a list",
+      "current": {
+        "version": 1
+      },
+      "patch": {
+        "networks": "eng"
+      },
+      "error": "spec.networks: a list of strings, which replaces the current list (null or [] clears it)"
+    },
+    {
+      "name": "base is one of team or snapshot",
+      "current": {
+        "version": 1
+      },
+      "patch": {
+        "base": {
+          "team": "eng",
+          "snapshot": "eng-base"
+        }
+      },
+      "error": "spec.base: set exactly one of team or snapshot, e.g. {\"team\": \"eng\"}"
+    },
+    {
+      "name": "the patched spec passes a create's rules",
+      "current": {
+        "version": 1,
+        "secrets": [
+          "NPM_TOKEN"
+        ]
+      },
+      "patch": {
+        "env": {
+          "NPM_TOKEN": "x"
+        }
+      },
+      "error": "spec.secrets: \"NPM_TOKEN\" is also in env; a name is either a plain value (env) or a secret (secrets), not both"
+    },
+    {
+      "name": "version can't be removed",
+      "current": {
+        "version": 1
+      },
+      "patch": {
+        "version": null
+      },
+      "error": "spec.version: required; this server accepts version 1"
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+[project]
+name = "boxd"
+version = "0.2.21"
+description = "Python SDK for the boxd cloud VM platform"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Azin" }]
+requires-python = ">=3.10"
+keywords = ["boxd", "vm", "microvm", "sandbox", "compute", "grpc", "sdk"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+]
+dependencies = [
+    # Floors match what api_pb2*.py actually require (protobuf's
+    # compat guarantee is forward-only: gencode built with grpcio-tools
+    # 1.80 needs grpcio>=1.80 / protobuf>=6.31.1 at runtime, never older).
+    # Keep these in lockstep with the grpcio-tools pin below — bumping
+    # the codegen toolchain without bumping these floors reintroduces
+    # broken installs: resolvers pick an old protobuf/grpcio that can't
+    # load the newer gencode.
+    "grpcio>=1.80",
+    "protobuf>=6.31.1",
+    "pydantic>=2",
+    # spec.py takes TypedDict from here, not typing: pydantic refuses
+    # typing.TypedDict as a field type below Python 3.12. 4.12 is also
+    # what grpcio 1.80 needs.
+    "typing-extensions>=4.12",
+    # Cap below 1.0: httpx 1.0 (currently in pre-release as 1.0.devN)
+    # removed `httpx.AsyncClient`, which _credentials.py uses for the
+    # API-key → JWT exchange. Without this cap, anyone running `pip
+    # install --pre boxd` (necessary for staging dev builds) gets httpx
+    # 1.0.devN and the SDK crashes on the first call. Re-evaluate when
+    # httpx 1.0 ships stable and the AsyncClient migration path is
+    # documented.
+    "httpx>=0.27,<1",
+]
+
+[project.urls]
+Homepage = "https://boxd.sh"
+Repository = "https://github.com/azin-tech/boxd-sdk-python"
+Issues = "https://github.com/azin-tech/boxd-sdk-python/issues"
+
+[project.optional-dependencies]
+dev = [
+    # Capped at 1.80: newer grpcio-tools stamps gencode against protobuf
+    # 7.x, which bumps the runtime floor above what shared environments
+    # (e.g. anything depending on beta9's protobuf<7) can satisfy. See
+    # the dependency floors above: bump this only alongside them.
+    "grpcio-tools>=1.60,<=1.80",
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "build>=1.0",
+    "twine>=4.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# PEP 561: ship the marker so type checkers read the inline annotations.
+[tool.setuptools.package-data]
+boxd = ["py.typed"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+markers = ["e2e: end-to-end tests that create/destroy VMs (slow)"]
+addopts = "-m 'not e2e'"
+filterwarnings = [
+    "error",
+    "ignore::ResourceWarning",
+]

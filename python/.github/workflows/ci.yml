@@ -1,0 +1,33 @@
+# Public repo CI. This file is mirrored from sdk/python/ in the boxd monorepo;
+# the monorepo does not run it.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install uv
+        run: pipx install uv==0.12.21
+      - name: Install
+        run: uv sync --extra dev --python ${{ matrix.python }}
+      - name: Test
+        run: uv run pytest
+      - name: Stubs match proto/api.proto
+        run: |
+          bash scripts/compile_proto.sh
+          git diff --exit-code -- src/boxd/_generated

@@ -1,0 +1,68 @@
+{
+  "name": "@boxd-sh/sdk",
+  "version": "0.2.21",
+  "description": "TypeScript SDK for the boxd cloud VM platform",
+  "license": "MIT",
+  "author": "Azin",
+  "homepage": "https://boxd.sh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/azin-tech/boxd-sdk-typescript.git"
+  },
+  "bugs": "https://github.com/azin-tech/boxd-sdk-typescript/issues",
+  "keywords": [
+    "boxd",
+    "vm",
+    "microvm",
+    "sandbox",
+    "compute",
+    "grpc",
+    "sdk"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./web": {
+      "types": "./dist/web.d.ts",
+      "import": "./dist/web.js",
+      "default": "./dist/web.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "version": "node scripts/gen_version.mjs",
+    "build": "node scripts/gen_version.mjs && tsc",
+    "typecheck": "node scripts/gen_version.mjs && tsc --noEmit && tsc -p tsconfig.test.json && node scripts/check_web_entry.mjs",
+    "typecheck:playground": "tsc -p tsconfig.playground.json",
+    "playground": "bun run playground/scratch.ts",
+    "test": "node scripts/gen_version.mjs && bun test --timeout 180000 tests/",
+    "test:e2e": "BOXD_RUN_E2E=1 bun test --timeout 180000 tests/e2e.test.ts",
+    "proto": "bash scripts/compile_proto.sh",
+    "prepublishOnly": "bun run typecheck && bun run test && bun run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.12.0",
+    "@bufbuild/protobuf": "^2.10.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "ts-proto": "^2.0.0",
+    "grpc-tools": "^1.12.4",
+    "@types/node": "^22.0.0",
+    "@types/bun": "^1.2.0",
+    "esbuild": "^0.28.2"
+  }
+}

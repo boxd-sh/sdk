@@ -1,0 +1,185 @@
+{
+  "about": "Machine spec merge rules, shared by the server (crates/boxd-core/src/machine_spec.rs) and both SDKs (sdk/typescript/tests/spec.test.ts, sdk/python/tests/test_spec.py). Each case merges `pieces` in order and expects either the resolved spec (`expect`, in the stored JSON form: empty fields left out, version defaulted to 1) or the exact error message (`error`). Change the rules in all three places together.",
+  "cases": [
+    {
+      "name": "no pieces resolve to an empty version 1 spec",
+      "pieces": [],
+      "expect": { "version": 1 }
+    },
+    {
+      "name": "one piece passes through and gets the version",
+      "pieces": [
+        { "base": { "team": "eng" }, "size": "2x8", "labels": { "team": "eng" } }
+      ],
+      "expect": { "version": 1, "base": { "team": "eng" }, "size": "2x8", "labels": { "team": "eng" } }
+    },
+    {
+      "name": "an explicit version is kept",
+      "pieces": [{ "version": 1 }, { "networks": ["eng"] }],
+      "expect": { "version": 1, "networks": ["eng"] }
+    },
+    {
+      "name": "maps merge and the later piece wins",
+      "pieces": [
+        { "labels": { "team": "eng", "tier": "dev" }, "env": { "A": "1", "B": "1" } },
+        { "labels": { "tier": "prod" }, "env": { "B": "2", "C": "2" } }
+      ],
+      "expect": {
+        "version": 1,
+        "labels": { "team": "eng", "tier": "prod" },
+        "env": { "A": "1", "B": "2", "C": "2" }
+      }
+    },
+    {
+      "name": "a later connection replaces an earlier one for the same toolkit",
+      "pieces": [
+        { "connections": { "github": "personal", "slack": "personal" } },
+        { "connections": { "github": "shared:eng-bot" } }
+      ],
+      "expect": {
+        "version": 1,
+        "connections": { "github": "shared:eng-bot", "slack": "personal" }
+      }
+    },
+    {
+      "name": "lists combine in order without duplicates",
+      "pieces": [
+        { "networks": ["eng", "ops"], "egress": ["github.com"], "agents": ["claude"] },
+        { "networks": ["ops", "data", "eng"], "egress": ["*.atlassian.net", "github.com"], "agents": ["codex", "claude"] }
+      ],
+      "expect": {
+        "version": 1,
+        "networks": ["eng", "ops", "data"],
+        "egress": ["github.com", "*.atlassian.net"],
+        "agents": ["claude", "codex"]
+      }
+    },
+    {
+      "name": "secrets combine in order without duplicates",
+      "pieces": [{ "secrets": ["NPM_TOKEN", "SENTRY_DSN"] }, { "secrets": ["GH_PAT", "NPM_TOKEN"] }],
+      "expect": { "version": 1, "secrets": ["NPM_TOKEN", "SENTRY_DSN", "GH_PAT"] }
+    },
+    {
+      "name": "packages combine in order without duplicates",
+      "pieces": [
+        { "packages": ["apt-get update", "apt-get install -y nginx"] },
+        { "packages": ["npm i -g pnpm", "apt-get update"] },
+        { "packages": ["echo done"] }
+      ],
+      "expect": { "version": 1, "packages": ["apt-get update", "apt-get install -y nginx", "npm i -g pnpm", "echo done"] }
+    },
+    {
+      "name": "packages are commands, kept as written",
+      "pieces": [{ "packages": ["echo hi", "echo  hi", "echo hi"] }],
+      "expect": { "version": 1, "packages": ["echo hi", "echo  hi"] }
+    },
+    {
+      "name": "isolated only turns on",
+      "pieces": [{ "isolated": true }, { "isolated": false }, {}],
+      "expect": { "version": 1, "isolated": true }
+    },
+    {
+      "name": "isolated false is left out",
+      "pieces": [{ "isolated": false }],
+      "expect": { "version": 1 }
+    },
+    {
+      "name": "the same base and size twice is fine",
+      "pieces": [
+        { "base": { "snapshot": "eng-base" }, "size": "2x8" },
+        { "base": { "snapshot": "eng-base" }, "size": "2x8" }
+      ],
+      "expect": { "version": 1, "base": { "snapshot": "eng-base" }, "size": "2x8" }
+    },
+    {
+      "name": "empty maps and lists are left out",
+      "pieces": [{ "labels": {}, "networks": [], "env": {}, "connections": {}, "agents": [], "egress": [] }],
+      "expect": { "version": 1 }
+    },
+    {
+      "name": "a full spec",
+      "pieces": [
+        { "base": { "team": "eng" }, "networks": ["eng"], "labels": { "team": "eng" }, "env": { "NODE_ENV": "development" }, "connections": { "github": "shared:eng-bot" }, "agents": ["claude"] },
+        { "size": "2x8", "connections": { "slack": "personal", "jira": "shared:jira" }, "egress": ["github.com"], "secrets": ["NPM_TOKEN"], "packages": ["apt-get install -y nginx"] }
+      ],
+      "expect": {
+        "version": 1,
+        "base": { "team": "eng" },
+        "size": "2x8",
+        "labels": { "team": "eng" },
+        "networks": ["eng"],
+        "egress": ["github.com"],
+        "env": { "NODE_ENV": "development" },
+        "secrets": ["NPM_TOKEN"],
+        "connections": { "github": "shared:eng-bot", "jira": "shared:jira", "slack": "personal" },
+        "agents": ["claude"],
+        "packages": ["apt-get install -y nginx"]
+      }
+    },
+    {
+      "name": "two different bases",
+      "pieces": [{ "base": { "team": "eng" } }, { "base": { "snapshot": "eng-base" } }],
+      "error": "spec.base: set twice to different values: team(\"eng\") and snapshot(\"eng-base\")"
+    },
+    {
+      "name": "two teams",
+      "pieces": [{ "base": { "team": "eng" } }, { "base": { "team": "ops" } }],
+      "error": "spec.base: set twice to different values: team(\"eng\") and team(\"ops\")"
+    },
+    {
+      "name": "two different sizes",
+      "pieces": [{ "size": "2x8" }, { "size": "4x16" }],
+      "error": "spec.size: set twice to different values: \"2x8\" and \"4x16\""
+    },
+    {
+      "name": "a size is compared and kept as the server stores it",
+      "pieces": [{ "size": "2X8" }, { "size": " 2x8 " }, { "size": "02 x 08" }],
+      "expect": { "version": 1, "size": "2x8" }
+    },
+    {
+      "name": "two different sizes, however they are written",
+      "pieces": [{ "size": "2X8" }, { "size": "4x16" }],
+      "error": "spec.size: set twice to different values: \"2x8\" and \"4x16\""
+    },
+    {
+      "name": "a size that isn't <vcpu>x<memory> is only trimmed, for the server to refuse",
+      "pieces": [{ "size": " large " }, { "size": "large" }],
+      "expect": { "version": 1, "size": "large" }
+    },
+    {
+      "name": "assignTo set twice to the same user",
+      "pieces": [{ "assignTo": "usr_mike" }, { "size": "2x8" }, { "assignTo": "usr_mike" }],
+      "expect": { "version": 1, "size": "2x8", "assignTo": "usr_mike" }
+    },
+    {
+      "name": "assignTo set twice to different users",
+      "pieces": [{ "assignTo": "usr_mike" }, { "assignTo": "usr_ana" }],
+      "error": "spec.assignTo: set twice to different values: \"usr_mike\" and \"usr_ana\""
+    },
+    {
+      "name": "a name in both env and secrets",
+      "pieces": [{ "env": { "NPM_TOKEN": "abc" } }, { "secrets": ["NPM_TOKEN"] }],
+      "error": "spec.secrets: \"NPM_TOKEN\" is also in env; a name is either a plain value (env) or a secret (secrets), not both"
+    },
+    {
+      "name": "two different versions",
+      "pieces": [{ "version": 1 }, { "version": 2 }],
+      "error": "spec.version: set twice to different values: 1 and 2"
+    },
+    {
+      "name": "an unknown field",
+      "pieces": [{ "sise": "2x8" }],
+      "error": "spec.sise: unknown field; a spec has version, base, size, assignTo, labels, networks, isolated, egress, env, secrets, connections, agents, packages"
+    },
+    {
+      "name": "a base with both kinds",
+      "pieces": [{ "base": { "team": "eng", "snapshot": "eng-base" } }],
+      "error": "spec.base: set exactly one of team or snapshot, e.g. {\"team\": \"eng\"}"
+    },
+    {
+      "name": "a base of an unknown kind",
+      "pieces": [{ "base": { "image": "ubuntu:24.04" } }],
+      "error": "spec.base: set exactly one of team or snapshot, e.g. {\"team\": \"eng\"}"
+    }
+  ]
+}
