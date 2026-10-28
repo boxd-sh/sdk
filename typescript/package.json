@@ -1,6 +1,6 @@
 {
   "name": "@boxd-sh/sdk",
-  "version": "0.2.21",
+  "version": "0.2.22",
   "description": "TypeScript SDK for the boxd cloud VM platform",
   "license": "MIT",
   "author": "Azin",
