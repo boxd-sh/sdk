@@ -46,8 +46,8 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://boxd.sh"
-Repository = "https://github.com/azin-tech/boxd-sdk-python"
-Issues = "https://github.com/azin-tech/boxd-sdk-python/issues"
+Repository = "https://github.com/boxd-sh/sdk"
+Issues = "https://github.com/boxd-sh/sdk/issues"
 
 [project.optional-dependencies]
 dev = [

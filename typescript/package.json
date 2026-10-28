@@ -7,9 +7,10 @@
   "homepage": "https://boxd.sh",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/azin-tech/boxd-sdk-typescript.git"
+    "url": "git+https://github.com/boxd-sh/sdk.git",
+    "directory": "typescript"
   },
-  "bugs": "https://github.com/azin-tech/boxd-sdk-typescript/issues",
+  "bugs": "https://github.com/boxd-sh/sdk/issues",
   "keywords": [
     "boxd",
     "vm",

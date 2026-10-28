@@ -4,11 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SDK_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # In the monorepo the proto lives at proto/api/v1/; in the public SDK repo it
-# is mirrored to proto/api.proto.
+# is mirrored to proto/api.proto, next to this SDK's folder.
 if [ -f "${SDK_DIR}/../../proto/api/v1/api.proto" ]; then
     PROTO_DIR="$(cd "${SDK_DIR}/../../proto/api/v1" && pwd)"
 else
-    PROTO_DIR="${SDK_DIR}/proto"
+    PROTO_DIR="$(cd "${SDK_DIR}/../proto" && pwd)"
 fi
 OUT_DIR="${SDK_DIR}/src/boxd/_generated"
 
