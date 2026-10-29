@@ -454,8 +454,10 @@ export interface UpdateVmLabelsResponse_LabelsEntry {
 
 /**
  * vm_id accepts a VM name or ID (owner-resolved). protocol is "tcp" | "udp" |
- * "both" (both share one allocated public port). Re-exposing the same vm_port
- * keeps its public port and updates the protocol set. Max 3 per VM.
+ * "both" (both share one allocated public port); empty means "tcp".
+ * Re-exposing the same vm_port keeps its public port and updates the protocol
+ * set. Max 3 per VM. Answers once the machine's proxy has the forward in place
+ * (up to 5 s), so public_port accepts connections as soon as you have it.
  */
 export interface ExposePortRequest {
   /**
