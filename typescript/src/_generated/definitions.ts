@@ -2445,7 +2445,7 @@ export interface OrgBilledVm {
 
 /** Rates the costs were priced at, micro-units of `currency` per unit-hour. */
 export interface UsageRates {
-  /** per vCPU-hour while running */
+  /** per vCPU-hour of CPU time used */
   vcpuHourMicro: number;
   /** per GiB-hour of resident RAM (running or standby) */
   ramGibHourMicro: number;
@@ -2488,10 +2488,10 @@ export interface VmUsage {
     | StateSeconds
     | undefined;
   /**
-   * What the cost is computed from, in the rates' units: vCPU-hours while
-   * running, GiB-hours of resident RAM while running or in standby, GiB-hours
-   * of used disk in every state. cost_micro is these times `rates`, rounded
-   * up per component.
+   * What the cost is computed from, in the rates' units: vCPU-hours of CPU
+   * time used (a 2 vCPU machine busy 10% of an hour is 0.2), GiB-hours of
+   * resident RAM while running or in standby, GiB-hours of used disk in every
+   * state. cost_micro is these times `rates`, rounded up per component.
    */
   vcpuHours: number;
   ramGibHours: number;

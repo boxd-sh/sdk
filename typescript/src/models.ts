@@ -1710,7 +1710,7 @@ export function toBilling(b: BillingInfo | undefined): Billing {
  * unit-hour.
  */
 export interface UsageRates {
-  /** Per vCPU-hour while running. */
+  /** Per vCPU-hour of CPU time used. */
   vcpuHourMicro: number;
   /** Per GiB-hour of resident RAM, while running or in standby. */
   ramGibHourMicro: number;
@@ -1748,7 +1748,7 @@ export interface MachineUsage {
   /** Size now (or when last seen, if deleted). */
   resources: { vcpu: number; memoryBytes: number; diskBytes: number };
   seconds: StateSeconds;
-  /** vCPU-hours while running. */
+  /** vCPU-hours of CPU time used (a 2 vCPU machine busy 10% of an hour is 0.2). */
   vcpuHours: number;
   /** GiB-hours of resident RAM while running or in standby. */
   ramGibHours: number;

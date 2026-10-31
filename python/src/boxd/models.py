@@ -959,7 +959,7 @@ class UsageRates(BaseModel):
     unit-hour."""
 
     vcpu_hour_micro: int
-    """Per vCPU-hour while running."""
+    """Per vCPU-hour of CPU time used."""
     ram_gib_hour_micro: int
     """Per GiB-hour of resident RAM, while running or in standby."""
     disk_gib_hour_micro: int
@@ -1000,7 +1000,7 @@ class MachineUsage(BaseModel):
     """Size now (or when last seen, if deleted)."""
     seconds: StateSeconds
     vcpu_hours: float
-    """vCPU-hours while running."""
+    """vCPU-hours of CPU time used (a 2 vCPU machine busy 10% of an hour is 0.2)."""
     ram_gib_hours: float
     """GiB-hours of resident RAM while running or in standby."""
     disk_gib_hours: float

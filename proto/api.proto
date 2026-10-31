@@ -2184,7 +2184,7 @@ message OrgBilledVm {
 
 // Rates the costs were priced at, micro-units of `currency` per unit-hour.
 message UsageRates {
-  int64 vcpu_hour_micro     = 1;  // per vCPU-hour while running
+  int64 vcpu_hour_micro     = 1;  // per vCPU-hour of CPU time used
   int64 ram_gib_hour_micro  = 2;  // per GiB-hour of resident RAM (running or standby)
   int64 disk_gib_hour_micro = 3;  // per GiB-hour of used disk (every state)
 }
@@ -2214,10 +2214,10 @@ message VmUsage {
   uint64 memory_bytes = 8;
   uint64 disk_bytes   = 9;
   StateSeconds seconds = 10;
-  // What the cost is computed from, in the rates' units: vCPU-hours while
-  // running, GiB-hours of resident RAM while running or in standby, GiB-hours
-  // of used disk in every state. cost_micro is these times `rates`, rounded
-  // up per component.
+  // What the cost is computed from, in the rates' units: vCPU-hours of CPU
+  // time used (a 2 vCPU machine busy 10% of an hour is 0.2), GiB-hours of
+  // resident RAM while running or in standby, GiB-hours of used disk in every
+  // state. cost_micro is these times `rates`, rounded up per component.
   double vcpu_hours     = 11;
   double ram_gib_hours  = 12;
   double disk_gib_hours = 13;
