@@ -21,10 +21,36 @@ const VM_REMINT_SKEW_SEC = 60;
 /** Which kind of credential the client ended up using. */
 export type CredentialSource = "token" | "apiKey" | "vm";
 
+/** @internal What a call sends as its bearer. */
+export interface Bearer {
+  token: string;
+  /** The API key itself, not a session exchanged for it. */
+  rawKey: boolean;
+}
+
+/**
+ * @internal
+ * Whether `err`, the answer to a call that carried the API key itself, means
+ * that server can't take a key that way, so the client should exchange it:
+ * a server from before raw keys reads the key as a malformed session token
+ * ("invalid token: …"), and one that does take keys refuses one sent without
+ * TLS from a peer it doesn't see as loopback ("… accepted over TLS only …").
+ */
+export function refusesRawKey(err: unknown): boolean {
+  if (!(err instanceof AuthenticationError) || err.grpcCode !== GrpcStatus.UNAUTHENTICATED) {
+    return false;
+  }
+  return err.message.startsWith("invalid token") || err.message.includes("accepted over TLS only");
+}
+
 export interface CredentialsOptions {
   /** Explicit token. Used as-is, never refreshed. */
   token?: string;
-  /** Explicit API key. Exchanged for a session token and kept fresh. */
+  /**
+   * Explicit API key. Sent as the bearer itself over TLS (or to a loopback
+   * address); exchanged for a session token and kept fresh otherwise, and
+   * once a server refuses it as an older one does.
+   */
   apiKey?: string;
   /** Derived from `baseURL` — see `deriveExchangeUrl`. */
   exchangeUrl: string;
@@ -210,6 +236,9 @@ export class Credentials {
   #vmApiUrl?: string;
 
   #apiKey?: string;
+  /** A server refused the key itself as an older one does: exchange it from
+   *  now on, for the life of the client, every endpoint included. */
+  #rawKeyRefused = false;
   #token?: string;
   /** Epoch seconds. 0 for a never-expiring explicit token. */
   #expiresAt = 0;
@@ -250,6 +279,33 @@ export class Credentials {
     return this.#vmApiUrl;
   }
 
+  /**
+   * @internal
+   * The bearer of a call to an endpoint. `rawKeyOk` says the endpoint is
+   * reached over TLS or on a loopback address: only then does an API key go
+   * as itself (no exchange, no second host before the first call). Anything
+   * else is {@link getToken}'s session.
+   */
+  async bearer(rawKeyOk: boolean): Promise<Bearer> {
+    if (await this.sendsRawKey(rawKeyOk)) return { token: this.#apiKey!, rawKey: true };
+    return { token: await this.getToken(), rawKey: false };
+  }
+
+  /** @internal Whether {@link bearer} would send the API key itself. */
+  async sendsRawKey(rawKeyOk: boolean): Promise<boolean> {
+    return rawKeyOk && !this.#rawKeyRefused && (await this.source()) === "apiKey";
+  }
+
+  /** @internal A server refused the key itself (see {@link refusesRawKey}):
+   *  exchange it from now on. */
+  rawKeyRefused(): void {
+    this.#rawKeyRefused = true;
+  }
+
+  /**
+   * The session token: an explicit or in-machine token, or for an API key the
+   * session exchanged for it (the console's REST endpoints take only that).
+   */
   async getToken(): Promise<string> {
     const source = await this.source();
     if (source === "token") return this.#token!;
@@ -414,6 +470,71 @@ export class Credentials {
     }
     this.#token = vm.token;
     this.#expiresAt = vm.expiresAt;
+  }
+}
+
+/**
+ * @internal
+ * One endpoint's side of sending the API key itself. Each transport (one per
+ * endpoint: home, and each region) has one; they share the client's
+ * {@link Credentials}, so a refusal anywhere makes every endpoint exchange.
+ */
+export class DirectKey {
+  readonly #creds: Credentials;
+  /** Send a refused call again on the exchanged session (see {@link unary}). */
+  readonly #resend: boolean;
+  /** This endpoint has taken the key itself. */
+  #confirmed = false;
+  #probing?: Promise<void>;
+
+  /**
+   * `resend: false` is for an endpoint the region router derived from home's
+   * name rather than looked up (`_regions.ts`): a refusal of the key itself
+   * is thrown, so the router asks home where the region is and sends the
+   * call there, on the exchanged session and with the org filled in.
+   */
+  constructor(creds: Credentials, opts: { resend?: boolean } = {}) {
+    this.#creds = creds;
+    this.#resend = opts.resend ?? true;
+  }
+
+  /**
+   * Run one unary call with the bearer it should carry. When the server
+   * refuses the key itself as an older one does, the refusal is remembered
+   * and the call runs once more with the exchanged session: it was refused
+   * before any handler ran, so nothing happened twice.
+   */
+  async unary<T>(rawKeyOk: boolean, call: (token: string) => Promise<T>): Promise<T> {
+    const bearer = await this.#creds.bearer(rawKeyOk);
+    try {
+      const resp = await call(bearer.token);
+      if (bearer.rawKey) this.#confirmed = true;
+      return resp;
+    } catch (err) {
+      if (!bearer.rawKey || !refusesRawKey(err)) throw err;
+      this.#creds.rawKeyRefused();
+      if (!this.#resend) throw err;
+      return call((await this.#creds.bearer(rawKeyOk)).token);
+    }
+  }
+
+  /**
+   * Before a stream: a stream can't be sent again once refused, so when
+   * nothing has shown yet that this endpoint takes the key itself, ask it
+   * with `probe` (a cheap unary call) first. Its outcome only decides the
+   * bearer; any other failure is left for the stream to report.
+   */
+  async beforeStream(rawKeyOk: boolean, probe: (token: string) => Promise<unknown>): Promise<void> {
+    if (this.#confirmed || !(await this.#creds.sendsRawKey(rawKeyOk))) return;
+    this.#probing ??= this.unary(rawKeyOk, probe)
+      .then(
+        () => undefined,
+        () => undefined,
+      )
+      .finally(() => {
+        this.#probing = undefined;
+      });
+    await this.#probing;
   }
 }
 

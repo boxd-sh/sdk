@@ -1,4 +1,5 @@
 import type { Transport } from "./_rpc.js";
+import type { RegionOption } from "./regions.js";
 import { BoxdApiDefinition } from "./_generated/definitions.js";
 import {
   toCheckpoint,
@@ -26,34 +27,44 @@ export class MachineCheckpoints {
   constructor(private readonly transport: Transport) {}
 
   /** The machine must be running. `status` is `"pending"` until the artifact lands. */
-  async create(id: string, name: string): Promise<CreatedCheckpoint> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.createCheckpoint,
+  async create(id: string, name: string, opts: RegionOption = {}): Promise<CreatedCheckpoint> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.createCheckpoint,
       { vm: id, name },
+      { region: opts.region },
     );
     return toCreatedCheckpoint(resp);
   }
 
-  async list(id: string): Promise<Checkpoint[]> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.listCheckpoints,
+  async list(id: string, opts: RegionOption = {}): Promise<Checkpoint[]> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.listCheckpoints,
       { vm: id },
+      { region: opts.region },
     );
     return (resp.checkpoints ?? []).map(toCheckpoint);
   }
 
-  async delete(id: string, name: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.deleteCheckpoint,
+  async delete(id: string, name: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.deleteCheckpoint,
       { vm: id, name },
+      { region: opts.region },
     );
   }
 
   /**
    * Restore in place. The checkpoint must be `"ready"` (poll `status`, not
    * `available`, if you want the wait loop to be self-explanatory — they
-   * agree, but `status` is the field this checks).
+   * agree, but `status` is the field this checks). Resolves once the
+   * machine runs again from the checkpoint, so the next call reaches the
+   * restored machine.
    */
-  async restore(id: string, name: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.restoreCheckpoint,
+  async restore(id: string, name: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.restoreCheckpoint,
       { vm: id, name },
+      { region: opts.region },
     );
   }
 }

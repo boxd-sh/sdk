@@ -225,7 +225,24 @@ export interface CreateVmRequest {
    * refused, naming it. A spec whose base is a snapshot restores that
    * snapshot, as CreateVmFromSnapshot does.
    */
-  spec?: MachineSpec | undefined;
+  spec?:
+    | MachineSpec
+    | undefined;
+  /**
+   * Delete-after timer the machine is born with, written together with the
+   * machine itself, so it never exists without the timer: permanently delete
+   * it `delete_after_secs` seconds of wall-clock time after it is created,
+   * or at the next match of `delete_after_cron` (UTC, e.g. "0 18 * * *").
+   * Same rules and errors as SetDeleteAfter: one or the other, not both.
+   * Unset, zero or empty: no timer. Refused for a machine created for
+   * someone else (`spec.assign_to`): it is theirs to manage. Change or clear
+   * the timer later with SetDeleteAfter. The response's `machine` shows it
+   * (`delete_at_ms`, `delete_after_cron`). A server from before these
+   * fields ignores them and answers without `machine`: a client that gets
+   * no `machine` back sets the timer with SetDeleteAfter itself.
+   */
+  deleteAfterSecs?: number | undefined;
+  deleteAfterCron?: string | undefined;
 }
 
 export interface CreateVmRequest_LabelsEntry {
@@ -386,6 +403,14 @@ export interface CreateVmResponse {
    * plain create, or a snapshot that captured none.
    */
   pausedAutomations: number;
+  /**
+   * The new machine, as GetVm returns it, delete-after timer included, so
+   * a create needs no GetVm after it. Unset when the server could not read
+   * the machine back in time (rare) or the caller may not read it (a
+   * machine created for someone else), and from servers older than this
+   * field: call GetVm then.
+   */
+  machine?: GetVmResponse | undefined;
 }
 
 export interface DestroyVmRequest {
@@ -847,6 +872,8 @@ export interface GetVmResponse {
    * port stays allocated. Inverted so a server that predates it reads as on.
    */
   sshDisabled: boolean;
+  /** The region the machine lives in; "" when boxd runs in one place. */
+  region: string;
 }
 
 export interface GetVmResponse_LabelsEntry {
@@ -1100,6 +1127,8 @@ export interface ListVmsRequest {
    * Empty = no filter.
    */
   labelSelector: string[];
+  /** Also count the org's machines in its other regions (`elsewhere`). */
+  withElsewhere: boolean;
 }
 
 export interface ListVmsResponse {
@@ -1110,6 +1139,8 @@ export interface ListVmsResponse {
    * present this key, so the CLI writes one `known_hosts` line per VM with it.
    */
   sshHostKey: string;
+  /** With `with_elsewhere`: how many machines the org has in each other region. */
+  elsewhere: RegionCount[];
 }
 
 /** Logs and exec */
@@ -1231,6 +1262,8 @@ export interface SetOrgDomainRequest {
   orgId: string;
   /** bare apex, e.g. "preview.mysaas.com" (wildcard implied) */
   domain: string;
+  /** "" = the region this endpoint serves */
+  region: string;
 }
 
 export interface SetOrgDomainResponse {
@@ -1239,6 +1272,8 @@ export interface SetOrgDomainResponse {
 
 export interface GetOrgDomainRequest {
   orgId: string;
+  /** "" = the region this endpoint serves */
+  region: string;
 }
 
 export interface GetOrgDomainResponse {
@@ -1252,6 +1287,8 @@ export interface GetOrgDomainResponse {
 
 export interface ClearOrgDomainRequest {
   orgId: string;
+  /** "" = the region this endpoint serves */
+  region: string;
 }
 
 export interface ClearOrgDomainResponse {
@@ -1263,6 +1300,8 @@ export interface OrgDomainInfo {
   /** "pending" | "active" */
   status: string;
   lastError: string;
+  /** where the domain is bound; "" when boxd runs in one place */
+  region: string;
 }
 
 /** Config */
@@ -1493,6 +1532,16 @@ export interface ForkVmRequest {
    * are merged over them key by key. Same rules as CreateVmRequest.labels.
    */
   labels: { [key: string]: string };
+  /**
+   * Delete-after timer for the fork. Both unset: the fork inherits its
+   * source's timer, re-armed from the moment of the fork. Either set: this
+   * timer instead, written together with the fork (see
+   * CreateVmRequest.delete_after_secs); zero and empty give the fork no
+   * timer. Same rules and errors as SetDeleteAfter. A server from before
+   * these fields ignores them and answers without `machine`.
+   */
+  deleteAfterSecs?: number | undefined;
+  deleteAfterCron?: string | undefined;
 }
 
 export interface ForkVmRequest_LabelsEntry {
@@ -1516,6 +1565,8 @@ export interface ForkVmResponse {
    * the fork starts one there. 0 when the source has none.
    */
   pausedAutomations: number;
+  /** The fork, as GetVm returns it. Same as CreateVmResponse.machine. */
+  machine?: GetVmResponse | undefined;
 }
 
 /** Proxies */
@@ -1962,10 +2013,13 @@ export interface ListSnapshotsRequest {
    * Snapshots never cross an org boundary; key-fenced callers are pinned.
    */
   org: string;
+  /** Also count the org's snapshots in its other regions (`elsewhere`). */
+  withElsewhere: boolean;
 }
 
 export interface ListSnapshotsResponse {
   snapshots: SnapshotInfo[];
+  elsewhere: RegionCount[];
 }
 
 export interface GetSnapshotRequest {
@@ -2018,7 +2072,15 @@ export interface CreateVmFromSnapshotRequest {
    * MachineSpec). Its base, if set, must be this snapshot. Can't be combined
    * with `labels` or `isolated`; put them in the spec.
    */
-  spec?: MachineSpec | undefined;
+  spec?:
+    | MachineSpec
+    | undefined;
+  /**
+   * Delete-after timer the machine is born with. A snapshot carries no
+   * timer, so unset means none. See CreateVmRequest.delete_after_secs.
+   */
+  deleteAfterSecs?: number | undefined;
+  deleteAfterCron?: string | undefined;
 }
 
 export interface CreateVmFromSnapshotRequest_LabelsEntry {
@@ -2060,6 +2122,8 @@ export interface SnapshotInfo {
    */
   archived: boolean;
   storage: string;
+  /** The region the snapshot lives in; "" when boxd runs in one place. */
+  region: string;
 }
 
 export interface CreateCheckpointRequest {
@@ -2139,10 +2203,13 @@ export interface CreateDiskResponse {
 }
 
 export interface ListDisksRequest {
+  /** Also count your disks in your orgs' other regions (`elsewhere`). */
+  withElsewhere: boolean;
 }
 
 export interface ListDisksResponse {
   disks: DiskInfo[];
+  elsewhere: RegionCount[];
 }
 
 export interface DiskInfo {
@@ -2153,6 +2220,8 @@ export interface DiskInfo {
   attachments: DiskAttachment[];
   /** Wall-clock unix epoch MILLISECONDS the disk was created. */
   createdAt: number;
+  /** The region the disk lives in; "" when boxd runs in one place. */
+  region: string;
 }
 
 export interface DiskAttachment {
@@ -2762,7 +2831,7 @@ export interface GetOrgBackupsDefaultResponse {
 }
 
 export interface SetOrgMachineDefaultsRequest {
-  /** name or id; "" = your home org */
+  /** name or id; "" = your default org (the one a list with no org shows; an API key's own org) */
   orgId: string;
   /**
    * Both absent (or 0) clears the org default (default machines size at the
@@ -2771,14 +2840,21 @@ export interface SetOrgMachineDefaultsRequest {
    * the org quota ceiling and at or above the boot floor (512 MiB, 1 vCPU).
    */
   vcpu?: number | undefined;
-  memoryBytes?: number | undefined;
+  memoryBytes?:
+    | number
+    | undefined;
+  /**
+   * The org's default region for new machines and disks: one of its enabled
+   * regions, or "" to clear it. Absent leaves it as it is.
+   */
+  region?: string | undefined;
 }
 
 export interface SetOrgMachineDefaultsResponse {
 }
 
 export interface GetOrgMachineDefaultsRequest {
-  /** name or id; "" = your home org */
+  /** name or id; "" = your default org (the one a list with no org shows; an API key's own org) */
   orgId: string;
 }
 
@@ -2814,6 +2890,11 @@ export interface GetOrgMachineDefaultsResponse {
    * almost every org.
    */
   grantedSizes: GrantedMachineSize[];
+  /**
+   * The org's default region for new machines and disks; "" = none set (clients
+   * then use the closest of the org's regions).
+   */
+  region: string;
 }
 
 export interface GrantedMachineSize {
@@ -3182,6 +3263,79 @@ export interface RequestOrgMachineLimitResponse {
   /** unix seconds */
   requestedAt: number;
   requestedMaxVms: number;
+}
+
+export interface ListRegionsRequest {
+  /** name or id; "" = your default org (the one a list with no org shows; an API key's own org) */
+  orgId: string;
+}
+
+export interface Region {
+  /** a short code, e.g. "fra" */
+  id: string;
+  /** e.g. "Frankfurt" */
+  name: string;
+  /** machines are reached at <name>.<zone> */
+  zone: string;
+  /** the region's API */
+  apiEndpoint: string;
+  consoleEndpoint: string;
+  latitude: number;
+  longitude: number;
+  /** accounts, billing and settings live in the home region */
+  home: boolean;
+  /**
+   * For the org asked about: "enabled" (it can create here: always the
+   * home region), "requested" (an admin asked), or "available".
+   */
+  orgState: string;
+}
+
+export interface ListRegionsResponse {
+  regions: Region[];
+  orgId: string;
+  /** The region this endpoint serves; "" when boxd runs in one place. */
+  thisRegion: string;
+}
+
+export interface RequestOrgRegionRequest {
+  /** name or id; "" = your default org (the one a list with no org shows; an API key's own org) */
+  orgId: string;
+  region: string;
+}
+
+export interface RequestOrgRegionResponse {
+  /** "requested", or "enabled" when the org has it already */
+  state: string;
+}
+
+export interface FindElsewhereRequest {
+  /** machine, snapshot, disk or template */
+  kind: string;
+  name: string;
+  /** org context (name or id); empty = every org you belong to */
+  org: string;
+}
+
+export interface ElsewhereItem {
+  region: string;
+  name: string;
+  orgId: string;
+  id: string;
+}
+
+export interface RegionCount {
+  region: string;
+  count: number;
+}
+
+export interface FindElsewhereResponse {
+  /** The same name, in another region. */
+  exact: ElsewhereItem[];
+  /** A name one or two letters off, in another region; a few at most. */
+  close: ElsewhereItem[];
+  /** Regions that could not be asked just now. */
+  unavailable: string[];
 }
 
 function createBaseVmConfig(): VmConfig {
@@ -3717,6 +3871,8 @@ function createBaseCreateVmRequest(): CreateVmRequest {
     team: "",
     labels: {},
     spec: undefined,
+    deleteAfterSecs: undefined,
+    deleteAfterCron: undefined,
   };
 }
 
@@ -3760,6 +3916,12 @@ export const CreateVmRequest: MessageFns<CreateVmRequest> = {
     });
     if (message.spec !== undefined) {
       MachineSpec.encode(message.spec, writer.uint32(122).fork()).join();
+    }
+    if (message.deleteAfterSecs !== undefined) {
+      writer.uint32(128).uint64(message.deleteAfterSecs);
+    }
+    if (message.deleteAfterCron !== undefined) {
+      writer.uint32(138).string(message.deleteAfterCron);
     }
     return writer;
   },
@@ -3878,6 +4040,22 @@ export const CreateVmRequest: MessageFns<CreateVmRequest> = {
           message.spec = MachineSpec.decode(reader, reader.uint32());
           continue;
         }
+        case 16: {
+          if (tag !== 128) {
+            break;
+          }
+
+          message.deleteAfterSecs = longToNumber(reader.uint64());
+          continue;
+        }
+        case 17: {
+          if (tag !== 138) {
+            break;
+          }
+
+          message.deleteAfterCron = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -3918,6 +4096,16 @@ export const CreateVmRequest: MessageFns<CreateVmRequest> = {
         )
         : {},
       spec: isSet(object.spec) ? MachineSpec.fromJSON(object.spec) : undefined,
+      deleteAfterSecs: isSet(object.deleteAfterSecs)
+        ? globalThis.Number(object.deleteAfterSecs)
+        : isSet(object.delete_after_secs)
+        ? globalThis.Number(object.delete_after_secs)
+        : undefined,
+      deleteAfterCron: isSet(object.deleteAfterCron)
+        ? globalThis.String(object.deleteAfterCron)
+        : isSet(object.delete_after_cron)
+        ? globalThis.String(object.delete_after_cron)
+        : undefined,
     };
   },
 
@@ -3968,6 +4156,12 @@ export const CreateVmRequest: MessageFns<CreateVmRequest> = {
     if (message.spec !== undefined) {
       obj.spec = MachineSpec.toJSON(message.spec);
     }
+    if (message.deleteAfterSecs !== undefined) {
+      obj.deleteAfterSecs = Math.round(message.deleteAfterSecs);
+    }
+    if (message.deleteAfterCron !== undefined) {
+      obj.deleteAfterCron = message.deleteAfterCron;
+    }
     return obj;
   },
 
@@ -4001,6 +4195,8 @@ export const CreateVmRequest: MessageFns<CreateVmRequest> = {
     message.spec = (object.spec !== undefined && object.spec !== null)
       ? MachineSpec.fromPartial(object.spec)
       : undefined;
+    message.deleteAfterSecs = object.deleteAfterSecs ?? undefined;
+    message.deleteAfterCron = object.deleteAfterCron ?? undefined;
     return message;
   },
 };
@@ -4809,7 +5005,17 @@ export const EnvVar: MessageFns<EnvVar> = {
 };
 
 function createBaseCreateVmResponse(): CreateVmResponse {
-  return { vmId: "", name: "", publicIp: "", url: "", image: "", status: "", bootTimeMs: 0, pausedAutomations: 0 };
+  return {
+    vmId: "",
+    name: "",
+    publicIp: "",
+    url: "",
+    image: "",
+    status: "",
+    bootTimeMs: 0,
+    pausedAutomations: 0,
+    machine: undefined,
+  };
 }
 
 export const CreateVmResponse: MessageFns<CreateVmResponse> = {
@@ -4837,6 +5043,9 @@ export const CreateVmResponse: MessageFns<CreateVmResponse> = {
     }
     if (message.pausedAutomations !== 0) {
       writer.uint32(64).uint32(message.pausedAutomations);
+    }
+    if (message.machine !== undefined) {
+      GetVmResponse.encode(message.machine, writer.uint32(74).fork()).join();
     }
     return writer;
   },
@@ -4912,6 +5121,14 @@ export const CreateVmResponse: MessageFns<CreateVmResponse> = {
           message.pausedAutomations = reader.uint32();
           continue;
         }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.machine = GetVmResponse.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -4947,6 +5164,7 @@ export const CreateVmResponse: MessageFns<CreateVmResponse> = {
         : isSet(object.paused_automations)
         ? globalThis.Number(object.paused_automations)
         : 0,
+      machine: isSet(object.machine) ? GetVmResponse.fromJSON(object.machine) : undefined,
     };
   },
 
@@ -4976,6 +5194,9 @@ export const CreateVmResponse: MessageFns<CreateVmResponse> = {
     if (message.pausedAutomations !== 0) {
       obj.pausedAutomations = Math.round(message.pausedAutomations);
     }
+    if (message.machine !== undefined) {
+      obj.machine = GetVmResponse.toJSON(message.machine);
+    }
     return obj;
   },
 
@@ -4992,6 +5213,9 @@ export const CreateVmResponse: MessageFns<CreateVmResponse> = {
     message.status = object.status ?? "";
     message.bootTimeMs = object.bootTimeMs ?? 0;
     message.pausedAutomations = object.pausedAutomations ?? 0;
+    message.machine = (object.machine !== undefined && object.machine !== null)
+      ? GetVmResponse.fromPartial(object.machine)
+      : undefined;
     return message;
   },
 };
@@ -8138,6 +8362,7 @@ function createBaseGetVmResponse(): GetVmResponse {
     requirements: [],
     packages: [],
     sshDisabled: false,
+    region: "",
   };
 }
 
@@ -8265,6 +8490,9 @@ export const GetVmResponse: MessageFns<GetVmResponse> = {
     }
     if (message.sshDisabled !== false) {
       writer.uint32(328).bool(message.sshDisabled);
+    }
+    if (message.region !== "") {
+      writer.uint32(338).string(message.region);
     }
     return writer;
   },
@@ -8607,6 +8835,14 @@ export const GetVmResponse: MessageFns<GetVmResponse> = {
           message.sshDisabled = reader.bool();
           continue;
         }
+        case 42: {
+          if (tag !== 338) {
+            break;
+          }
+
+          message.region = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -8793,6 +9029,7 @@ export const GetVmResponse: MessageFns<GetVmResponse> = {
         : isSet(object.ssh_disabled)
         ? globalThis.Boolean(object.ssh_disabled)
         : false,
+      region: isSet(object.region) ? globalThis.String(object.region) : "",
     };
   },
 
@@ -8927,6 +9164,9 @@ export const GetVmResponse: MessageFns<GetVmResponse> = {
     if (message.sshDisabled !== false) {
       obj.sshDisabled = message.sshDisabled;
     }
+    if (message.region !== "") {
+      obj.region = message.region;
+    }
     return obj;
   },
 
@@ -8990,6 +9230,7 @@ export const GetVmResponse: MessageFns<GetVmResponse> = {
     message.requirements = object.requirements?.map((e) => MachineRequirement.fromPartial(e)) || [];
     message.packages = object.packages?.map((e) => MachinePackage.fromPartial(e)) || [];
     message.sshDisabled = object.sshDisabled ?? false;
+    message.region = object.region ?? "";
     return message;
   },
 };
@@ -10077,7 +10318,7 @@ export const VmSource: MessageFns<VmSource> = {
 };
 
 function createBaseListVmsRequest(): ListVmsRequest {
-  return { org: "", allContexts: false, labelSelector: [] };
+  return { org: "", allContexts: false, labelSelector: [], withElsewhere: false };
 }
 
 export const ListVmsRequest: MessageFns<ListVmsRequest> = {
@@ -10090,6 +10331,9 @@ export const ListVmsRequest: MessageFns<ListVmsRequest> = {
     }
     for (const v of message.labelSelector) {
       writer.uint32(26).string(v!);
+    }
+    if (message.withElsewhere !== false) {
+      writer.uint32(32).bool(message.withElsewhere);
     }
     return writer;
   },
@@ -10125,6 +10369,14 @@ export const ListVmsRequest: MessageFns<ListVmsRequest> = {
           message.labelSelector.push(reader.string());
           continue;
         }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.withElsewhere = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -10147,6 +10399,11 @@ export const ListVmsRequest: MessageFns<ListVmsRequest> = {
         : globalThis.Array.isArray(object?.label_selector)
         ? object.label_selector.map((e: any) => globalThis.String(e))
         : [],
+      withElsewhere: isSet(object.withElsewhere)
+        ? globalThis.Boolean(object.withElsewhere)
+        : isSet(object.with_elsewhere)
+        ? globalThis.Boolean(object.with_elsewhere)
+        : false,
     };
   },
 
@@ -10161,6 +10418,9 @@ export const ListVmsRequest: MessageFns<ListVmsRequest> = {
     if (message.labelSelector?.length) {
       obj.labelSelector = message.labelSelector;
     }
+    if (message.withElsewhere !== false) {
+      obj.withElsewhere = message.withElsewhere;
+    }
     return obj;
   },
 
@@ -10172,12 +10432,13 @@ export const ListVmsRequest: MessageFns<ListVmsRequest> = {
     message.org = object.org ?? "";
     message.allContexts = object.allContexts ?? false;
     message.labelSelector = object.labelSelector?.map((e) => e) || [];
+    message.withElsewhere = object.withElsewhere ?? false;
     return message;
   },
 };
 
 function createBaseListVmsResponse(): ListVmsResponse {
-  return { vms: [], sshHostKey: "" };
+  return { vms: [], sshHostKey: "", elsewhere: [] };
 }
 
 export const ListVmsResponse: MessageFns<ListVmsResponse> = {
@@ -10187,6 +10448,9 @@ export const ListVmsResponse: MessageFns<ListVmsResponse> = {
     }
     if (message.sshHostKey !== "") {
       writer.uint32(18).string(message.sshHostKey);
+    }
+    for (const v of message.elsewhere) {
+      RegionCount.encode(v!, writer.uint32(26).fork()).join();
     }
     return writer;
   },
@@ -10214,6 +10478,14 @@ export const ListVmsResponse: MessageFns<ListVmsResponse> = {
           message.sshHostKey = reader.string();
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.elsewhere.push(RegionCount.decode(reader, reader.uint32()));
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -10231,6 +10503,9 @@ export const ListVmsResponse: MessageFns<ListVmsResponse> = {
         : isSet(object.ssh_host_key)
         ? globalThis.String(object.ssh_host_key)
         : "",
+      elsewhere: globalThis.Array.isArray(object?.elsewhere)
+        ? object.elsewhere.map((e: any) => RegionCount.fromJSON(e))
+        : [],
     };
   },
 
@@ -10242,6 +10517,9 @@ export const ListVmsResponse: MessageFns<ListVmsResponse> = {
     if (message.sshHostKey !== "") {
       obj.sshHostKey = message.sshHostKey;
     }
+    if (message.elsewhere?.length) {
+      obj.elsewhere = message.elsewhere.map((e) => RegionCount.toJSON(e));
+    }
     return obj;
   },
 
@@ -10252,6 +10530,7 @@ export const ListVmsResponse: MessageFns<ListVmsResponse> = {
     const message = createBaseListVmsResponse();
     message.vms = object.vms?.map((e) => GetVmResponse.fromPartial(e)) || [];
     message.sshHostKey = object.sshHostKey ?? "";
+    message.elsewhere = object.elsewhere?.map((e) => RegionCount.fromPartial(e)) || [];
     return message;
   },
 };
@@ -11532,7 +11811,7 @@ export const CustomDomainInfo: MessageFns<CustomDomainInfo> = {
 };
 
 function createBaseSetOrgDomainRequest(): SetOrgDomainRequest {
-  return { orgId: "", domain: "" };
+  return { orgId: "", domain: "", region: "" };
 }
 
 export const SetOrgDomainRequest: MessageFns<SetOrgDomainRequest> = {
@@ -11542,6 +11821,9 @@ export const SetOrgDomainRequest: MessageFns<SetOrgDomainRequest> = {
     }
     if (message.domain !== "") {
       writer.uint32(18).string(message.domain);
+    }
+    if (message.region !== "") {
+      writer.uint32(26).string(message.region);
     }
     return writer;
   },
@@ -11569,6 +11851,14 @@ export const SetOrgDomainRequest: MessageFns<SetOrgDomainRequest> = {
           message.domain = reader.string();
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.region = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -11586,6 +11876,7 @@ export const SetOrgDomainRequest: MessageFns<SetOrgDomainRequest> = {
         ? globalThis.String(object.org_id)
         : "",
       domain: isSet(object.domain) ? globalThis.String(object.domain) : "",
+      region: isSet(object.region) ? globalThis.String(object.region) : "",
     };
   },
 
@@ -11597,6 +11888,9 @@ export const SetOrgDomainRequest: MessageFns<SetOrgDomainRequest> = {
     if (message.domain !== "") {
       obj.domain = message.domain;
     }
+    if (message.region !== "") {
+      obj.region = message.region;
+    }
     return obj;
   },
 
@@ -11607,6 +11901,7 @@ export const SetOrgDomainRequest: MessageFns<SetOrgDomainRequest> = {
     const message = createBaseSetOrgDomainRequest();
     message.orgId = object.orgId ?? "";
     message.domain = object.domain ?? "";
+    message.region = object.region ?? "";
     return message;
   },
 };
@@ -11672,13 +11967,16 @@ export const SetOrgDomainResponse: MessageFns<SetOrgDomainResponse> = {
 };
 
 function createBaseGetOrgDomainRequest(): GetOrgDomainRequest {
-  return { orgId: "" };
+  return { orgId: "", region: "" };
 }
 
 export const GetOrgDomainRequest: MessageFns<GetOrgDomainRequest> = {
   encode(message: GetOrgDomainRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.orgId !== "") {
       writer.uint32(10).string(message.orgId);
+    }
+    if (message.region !== "") {
+      writer.uint32(18).string(message.region);
     }
     return writer;
   },
@@ -11698,6 +11996,14 @@ export const GetOrgDomainRequest: MessageFns<GetOrgDomainRequest> = {
           message.orgId = reader.string();
           continue;
         }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.region = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -11714,6 +12020,7 @@ export const GetOrgDomainRequest: MessageFns<GetOrgDomainRequest> = {
         : isSet(object.org_id)
         ? globalThis.String(object.org_id)
         : "",
+      region: isSet(object.region) ? globalThis.String(object.region) : "",
     };
   },
 
@@ -11721,6 +12028,9 @@ export const GetOrgDomainRequest: MessageFns<GetOrgDomainRequest> = {
     const obj: any = {};
     if (message.orgId !== "") {
       obj.orgId = message.orgId;
+    }
+    if (message.region !== "") {
+      obj.region = message.region;
     }
     return obj;
   },
@@ -11731,6 +12041,7 @@ export const GetOrgDomainRequest: MessageFns<GetOrgDomainRequest> = {
   fromPartial(object: DeepPartial<GetOrgDomainRequest>): GetOrgDomainRequest {
     const message = createBaseGetOrgDomainRequest();
     message.orgId = object.orgId ?? "";
+    message.region = object.region ?? "";
     return message;
   },
 };
@@ -11796,13 +12107,16 @@ export const GetOrgDomainResponse: MessageFns<GetOrgDomainResponse> = {
 };
 
 function createBaseClearOrgDomainRequest(): ClearOrgDomainRequest {
-  return { orgId: "" };
+  return { orgId: "", region: "" };
 }
 
 export const ClearOrgDomainRequest: MessageFns<ClearOrgDomainRequest> = {
   encode(message: ClearOrgDomainRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.orgId !== "") {
       writer.uint32(10).string(message.orgId);
+    }
+    if (message.region !== "") {
+      writer.uint32(18).string(message.region);
     }
     return writer;
   },
@@ -11822,6 +12136,14 @@ export const ClearOrgDomainRequest: MessageFns<ClearOrgDomainRequest> = {
           message.orgId = reader.string();
           continue;
         }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.region = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -11838,6 +12160,7 @@ export const ClearOrgDomainRequest: MessageFns<ClearOrgDomainRequest> = {
         : isSet(object.org_id)
         ? globalThis.String(object.org_id)
         : "",
+      region: isSet(object.region) ? globalThis.String(object.region) : "",
     };
   },
 
@@ -11845,6 +12168,9 @@ export const ClearOrgDomainRequest: MessageFns<ClearOrgDomainRequest> = {
     const obj: any = {};
     if (message.orgId !== "") {
       obj.orgId = message.orgId;
+    }
+    if (message.region !== "") {
+      obj.region = message.region;
     }
     return obj;
   },
@@ -11855,6 +12181,7 @@ export const ClearOrgDomainRequest: MessageFns<ClearOrgDomainRequest> = {
   fromPartial(object: DeepPartial<ClearOrgDomainRequest>): ClearOrgDomainRequest {
     const message = createBaseClearOrgDomainRequest();
     message.orgId = object.orgId ?? "";
+    message.region = object.region ?? "";
     return message;
   },
 };
@@ -11903,7 +12230,7 @@ export const ClearOrgDomainResponse: MessageFns<ClearOrgDomainResponse> = {
 };
 
 function createBaseOrgDomainInfo(): OrgDomainInfo {
-  return { orgId: "", domain: "", status: "", lastError: "" };
+  return { orgId: "", domain: "", status: "", lastError: "", region: "" };
 }
 
 export const OrgDomainInfo: MessageFns<OrgDomainInfo> = {
@@ -11919,6 +12246,9 @@ export const OrgDomainInfo: MessageFns<OrgDomainInfo> = {
     }
     if (message.lastError !== "") {
       writer.uint32(34).string(message.lastError);
+    }
+    if (message.region !== "") {
+      writer.uint32(42).string(message.region);
     }
     return writer;
   },
@@ -11962,6 +12292,14 @@ export const OrgDomainInfo: MessageFns<OrgDomainInfo> = {
           message.lastError = reader.string();
           continue;
         }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.region = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -11985,6 +12323,7 @@ export const OrgDomainInfo: MessageFns<OrgDomainInfo> = {
         : isSet(object.last_error)
         ? globalThis.String(object.last_error)
         : "",
+      region: isSet(object.region) ? globalThis.String(object.region) : "",
     };
   },
 
@@ -12002,6 +12341,9 @@ export const OrgDomainInfo: MessageFns<OrgDomainInfo> = {
     if (message.lastError !== "") {
       obj.lastError = message.lastError;
     }
+    if (message.region !== "") {
+      obj.region = message.region;
+    }
     return obj;
   },
 
@@ -12014,6 +12356,7 @@ export const OrgDomainInfo: MessageFns<OrgDomainInfo> = {
     message.domain = object.domain ?? "";
     message.status = object.status ?? "";
     message.lastError = object.lastError ?? "";
+    message.region = object.region ?? "";
     return message;
   },
 };
@@ -13757,7 +14100,17 @@ export const LinkSshKeyResponse: MessageFns<LinkSshKeyResponse> = {
 };
 
 function createBaseForkVmRequest(): ForkVmRequest {
-  return { sourceVmId: "", name: "", config: undefined, shared: false, networks: [], isolated: false, labels: {} };
+  return {
+    sourceVmId: "",
+    name: "",
+    config: undefined,
+    shared: false,
+    networks: [],
+    isolated: false,
+    labels: {},
+    deleteAfterSecs: undefined,
+    deleteAfterCron: undefined,
+  };
 }
 
 export const ForkVmRequest: MessageFns<ForkVmRequest> = {
@@ -13783,6 +14136,12 @@ export const ForkVmRequest: MessageFns<ForkVmRequest> = {
     globalThis.Object.entries(message.labels).forEach(([key, value]: [string, string]) => {
       ForkVmRequest_LabelsEntry.encode({ key: key as any, value }, writer.uint32(58).fork()).join();
     });
+    if (message.deleteAfterSecs !== undefined) {
+      writer.uint32(64).uint64(message.deleteAfterSecs);
+    }
+    if (message.deleteAfterCron !== undefined) {
+      writer.uint32(74).string(message.deleteAfterCron);
+    }
     return writer;
   },
 
@@ -13852,6 +14211,22 @@ export const ForkVmRequest: MessageFns<ForkVmRequest> = {
           }
           continue;
         }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.deleteAfterSecs = longToNumber(reader.uint64());
+          continue;
+        }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.deleteAfterCron = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -13882,6 +14257,16 @@ export const ForkVmRequest: MessageFns<ForkVmRequest> = {
           {},
         )
         : {},
+      deleteAfterSecs: isSet(object.deleteAfterSecs)
+        ? globalThis.Number(object.deleteAfterSecs)
+        : isSet(object.delete_after_secs)
+        ? globalThis.Number(object.delete_after_secs)
+        : undefined,
+      deleteAfterCron: isSet(object.deleteAfterCron)
+        ? globalThis.String(object.deleteAfterCron)
+        : isSet(object.delete_after_cron)
+        ? globalThis.String(object.delete_after_cron)
+        : undefined,
     };
   },
 
@@ -13914,6 +14299,12 @@ export const ForkVmRequest: MessageFns<ForkVmRequest> = {
         });
       }
     }
+    if (message.deleteAfterSecs !== undefined) {
+      obj.deleteAfterSecs = Math.round(message.deleteAfterSecs);
+    }
+    if (message.deleteAfterCron !== undefined) {
+      obj.deleteAfterCron = message.deleteAfterCron;
+    }
     return obj;
   },
 
@@ -13939,6 +14330,8 @@ export const ForkVmRequest: MessageFns<ForkVmRequest> = {
       },
       {},
     );
+    message.deleteAfterSecs = object.deleteAfterSecs ?? undefined;
+    message.deleteAfterCron = object.deleteAfterCron ?? undefined;
     return message;
   },
 };
@@ -14030,6 +14423,7 @@ function createBaseForkVmResponse(): ForkVmResponse {
     forkedFrom: "",
     bootTimeMs: 0,
     pausedAutomations: 0,
+    machine: undefined,
   };
 }
 
@@ -14061,6 +14455,9 @@ export const ForkVmResponse: MessageFns<ForkVmResponse> = {
     }
     if (message.pausedAutomations !== 0) {
       writer.uint32(72).uint32(message.pausedAutomations);
+    }
+    if (message.machine !== undefined) {
+      GetVmResponse.encode(message.machine, writer.uint32(82).fork()).join();
     }
     return writer;
   },
@@ -14144,6 +14541,14 @@ export const ForkVmResponse: MessageFns<ForkVmResponse> = {
           message.pausedAutomations = reader.uint32();
           continue;
         }
+        case 10: {
+          if (tag !== 82) {
+            break;
+          }
+
+          message.machine = GetVmResponse.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -14184,6 +14589,7 @@ export const ForkVmResponse: MessageFns<ForkVmResponse> = {
         : isSet(object.paused_automations)
         ? globalThis.Number(object.paused_automations)
         : 0,
+      machine: isSet(object.machine) ? GetVmResponse.fromJSON(object.machine) : undefined,
     };
   },
 
@@ -14216,6 +14622,9 @@ export const ForkVmResponse: MessageFns<ForkVmResponse> = {
     if (message.pausedAutomations !== 0) {
       obj.pausedAutomations = Math.round(message.pausedAutomations);
     }
+    if (message.machine !== undefined) {
+      obj.machine = GetVmResponse.toJSON(message.machine);
+    }
     return obj;
   },
 
@@ -14233,6 +14642,9 @@ export const ForkVmResponse: MessageFns<ForkVmResponse> = {
     message.forkedFrom = object.forkedFrom ?? "";
     message.bootTimeMs = object.bootTimeMs ?? 0;
     message.pausedAutomations = object.pausedAutomations ?? 0;
+    message.machine = (object.machine !== undefined && object.machine !== null)
+      ? GetVmResponse.fromPartial(object.machine)
+      : undefined;
     return message;
   },
 };
@@ -18383,13 +18795,16 @@ export const CreateSnapshotResponse: MessageFns<CreateSnapshotResponse> = {
 };
 
 function createBaseListSnapshotsRequest(): ListSnapshotsRequest {
-  return { org: "" };
+  return { org: "", withElsewhere: false };
 }
 
 export const ListSnapshotsRequest: MessageFns<ListSnapshotsRequest> = {
   encode(message: ListSnapshotsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.org !== "") {
       writer.uint32(10).string(message.org);
+    }
+    if (message.withElsewhere !== false) {
+      writer.uint32(16).bool(message.withElsewhere);
     }
     return writer;
   },
@@ -18409,6 +18824,14 @@ export const ListSnapshotsRequest: MessageFns<ListSnapshotsRequest> = {
           message.org = reader.string();
           continue;
         }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.withElsewhere = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -18419,13 +18842,23 @@ export const ListSnapshotsRequest: MessageFns<ListSnapshotsRequest> = {
   },
 
   fromJSON(object: any): ListSnapshotsRequest {
-    return { org: isSet(object.org) ? globalThis.String(object.org) : "" };
+    return {
+      org: isSet(object.org) ? globalThis.String(object.org) : "",
+      withElsewhere: isSet(object.withElsewhere)
+        ? globalThis.Boolean(object.withElsewhere)
+        : isSet(object.with_elsewhere)
+        ? globalThis.Boolean(object.with_elsewhere)
+        : false,
+    };
   },
 
   toJSON(message: ListSnapshotsRequest): unknown {
     const obj: any = {};
     if (message.org !== "") {
       obj.org = message.org;
+    }
+    if (message.withElsewhere !== false) {
+      obj.withElsewhere = message.withElsewhere;
     }
     return obj;
   },
@@ -18436,18 +18869,22 @@ export const ListSnapshotsRequest: MessageFns<ListSnapshotsRequest> = {
   fromPartial(object: DeepPartial<ListSnapshotsRequest>): ListSnapshotsRequest {
     const message = createBaseListSnapshotsRequest();
     message.org = object.org ?? "";
+    message.withElsewhere = object.withElsewhere ?? false;
     return message;
   },
 };
 
 function createBaseListSnapshotsResponse(): ListSnapshotsResponse {
-  return { snapshots: [] };
+  return { snapshots: [], elsewhere: [] };
 }
 
 export const ListSnapshotsResponse: MessageFns<ListSnapshotsResponse> = {
   encode(message: ListSnapshotsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     for (const v of message.snapshots) {
       SnapshotInfo.encode(v!, writer.uint32(10).fork()).join();
+    }
+    for (const v of message.elsewhere) {
+      RegionCount.encode(v!, writer.uint32(18).fork()).join();
     }
     return writer;
   },
@@ -18467,6 +18904,14 @@ export const ListSnapshotsResponse: MessageFns<ListSnapshotsResponse> = {
           message.snapshots.push(SnapshotInfo.decode(reader, reader.uint32()));
           continue;
         }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.elsewhere.push(RegionCount.decode(reader, reader.uint32()));
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -18481,6 +18926,9 @@ export const ListSnapshotsResponse: MessageFns<ListSnapshotsResponse> = {
       snapshots: globalThis.Array.isArray(object?.snapshots)
         ? object.snapshots.map((e: any) => SnapshotInfo.fromJSON(e))
         : [],
+      elsewhere: globalThis.Array.isArray(object?.elsewhere)
+        ? object.elsewhere.map((e: any) => RegionCount.fromJSON(e))
+        : [],
     };
   },
 
@@ -18488,6 +18936,9 @@ export const ListSnapshotsResponse: MessageFns<ListSnapshotsResponse> = {
     const obj: any = {};
     if (message.snapshots?.length) {
       obj.snapshots = message.snapshots.map((e) => SnapshotInfo.toJSON(e));
+    }
+    if (message.elsewhere?.length) {
+      obj.elsewhere = message.elsewhere.map((e) => RegionCount.toJSON(e));
     }
     return obj;
   },
@@ -18498,6 +18949,7 @@ export const ListSnapshotsResponse: MessageFns<ListSnapshotsResponse> = {
   fromPartial(object: DeepPartial<ListSnapshotsResponse>): ListSnapshotsResponse {
     const message = createBaseListSnapshotsResponse();
     message.snapshots = object.snapshots?.map((e) => SnapshotInfo.fromPartial(e)) || [];
+    message.elsewhere = object.elsewhere?.map((e) => RegionCount.fromPartial(e)) || [];
     return message;
   },
 };
@@ -18758,7 +19210,17 @@ export const DeleteSnapshotResponse: MessageFns<DeleteSnapshotResponse> = {
 };
 
 function createBaseCreateVmFromSnapshotRequest(): CreateVmFromSnapshotRequest {
-  return { snapshot: "", name: "", config: undefined, org: "", isolated: false, labels: {}, spec: undefined };
+  return {
+    snapshot: "",
+    name: "",
+    config: undefined,
+    org: "",
+    isolated: false,
+    labels: {},
+    spec: undefined,
+    deleteAfterSecs: undefined,
+    deleteAfterCron: undefined,
+  };
 }
 
 export const CreateVmFromSnapshotRequest: MessageFns<CreateVmFromSnapshotRequest> = {
@@ -18783,6 +19245,12 @@ export const CreateVmFromSnapshotRequest: MessageFns<CreateVmFromSnapshotRequest
     });
     if (message.spec !== undefined) {
       MachineSpec.encode(message.spec, writer.uint32(58).fork()).join();
+    }
+    if (message.deleteAfterSecs !== undefined) {
+      writer.uint32(64).uint64(message.deleteAfterSecs);
+    }
+    if (message.deleteAfterCron !== undefined) {
+      writer.uint32(74).string(message.deleteAfterCron);
     }
     return writer;
   },
@@ -18853,6 +19321,22 @@ export const CreateVmFromSnapshotRequest: MessageFns<CreateVmFromSnapshotRequest
           message.spec = MachineSpec.decode(reader, reader.uint32());
           continue;
         }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.deleteAfterSecs = longToNumber(reader.uint64());
+          continue;
+        }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.deleteAfterCron = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -18879,6 +19363,16 @@ export const CreateVmFromSnapshotRequest: MessageFns<CreateVmFromSnapshotRequest
         )
         : {},
       spec: isSet(object.spec) ? MachineSpec.fromJSON(object.spec) : undefined,
+      deleteAfterSecs: isSet(object.deleteAfterSecs)
+        ? globalThis.Number(object.deleteAfterSecs)
+        : isSet(object.delete_after_secs)
+        ? globalThis.Number(object.delete_after_secs)
+        : undefined,
+      deleteAfterCron: isSet(object.deleteAfterCron)
+        ? globalThis.String(object.deleteAfterCron)
+        : isSet(object.delete_after_cron)
+        ? globalThis.String(object.delete_after_cron)
+        : undefined,
     };
   },
 
@@ -18911,6 +19405,12 @@ export const CreateVmFromSnapshotRequest: MessageFns<CreateVmFromSnapshotRequest
     if (message.spec !== undefined) {
       obj.spec = MachineSpec.toJSON(message.spec);
     }
+    if (message.deleteAfterSecs !== undefined) {
+      obj.deleteAfterSecs = Math.round(message.deleteAfterSecs);
+    }
+    if (message.deleteAfterCron !== undefined) {
+      obj.deleteAfterCron = message.deleteAfterCron;
+    }
     return obj;
   },
 
@@ -18938,6 +19438,8 @@ export const CreateVmFromSnapshotRequest: MessageFns<CreateVmFromSnapshotRequest
     message.spec = (object.spec !== undefined && object.spec !== null)
       ? MachineSpec.fromPartial(object.spec)
       : undefined;
+    message.deleteAfterSecs = object.deleteAfterSecs ?? undefined;
+    message.deleteAfterCron = object.deleteAfterCron ?? undefined;
     return message;
   },
 };
@@ -19034,6 +19536,7 @@ function createBaseSnapshotInfo(): SnapshotInfo {
     failureReason: "",
     archived: false,
     storage: "",
+    region: "",
   };
 }
 
@@ -19080,6 +19583,9 @@ export const SnapshotInfo: MessageFns<SnapshotInfo> = {
     }
     if (message.storage !== "") {
       writer.uint32(130).string(message.storage);
+    }
+    if (message.region !== "") {
+      writer.uint32(138).string(message.region);
     }
     return writer;
   },
@@ -19203,6 +19709,14 @@ export const SnapshotInfo: MessageFns<SnapshotInfo> = {
           message.storage = reader.string();
           continue;
         }
+        case 17: {
+          if (tag !== 138) {
+            break;
+          }
+
+          message.region = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -19260,6 +19774,7 @@ export const SnapshotInfo: MessageFns<SnapshotInfo> = {
         : "",
       archived: isSet(object.archived) ? globalThis.Boolean(object.archived) : false,
       storage: isSet(object.storage) ? globalThis.String(object.storage) : "",
+      region: isSet(object.region) ? globalThis.String(object.region) : "",
     };
   },
 
@@ -19307,6 +19822,9 @@ export const SnapshotInfo: MessageFns<SnapshotInfo> = {
     if (message.storage !== "") {
       obj.storage = message.storage;
     }
+    if (message.region !== "") {
+      obj.region = message.region;
+    }
     return obj;
   },
 
@@ -19329,6 +19847,7 @@ export const SnapshotInfo: MessageFns<SnapshotInfo> = {
     message.failureReason = object.failureReason ?? "";
     message.archived = object.archived ?? false;
     message.storage = object.storage ?? "";
+    message.region = object.region ?? "";
     return message;
   },
 };
@@ -20232,11 +20751,14 @@ export const CreateDiskResponse: MessageFns<CreateDiskResponse> = {
 };
 
 function createBaseListDisksRequest(): ListDisksRequest {
-  return {};
+  return { withElsewhere: false };
 }
 
 export const ListDisksRequest: MessageFns<ListDisksRequest> = {
-  encode(_: ListDisksRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(message: ListDisksRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.withElsewhere !== false) {
+      writer.uint32(8).bool(message.withElsewhere);
+    }
     return writer;
   },
 
@@ -20247,6 +20769,14 @@ export const ListDisksRequest: MessageFns<ListDisksRequest> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.withElsewhere = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -20256,32 +20786,45 @@ export const ListDisksRequest: MessageFns<ListDisksRequest> = {
     return message;
   },
 
-  fromJSON(_: any): ListDisksRequest {
-    return {};
+  fromJSON(object: any): ListDisksRequest {
+    return {
+      withElsewhere: isSet(object.withElsewhere)
+        ? globalThis.Boolean(object.withElsewhere)
+        : isSet(object.with_elsewhere)
+        ? globalThis.Boolean(object.with_elsewhere)
+        : false,
+    };
   },
 
-  toJSON(_: ListDisksRequest): unknown {
+  toJSON(message: ListDisksRequest): unknown {
     const obj: any = {};
+    if (message.withElsewhere !== false) {
+      obj.withElsewhere = message.withElsewhere;
+    }
     return obj;
   },
 
   create(base?: DeepPartial<ListDisksRequest>): ListDisksRequest {
     return ListDisksRequest.fromPartial(base ?? {});
   },
-  fromPartial(_: DeepPartial<ListDisksRequest>): ListDisksRequest {
+  fromPartial(object: DeepPartial<ListDisksRequest>): ListDisksRequest {
     const message = createBaseListDisksRequest();
+    message.withElsewhere = object.withElsewhere ?? false;
     return message;
   },
 };
 
 function createBaseListDisksResponse(): ListDisksResponse {
-  return { disks: [] };
+  return { disks: [], elsewhere: [] };
 }
 
 export const ListDisksResponse: MessageFns<ListDisksResponse> = {
   encode(message: ListDisksResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     for (const v of message.disks) {
       DiskInfo.encode(v!, writer.uint32(10).fork()).join();
+    }
+    for (const v of message.elsewhere) {
+      RegionCount.encode(v!, writer.uint32(18).fork()).join();
     }
     return writer;
   },
@@ -20301,6 +20844,14 @@ export const ListDisksResponse: MessageFns<ListDisksResponse> = {
           message.disks.push(DiskInfo.decode(reader, reader.uint32()));
           continue;
         }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.elsewhere.push(RegionCount.decode(reader, reader.uint32()));
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -20311,13 +20862,21 @@ export const ListDisksResponse: MessageFns<ListDisksResponse> = {
   },
 
   fromJSON(object: any): ListDisksResponse {
-    return { disks: globalThis.Array.isArray(object?.disks) ? object.disks.map((e: any) => DiskInfo.fromJSON(e)) : [] };
+    return {
+      disks: globalThis.Array.isArray(object?.disks) ? object.disks.map((e: any) => DiskInfo.fromJSON(e)) : [],
+      elsewhere: globalThis.Array.isArray(object?.elsewhere)
+        ? object.elsewhere.map((e: any) => RegionCount.fromJSON(e))
+        : [],
+    };
   },
 
   toJSON(message: ListDisksResponse): unknown {
     const obj: any = {};
     if (message.disks?.length) {
       obj.disks = message.disks.map((e) => DiskInfo.toJSON(e));
+    }
+    if (message.elsewhere?.length) {
+      obj.elsewhere = message.elsewhere.map((e) => RegionCount.toJSON(e));
     }
     return obj;
   },
@@ -20328,12 +20887,13 @@ export const ListDisksResponse: MessageFns<ListDisksResponse> = {
   fromPartial(object: DeepPartial<ListDisksResponse>): ListDisksResponse {
     const message = createBaseListDisksResponse();
     message.disks = object.disks?.map((e) => DiskInfo.fromPartial(e)) || [];
+    message.elsewhere = object.elsewhere?.map((e) => RegionCount.fromPartial(e)) || [];
     return message;
   },
 };
 
 function createBaseDiskInfo(): DiskInfo {
-  return { diskId: "", name: "", sizeBytes: 0, status: "", attachments: [], createdAt: 0 };
+  return { diskId: "", name: "", sizeBytes: 0, status: "", attachments: [], createdAt: 0, region: "" };
 }
 
 export const DiskInfo: MessageFns<DiskInfo> = {
@@ -20355,6 +20915,9 @@ export const DiskInfo: MessageFns<DiskInfo> = {
     }
     if (message.createdAt !== 0) {
       writer.uint32(64).int64(message.createdAt);
+    }
+    if (message.region !== "") {
+      writer.uint32(74).string(message.region);
     }
     return writer;
   },
@@ -20414,6 +20977,14 @@ export const DiskInfo: MessageFns<DiskInfo> = {
           message.createdAt = longToNumber(reader.int64());
           continue;
         }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.region = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -20445,6 +21016,7 @@ export const DiskInfo: MessageFns<DiskInfo> = {
         : isSet(object.created_at)
         ? globalThis.Number(object.created_at)
         : 0,
+      region: isSet(object.region) ? globalThis.String(object.region) : "",
     };
   },
 
@@ -20468,6 +21040,9 @@ export const DiskInfo: MessageFns<DiskInfo> = {
     if (message.createdAt !== 0) {
       obj.createdAt = Math.round(message.createdAt);
     }
+    if (message.region !== "") {
+      obj.region = message.region;
+    }
     return obj;
   },
 
@@ -20482,6 +21057,7 @@ export const DiskInfo: MessageFns<DiskInfo> = {
     message.status = object.status ?? "";
     message.attachments = object.attachments?.map((e) => DiskAttachment.fromPartial(e)) || [];
     message.createdAt = object.createdAt ?? 0;
+    message.region = object.region ?? "";
     return message;
   },
 };
@@ -26410,7 +26986,7 @@ export const GetOrgBackupsDefaultResponse: MessageFns<GetOrgBackupsDefaultRespon
 };
 
 function createBaseSetOrgMachineDefaultsRequest(): SetOrgMachineDefaultsRequest {
-  return { orgId: "", vcpu: undefined, memoryBytes: undefined };
+  return { orgId: "", vcpu: undefined, memoryBytes: undefined, region: undefined };
 }
 
 export const SetOrgMachineDefaultsRequest: MessageFns<SetOrgMachineDefaultsRequest> = {
@@ -26423,6 +26999,9 @@ export const SetOrgMachineDefaultsRequest: MessageFns<SetOrgMachineDefaultsReque
     }
     if (message.memoryBytes !== undefined) {
       writer.uint32(24).uint64(message.memoryBytes);
+    }
+    if (message.region !== undefined) {
+      writer.uint32(34).string(message.region);
     }
     return writer;
   },
@@ -26458,6 +27037,14 @@ export const SetOrgMachineDefaultsRequest: MessageFns<SetOrgMachineDefaultsReque
           message.memoryBytes = longToNumber(reader.uint64());
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.region = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -26480,6 +27067,7 @@ export const SetOrgMachineDefaultsRequest: MessageFns<SetOrgMachineDefaultsReque
         : isSet(object.memory_bytes)
         ? globalThis.Number(object.memory_bytes)
         : undefined,
+      region: isSet(object.region) ? globalThis.String(object.region) : undefined,
     };
   },
 
@@ -26494,6 +27082,9 @@ export const SetOrgMachineDefaultsRequest: MessageFns<SetOrgMachineDefaultsReque
     if (message.memoryBytes !== undefined) {
       obj.memoryBytes = Math.round(message.memoryBytes);
     }
+    if (message.region !== undefined) {
+      obj.region = message.region;
+    }
     return obj;
   },
 
@@ -26505,6 +27096,7 @@ export const SetOrgMachineDefaultsRequest: MessageFns<SetOrgMachineDefaultsReque
     message.orgId = object.orgId ?? "";
     message.vcpu = object.vcpu ?? undefined;
     message.memoryBytes = object.memoryBytes ?? undefined;
+    message.region = object.region ?? undefined;
     return message;
   },
 };
@@ -26813,7 +27405,7 @@ export const ResizeVmResponse: MessageFns<ResizeVmResponse> = {
 };
 
 function createBaseGetOrgMachineDefaultsResponse(): GetOrgMachineDefaultsResponse {
-  return { set: false, vcpu: 0, memoryBytes: 0, ceilingVcpu: 0, ceilingMemoryBytes: 0, grantedSizes: [] };
+  return { set: false, vcpu: 0, memoryBytes: 0, ceilingVcpu: 0, ceilingMemoryBytes: 0, grantedSizes: [], region: "" };
 }
 
 export const GetOrgMachineDefaultsResponse: MessageFns<GetOrgMachineDefaultsResponse> = {
@@ -26835,6 +27427,9 @@ export const GetOrgMachineDefaultsResponse: MessageFns<GetOrgMachineDefaultsResp
     }
     for (const v of message.grantedSizes) {
       GrantedMachineSize.encode(v!, writer.uint32(50).fork()).join();
+    }
+    if (message.region !== "") {
+      writer.uint32(58).string(message.region);
     }
     return writer;
   },
@@ -26894,6 +27489,14 @@ export const GetOrgMachineDefaultsResponse: MessageFns<GetOrgMachineDefaultsResp
           message.grantedSizes.push(GrantedMachineSize.decode(reader, reader.uint32()));
           continue;
         }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.region = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -26927,6 +27530,7 @@ export const GetOrgMachineDefaultsResponse: MessageFns<GetOrgMachineDefaultsResp
         : globalThis.Array.isArray(object?.granted_sizes)
         ? object.granted_sizes.map((e: any) => GrantedMachineSize.fromJSON(e))
         : [],
+      region: isSet(object.region) ? globalThis.String(object.region) : "",
     };
   },
 
@@ -26950,6 +27554,9 @@ export const GetOrgMachineDefaultsResponse: MessageFns<GetOrgMachineDefaultsResp
     if (message.grantedSizes?.length) {
       obj.grantedSizes = message.grantedSizes.map((e) => GrantedMachineSize.toJSON(e));
     }
+    if (message.region !== "") {
+      obj.region = message.region;
+    }
     return obj;
   },
 
@@ -26964,6 +27571,7 @@ export const GetOrgMachineDefaultsResponse: MessageFns<GetOrgMachineDefaultsResp
     message.ceilingVcpu = object.ceilingVcpu ?? 0;
     message.ceilingMemoryBytes = object.ceilingMemoryBytes ?? 0;
     message.grantedSizes = object.grantedSizes?.map((e) => GrantedMachineSize.fromPartial(e)) || [];
+    message.region = object.region ?? "";
     return message;
   },
 };
@@ -30911,6 +31519,892 @@ export const RequestOrgMachineLimitResponse: MessageFns<RequestOrgMachineLimitRe
   },
 };
 
+function createBaseListRegionsRequest(): ListRegionsRequest {
+  return { orgId: "" };
+}
+
+export const ListRegionsRequest: MessageFns<ListRegionsRequest> = {
+  encode(message: ListRegionsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.orgId !== "") {
+      writer.uint32(10).string(message.orgId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ListRegionsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseListRegionsRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.orgId = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ListRegionsRequest {
+    return {
+      orgId: isSet(object.orgId)
+        ? globalThis.String(object.orgId)
+        : isSet(object.org_id)
+        ? globalThis.String(object.org_id)
+        : "",
+    };
+  },
+
+  toJSON(message: ListRegionsRequest): unknown {
+    const obj: any = {};
+    if (message.orgId !== "") {
+      obj.orgId = message.orgId;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ListRegionsRequest>): ListRegionsRequest {
+    return ListRegionsRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ListRegionsRequest>): ListRegionsRequest {
+    const message = createBaseListRegionsRequest();
+    message.orgId = object.orgId ?? "";
+    return message;
+  },
+};
+
+function createBaseRegion(): Region {
+  return {
+    id: "",
+    name: "",
+    zone: "",
+    apiEndpoint: "",
+    consoleEndpoint: "",
+    latitude: 0,
+    longitude: 0,
+    home: false,
+    orgState: "",
+  };
+}
+
+export const Region: MessageFns<Region> = {
+  encode(message: Region, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.id !== "") {
+      writer.uint32(10).string(message.id);
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    if (message.zone !== "") {
+      writer.uint32(26).string(message.zone);
+    }
+    if (message.apiEndpoint !== "") {
+      writer.uint32(34).string(message.apiEndpoint);
+    }
+    if (message.consoleEndpoint !== "") {
+      writer.uint32(42).string(message.consoleEndpoint);
+    }
+    if (message.latitude !== 0) {
+      writer.uint32(49).double(message.latitude);
+    }
+    if (message.longitude !== 0) {
+      writer.uint32(57).double(message.longitude);
+    }
+    if (message.home !== false) {
+      writer.uint32(64).bool(message.home);
+    }
+    if (message.orgState !== "") {
+      writer.uint32(74).string(message.orgState);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): Region {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseRegion();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.id = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.name = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.zone = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.apiEndpoint = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.consoleEndpoint = reader.string();
+          continue;
+        }
+        case 6: {
+          if (tag !== 49) {
+            break;
+          }
+
+          message.latitude = reader.double();
+          continue;
+        }
+        case 7: {
+          if (tag !== 57) {
+            break;
+          }
+
+          message.longitude = reader.double();
+          continue;
+        }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.home = reader.bool();
+          continue;
+        }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.orgState = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): Region {
+    return {
+      id: isSet(object.id) ? globalThis.String(object.id) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      zone: isSet(object.zone) ? globalThis.String(object.zone) : "",
+      apiEndpoint: isSet(object.apiEndpoint)
+        ? globalThis.String(object.apiEndpoint)
+        : isSet(object.api_endpoint)
+        ? globalThis.String(object.api_endpoint)
+        : "",
+      consoleEndpoint: isSet(object.consoleEndpoint)
+        ? globalThis.String(object.consoleEndpoint)
+        : isSet(object.console_endpoint)
+        ? globalThis.String(object.console_endpoint)
+        : "",
+      latitude: isSet(object.latitude) ? globalThis.Number(object.latitude) : 0,
+      longitude: isSet(object.longitude) ? globalThis.Number(object.longitude) : 0,
+      home: isSet(object.home) ? globalThis.Boolean(object.home) : false,
+      orgState: isSet(object.orgState)
+        ? globalThis.String(object.orgState)
+        : isSet(object.org_state)
+        ? globalThis.String(object.org_state)
+        : "",
+    };
+  },
+
+  toJSON(message: Region): unknown {
+    const obj: any = {};
+    if (message.id !== "") {
+      obj.id = message.id;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.zone !== "") {
+      obj.zone = message.zone;
+    }
+    if (message.apiEndpoint !== "") {
+      obj.apiEndpoint = message.apiEndpoint;
+    }
+    if (message.consoleEndpoint !== "") {
+      obj.consoleEndpoint = message.consoleEndpoint;
+    }
+    if (message.latitude !== 0) {
+      obj.latitude = message.latitude;
+    }
+    if (message.longitude !== 0) {
+      obj.longitude = message.longitude;
+    }
+    if (message.home !== false) {
+      obj.home = message.home;
+    }
+    if (message.orgState !== "") {
+      obj.orgState = message.orgState;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<Region>): Region {
+    return Region.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<Region>): Region {
+    const message = createBaseRegion();
+    message.id = object.id ?? "";
+    message.name = object.name ?? "";
+    message.zone = object.zone ?? "";
+    message.apiEndpoint = object.apiEndpoint ?? "";
+    message.consoleEndpoint = object.consoleEndpoint ?? "";
+    message.latitude = object.latitude ?? 0;
+    message.longitude = object.longitude ?? 0;
+    message.home = object.home ?? false;
+    message.orgState = object.orgState ?? "";
+    return message;
+  },
+};
+
+function createBaseListRegionsResponse(): ListRegionsResponse {
+  return { regions: [], orgId: "", thisRegion: "" };
+}
+
+export const ListRegionsResponse: MessageFns<ListRegionsResponse> = {
+  encode(message: ListRegionsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    for (const v of message.regions) {
+      Region.encode(v!, writer.uint32(10).fork()).join();
+    }
+    if (message.orgId !== "") {
+      writer.uint32(18).string(message.orgId);
+    }
+    if (message.thisRegion !== "") {
+      writer.uint32(26).string(message.thisRegion);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ListRegionsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseListRegionsResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.regions.push(Region.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.orgId = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.thisRegion = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ListRegionsResponse {
+    return {
+      regions: globalThis.Array.isArray(object?.regions) ? object.regions.map((e: any) => Region.fromJSON(e)) : [],
+      orgId: isSet(object.orgId)
+        ? globalThis.String(object.orgId)
+        : isSet(object.org_id)
+        ? globalThis.String(object.org_id)
+        : "",
+      thisRegion: isSet(object.thisRegion)
+        ? globalThis.String(object.thisRegion)
+        : isSet(object.this_region)
+        ? globalThis.String(object.this_region)
+        : "",
+    };
+  },
+
+  toJSON(message: ListRegionsResponse): unknown {
+    const obj: any = {};
+    if (message.regions?.length) {
+      obj.regions = message.regions.map((e) => Region.toJSON(e));
+    }
+    if (message.orgId !== "") {
+      obj.orgId = message.orgId;
+    }
+    if (message.thisRegion !== "") {
+      obj.thisRegion = message.thisRegion;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ListRegionsResponse>): ListRegionsResponse {
+    return ListRegionsResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ListRegionsResponse>): ListRegionsResponse {
+    const message = createBaseListRegionsResponse();
+    message.regions = object.regions?.map((e) => Region.fromPartial(e)) || [];
+    message.orgId = object.orgId ?? "";
+    message.thisRegion = object.thisRegion ?? "";
+    return message;
+  },
+};
+
+function createBaseRequestOrgRegionRequest(): RequestOrgRegionRequest {
+  return { orgId: "", region: "" };
+}
+
+export const RequestOrgRegionRequest: MessageFns<RequestOrgRegionRequest> = {
+  encode(message: RequestOrgRegionRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.orgId !== "") {
+      writer.uint32(10).string(message.orgId);
+    }
+    if (message.region !== "") {
+      writer.uint32(18).string(message.region);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): RequestOrgRegionRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseRequestOrgRegionRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.orgId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.region = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): RequestOrgRegionRequest {
+    return {
+      orgId: isSet(object.orgId)
+        ? globalThis.String(object.orgId)
+        : isSet(object.org_id)
+        ? globalThis.String(object.org_id)
+        : "",
+      region: isSet(object.region) ? globalThis.String(object.region) : "",
+    };
+  },
+
+  toJSON(message: RequestOrgRegionRequest): unknown {
+    const obj: any = {};
+    if (message.orgId !== "") {
+      obj.orgId = message.orgId;
+    }
+    if (message.region !== "") {
+      obj.region = message.region;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<RequestOrgRegionRequest>): RequestOrgRegionRequest {
+    return RequestOrgRegionRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<RequestOrgRegionRequest>): RequestOrgRegionRequest {
+    const message = createBaseRequestOrgRegionRequest();
+    message.orgId = object.orgId ?? "";
+    message.region = object.region ?? "";
+    return message;
+  },
+};
+
+function createBaseRequestOrgRegionResponse(): RequestOrgRegionResponse {
+  return { state: "" };
+}
+
+export const RequestOrgRegionResponse: MessageFns<RequestOrgRegionResponse> = {
+  encode(message: RequestOrgRegionResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.state !== "") {
+      writer.uint32(10).string(message.state);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): RequestOrgRegionResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseRequestOrgRegionResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.state = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): RequestOrgRegionResponse {
+    return { state: isSet(object.state) ? globalThis.String(object.state) : "" };
+  },
+
+  toJSON(message: RequestOrgRegionResponse): unknown {
+    const obj: any = {};
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<RequestOrgRegionResponse>): RequestOrgRegionResponse {
+    return RequestOrgRegionResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<RequestOrgRegionResponse>): RequestOrgRegionResponse {
+    const message = createBaseRequestOrgRegionResponse();
+    message.state = object.state ?? "";
+    return message;
+  },
+};
+
+function createBaseFindElsewhereRequest(): FindElsewhereRequest {
+  return { kind: "", name: "", org: "" };
+}
+
+export const FindElsewhereRequest: MessageFns<FindElsewhereRequest> = {
+  encode(message: FindElsewhereRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.kind !== "") {
+      writer.uint32(10).string(message.kind);
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    if (message.org !== "") {
+      writer.uint32(26).string(message.org);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): FindElsewhereRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseFindElsewhereRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.kind = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.name = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.org = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): FindElsewhereRequest {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      org: isSet(object.org) ? globalThis.String(object.org) : "",
+    };
+  },
+
+  toJSON(message: FindElsewhereRequest): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.org !== "") {
+      obj.org = message.org;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<FindElsewhereRequest>): FindElsewhereRequest {
+    return FindElsewhereRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<FindElsewhereRequest>): FindElsewhereRequest {
+    const message = createBaseFindElsewhereRequest();
+    message.kind = object.kind ?? "";
+    message.name = object.name ?? "";
+    message.org = object.org ?? "";
+    return message;
+  },
+};
+
+function createBaseElsewhereItem(): ElsewhereItem {
+  return { region: "", name: "", orgId: "", id: "" };
+}
+
+export const ElsewhereItem: MessageFns<ElsewhereItem> = {
+  encode(message: ElsewhereItem, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.region !== "") {
+      writer.uint32(10).string(message.region);
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    if (message.orgId !== "") {
+      writer.uint32(26).string(message.orgId);
+    }
+    if (message.id !== "") {
+      writer.uint32(34).string(message.id);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ElsewhereItem {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseElsewhereItem();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.region = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.name = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.orgId = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.id = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ElsewhereItem {
+    return {
+      region: isSet(object.region) ? globalThis.String(object.region) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      orgId: isSet(object.orgId)
+        ? globalThis.String(object.orgId)
+        : isSet(object.org_id)
+        ? globalThis.String(object.org_id)
+        : "",
+      id: isSet(object.id) ? globalThis.String(object.id) : "",
+    };
+  },
+
+  toJSON(message: ElsewhereItem): unknown {
+    const obj: any = {};
+    if (message.region !== "") {
+      obj.region = message.region;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.orgId !== "") {
+      obj.orgId = message.orgId;
+    }
+    if (message.id !== "") {
+      obj.id = message.id;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ElsewhereItem>): ElsewhereItem {
+    return ElsewhereItem.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ElsewhereItem>): ElsewhereItem {
+    const message = createBaseElsewhereItem();
+    message.region = object.region ?? "";
+    message.name = object.name ?? "";
+    message.orgId = object.orgId ?? "";
+    message.id = object.id ?? "";
+    return message;
+  },
+};
+
+function createBaseRegionCount(): RegionCount {
+  return { region: "", count: 0 };
+}
+
+export const RegionCount: MessageFns<RegionCount> = {
+  encode(message: RegionCount, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.region !== "") {
+      writer.uint32(10).string(message.region);
+    }
+    if (message.count !== 0) {
+      writer.uint32(16).uint64(message.count);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): RegionCount {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseRegionCount();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.region = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.count = longToNumber(reader.uint64());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): RegionCount {
+    return {
+      region: isSet(object.region) ? globalThis.String(object.region) : "",
+      count: isSet(object.count) ? globalThis.Number(object.count) : 0,
+    };
+  },
+
+  toJSON(message: RegionCount): unknown {
+    const obj: any = {};
+    if (message.region !== "") {
+      obj.region = message.region;
+    }
+    if (message.count !== 0) {
+      obj.count = Math.round(message.count);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<RegionCount>): RegionCount {
+    return RegionCount.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<RegionCount>): RegionCount {
+    const message = createBaseRegionCount();
+    message.region = object.region ?? "";
+    message.count = object.count ?? 0;
+    return message;
+  },
+};
+
+function createBaseFindElsewhereResponse(): FindElsewhereResponse {
+  return { exact: [], close: [], unavailable: [] };
+}
+
+export const FindElsewhereResponse: MessageFns<FindElsewhereResponse> = {
+  encode(message: FindElsewhereResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    for (const v of message.exact) {
+      ElsewhereItem.encode(v!, writer.uint32(10).fork()).join();
+    }
+    for (const v of message.close) {
+      ElsewhereItem.encode(v!, writer.uint32(18).fork()).join();
+    }
+    for (const v of message.unavailable) {
+      writer.uint32(26).string(v!);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): FindElsewhereResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseFindElsewhereResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.exact.push(ElsewhereItem.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.close.push(ElsewhereItem.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.unavailable.push(reader.string());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): FindElsewhereResponse {
+    return {
+      exact: globalThis.Array.isArray(object?.exact) ? object.exact.map((e: any) => ElsewhereItem.fromJSON(e)) : [],
+      close: globalThis.Array.isArray(object?.close) ? object.close.map((e: any) => ElsewhereItem.fromJSON(e)) : [],
+      unavailable: globalThis.Array.isArray(object?.unavailable)
+        ? object.unavailable.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: FindElsewhereResponse): unknown {
+    const obj: any = {};
+    if (message.exact?.length) {
+      obj.exact = message.exact.map((e) => ElsewhereItem.toJSON(e));
+    }
+    if (message.close?.length) {
+      obj.close = message.close.map((e) => ElsewhereItem.toJSON(e));
+    }
+    if (message.unavailable?.length) {
+      obj.unavailable = message.unavailable;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<FindElsewhereResponse>): FindElsewhereResponse {
+    return FindElsewhereResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<FindElsewhereResponse>): FindElsewhereResponse {
+    const message = createBaseFindElsewhereResponse();
+    message.exact = object.exact?.map((e) => ElsewhereItem.fromPartial(e)) || [];
+    message.close = object.close?.map((e) => ElsewhereItem.fromPartial(e)) || [];
+    message.unavailable = object.unavailable?.map((e) => e) || [];
+    return message;
+  },
+};
+
 export type BoxdApiService = typeof BoxdApiService;
 export const BoxdApiService = {
   createVm: {
@@ -31242,6 +32736,9 @@ export const BoxdApiService = {
    * covering <vm>.preview.mysaas.com for every org-billed VM). Same
    * already-pointed-DNS expectation as AddCustomDomain, this time NS
    * delegation. Set/Clear require org admin; Get is readable by any org member.
+   * An org has at most one domain in each region, set through that region's
+   * API (`region` names it; "" is the region the endpoint serves), and the
+   * domain is delegated to that region's nameservers (ns1 and ns2 of its zone).
    */
   setOrgDomain: {
     path: "/boxd.api.v1.BoxdApi/SetOrgDomain" as const,
@@ -32294,6 +33791,49 @@ export const BoxdApiService = {
       RequestOrgMachineLimitResponse.decode(value),
   },
   /**
+   * The regions boxd runs in. Each has its own API endpoint and DNS zone,
+   * and a machine, snapshot or disk lives in one of them. An org can use
+   * its home region and the regions enabled for it; ListRegions says which,
+   * for an org you belong to. An org admin can ask for another region with
+   * RequestOrgRegion (with their login, or an API key of theirs issued for
+   * the org; a token minted inside a machine can't); boxd enables it.
+   */
+  listRegions: {
+    path: "/boxd.api.v1.BoxdApi/ListRegions" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: ListRegionsRequest): Buffer => Buffer.from(ListRegionsRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): ListRegionsRequest => ListRegionsRequest.decode(value),
+    responseSerialize: (value: ListRegionsResponse): Buffer => Buffer.from(ListRegionsResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): ListRegionsResponse => ListRegionsResponse.decode(value),
+  },
+  requestOrgRegion: {
+    path: "/boxd.api.v1.BoxdApi/RequestOrgRegion" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: RequestOrgRegionRequest): Buffer =>
+      Buffer.from(RequestOrgRegionRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): RequestOrgRegionRequest => RequestOrgRegionRequest.decode(value),
+    responseSerialize: (value: RequestOrgRegionResponse): Buffer =>
+      Buffer.from(RequestOrgRegionResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): RequestOrgRegionResponse => RequestOrgRegionResponse.decode(value),
+  },
+  /**
+   * Where else a name is: the regions where your orgs have a machine, snapshot,
+   * disk or template of that name, and close names (one or two letters off).
+   * Answers "not found here" with where to look instead.
+   */
+  findElsewhere: {
+    path: "/boxd.api.v1.BoxdApi/FindElsewhere" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: FindElsewhereRequest): Buffer => Buffer.from(FindElsewhereRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): FindElsewhereRequest => FindElsewhereRequest.decode(value),
+    responseSerialize: (value: FindElsewhereResponse): Buffer =>
+      Buffer.from(FindElsewhereResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): FindElsewhereResponse => FindElsewhereResponse.decode(value),
+  },
+  /**
    * Org creation, roster, and membership (self-serve, same business rules as
    * the console). Any signed-in
    * user may create an org (becomes its owner+admin); invite/revoke/remove/
@@ -32628,6 +34168,9 @@ export interface BoxdApiServer extends UntypedServiceImplementation {
    * covering <vm>.preview.mysaas.com for every org-billed VM). Same
    * already-pointed-DNS expectation as AddCustomDomain, this time NS
    * delegation. Set/Clear require org admin; Get is readable by any org member.
+   * An org has at most one domain in each region, set through that region's
+   * API (`region` names it; "" is the region the endpoint serves), and the
+   * domain is delegated to that region's nameservers (ns1 and ns2 of its zone).
    */
   setOrgDomain: handleUnaryCall<SetOrgDomainRequest, SetOrgDomainResponse>;
   getOrgDomain: handleUnaryCall<GetOrgDomainRequest, GetOrgDomainResponse>;
@@ -32907,6 +34450,22 @@ export interface BoxdApiServer extends UntypedServiceImplementation {
    */
   getOrgMachineLimit: handleUnaryCall<GetOrgMachineLimitRequest, GetOrgMachineLimitResponse>;
   requestOrgMachineLimit: handleUnaryCall<RequestOrgMachineLimitRequest, RequestOrgMachineLimitResponse>;
+  /**
+   * The regions boxd runs in. Each has its own API endpoint and DNS zone,
+   * and a machine, snapshot or disk lives in one of them. An org can use
+   * its home region and the regions enabled for it; ListRegions says which,
+   * for an org you belong to. An org admin can ask for another region with
+   * RequestOrgRegion (with their login, or an API key of theirs issued for
+   * the org; a token minted inside a machine can't); boxd enables it.
+   */
+  listRegions: handleUnaryCall<ListRegionsRequest, ListRegionsResponse>;
+  requestOrgRegion: handleUnaryCall<RequestOrgRegionRequest, RequestOrgRegionResponse>;
+  /**
+   * Where else a name is: the regions where your orgs have a machine, snapshot,
+   * disk or template of that name, and close names (one or two letters off).
+   * Answers "not found here" with where to look instead.
+   */
+  findElsewhere: handleUnaryCall<FindElsewhereRequest, FindElsewhereResponse>;
   /**
    * Org creation, roster, and membership (self-serve, same business rules as
    * the console). Any signed-in
@@ -33421,6 +34980,9 @@ export interface BoxdApiClient extends Client {
    * covering <vm>.preview.mysaas.com for every org-billed VM). Same
    * already-pointed-DNS expectation as AddCustomDomain, this time NS
    * delegation. Set/Clear require org admin; Get is readable by any org member.
+   * An org has at most one domain in each region, set through that region's
+   * API (`region` names it; "" is the region the endpoint serves), and the
+   * domain is delegated to that region's nameservers (ns1 and ns2 of its zone).
    */
   setOrgDomain(
     request: SetOrgDomainRequest,
@@ -34889,6 +36451,64 @@ export interface BoxdApiClient extends Client {
     metadata: Metadata,
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: RequestOrgMachineLimitResponse) => void,
+  ): ClientUnaryCall;
+  /**
+   * The regions boxd runs in. Each has its own API endpoint and DNS zone,
+   * and a machine, snapshot or disk lives in one of them. An org can use
+   * its home region and the regions enabled for it; ListRegions says which,
+   * for an org you belong to. An org admin can ask for another region with
+   * RequestOrgRegion (with their login, or an API key of theirs issued for
+   * the org; a token minted inside a machine can't); boxd enables it.
+   */
+  listRegions(
+    request: ListRegionsRequest,
+    callback: (error: ServiceError | null, response: ListRegionsResponse) => void,
+  ): ClientUnaryCall;
+  listRegions(
+    request: ListRegionsRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: ListRegionsResponse) => void,
+  ): ClientUnaryCall;
+  listRegions(
+    request: ListRegionsRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: ListRegionsResponse) => void,
+  ): ClientUnaryCall;
+  requestOrgRegion(
+    request: RequestOrgRegionRequest,
+    callback: (error: ServiceError | null, response: RequestOrgRegionResponse) => void,
+  ): ClientUnaryCall;
+  requestOrgRegion(
+    request: RequestOrgRegionRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: RequestOrgRegionResponse) => void,
+  ): ClientUnaryCall;
+  requestOrgRegion(
+    request: RequestOrgRegionRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: RequestOrgRegionResponse) => void,
+  ): ClientUnaryCall;
+  /**
+   * Where else a name is: the regions where your orgs have a machine, snapshot,
+   * disk or template of that name, and close names (one or two letters off).
+   * Answers "not found here" with where to look instead.
+   */
+  findElsewhere(
+    request: FindElsewhereRequest,
+    callback: (error: ServiceError | null, response: FindElsewhereResponse) => void,
+  ): ClientUnaryCall;
+  findElsewhere(
+    request: FindElsewhereRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: FindElsewhereResponse) => void,
+  ): ClientUnaryCall;
+  findElsewhere(
+    request: FindElsewhereRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: FindElsewhereResponse) => void,
   ): ClientUnaryCall;
   /**
    * Org creation, roster, and membership (self-serve, same business rules as

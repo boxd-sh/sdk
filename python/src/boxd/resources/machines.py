@@ -20,6 +20,7 @@ from .. import _mappers as m
 from .. import _requests as req
 from .. import spec as _spec
 from .._generated import api_pb2
+from .._regions import ALL, normalize
 from .._streaming import AsyncExecStream, ExecStream
 from ..errors import APIConnectionError, BoxdError, ConflictError
 from ..models import (
@@ -39,6 +40,7 @@ from ..models import (
     ProxyEntry,
     Proxy,
     MachineSpecUpdate,
+    RegionalList,
     ResizeResult,
     ResumeResult,
     VolumeMount,
@@ -140,7 +142,8 @@ def _create_request(
     config_kwargs: dict,
     labels: Mapping[str, str] | None = None,
     spec: MachineSpecBuilder | Mapping[str, Any] | None = None,
-    sets_delete_after: bool = False,
+    delete_after: int | None = None,
+    delete_after_cron: str | None = None,
 ) -> tuple[str, object]:
     """Pick the create RPC and build its request.
 
@@ -180,10 +183,12 @@ def _create_request(
                 + " in the spec",
             )
         wire_spec = _spec.to_wire(spec)
-        # A delete-after timer is a second call once the machine exists,
-        # which the creator of a machine for someone else may not make: it is
-        # the assignee's. Refused before anything is created.
-        if wire_spec.assign_to and sets_delete_after:
+        # A machine created for someone else is the assignee's to manage, so
+        # the create can't also give it a delete-after timer (the server
+        # refuses it too). Refused before anything is sent.
+        if wire_spec.assign_to and (
+            delete_after is not None or delete_after_cron is not None
+        ):
             raise _spec.MachineSpecError(
                 "assignTo",
                 "a machine created for someone else is theirs to manage, so the create "
@@ -222,6 +227,7 @@ def _create_request(
         )
         if wire_spec is not None:
             request.spec.CopyFrom(wire_spec)
+        req.set_create_delete_after(request, delete_after, delete_after_cron)
         return "CreateVmFromSnapshot", request
     request = req.create_vm(
         name=name,
@@ -238,7 +244,31 @@ def _create_request(
     )
     if wire_spec is not None:
         request.spec.CopyFrom(wire_spec)
+    req.set_create_delete_after(request, delete_after, delete_after_cron)
     return "CreateVm", request
+
+
+def _answered_machine(created, seconds: int | None, cron: str | None):
+    """The machine a create, restore or fork answered with, when it shows the
+    delete-after timer the call asked for; None otherwise. A server that
+    knows the request's delete-after fields writes the timer with the
+    machine and answers with the whole machine. One from before them answers
+    without it, and the caller then sets the timer and reads the machine back
+    itself, as it always did."""
+    if not created.HasField("machine"):
+        return None
+    machine = created.machine
+    at, got = machine.delete_at_ms, machine.delete_after_cron
+    if cron and cron.strip():
+        applied = at > 0 and got == cron.strip()
+    elif seconds:
+        applied = at > 0 and got == ""
+    elif seconds is not None or cron is not None:
+        # Asked for no timer (a fork dropping the one it inherits).
+        applied = at == 0
+    else:
+        applied = True
+    return machine if applied else None
 
 
 def _exec_init(
@@ -393,6 +423,22 @@ def _spec_conflict(e: ConflictError) -> bool:
     return e.code == "aborted"
 
 
+def _machine_list(
+    transport, selector, pages, unavailable, elsewhere=()
+) -> RegionalList[Machine]:
+    """Map `(region, ListVmsResponse)` pages into one list, each machine with
+    its region and that region's console."""
+    machines = [
+        m.machine(v, transport.console_origin_for(region), region)
+        for region, resp in pages
+        for v in resp.vms
+        if req.labels_match(selector, v.labels)
+    ]
+    return RegionalList(
+        machines, elsewhere=m.region_counts(elsewhere), unavailable=unavailable
+    )
+
+
 def _ready_check(machine: Machine, name: str) -> bool:
     """True once the machine is running; raises if it can never get there."""
     if machine.status == "running":
@@ -445,13 +491,19 @@ class Machines(Namespace):
         ssh: bool | None = None,
         proxies: Sequence[ProxyEntry] | None = None,
         volumes: Sequence[VolumeMount] | None = None,
+        region: str | None = None,
     ) -> Machine:
         """Create a machine. Pass `from_snapshot` to restore one instead.
 
-        The create call answers as soon as the machine is scheduled, and its
-        response carries only a few fields, so this re-reads the machine before
-        returning. It is still only *scheduled* — call :meth:`wait_until_ready`
-        before doing anything that depends on it actually running.
+        The create call answers as soon as the machine is scheduled, with the
+        whole machine (from a server that predates that, this re-reads it).
+        It is still only *scheduled* — call :meth:`wait_until_ready` before
+        doing anything that depends on it actually running.
+
+        ``delete_after`` (seconds) or ``delete_after_cron`` (a cron
+        expression, UTC) gives the machine a delete-after timer, written
+        together with the machine in the same call; see
+        :meth:`set_delete_after`.
 
         ``idle_ignore_outbound=True`` makes only connections opened TO the
         machine (SSH, HTTPS, another machine) reset the idle clock behind
@@ -496,7 +548,8 @@ class Machines(Namespace):
             isolated=isolated,
             labels=labels,
             spec=spec,
-            sets_delete_after=delete_after is not None or delete_after_cron is not None,
+            delete_after=delete_after,
+            delete_after_cron=delete_after_cron,
             config_kwargs=dict(
                 vcpu=vcpu,
                 memory=memory,
@@ -509,26 +562,44 @@ class Machines(Namespace):
                 volumes=volumes,
             ),
         )
-        created = self._transport.call(method, request)
-        self._apply_delete_after(created.vm_id, delete_after, delete_after_cron)
+        created = self._transport.call(method, request, region=region)
         # Non-zero only for a machine made from a snapshot, a team's default
         # one included.
         return _with_paused_automations(
-            self._reread(created), created.paused_automations, from_snapshot=True
+            self._complete(created, delete_after, delete_after_cron, region=region),
+            created.paused_automations,
+            from_snapshot=True,
         )
 
-    def _reread(self, created) -> Machine:
+    def _complete(
+        self,
+        created,
+        seconds: int | None,
+        cron: str | None,
+        *,
+        region: str | None = None,
+    ) -> Machine:
+        """The machine a create, restore or fork made: the one it answered
+        with (one call in all), or, from a server that predates that, the
+        delete-after timer set and the machine read back here."""
+        answered = _answered_machine(created, seconds, cron)
+        if answered is not None:
+            return m.machine(answered, self._transport.console_origin_for(region))
+        self._apply_delete_after(created.vm_id, seconds, cron, region=region)
+        return self._reread(created, region=region)
+
+    def _reread(self, created, *, region: str | None = None) -> Machine:
         """Fill in the fields the create/fork response does not carry.
 
         A machine that is not readable yet falls back to the partial mapping —
         better a thin record than a failed create.
         """
         try:
-            return self.get(created.vm_id)
+            return self.get(created.vm_id, region=region)
         except BoxdError:
             return m.machine_from_created(created)
 
-    def get(self, machine_id: str) -> Machine:
+    def get(self, machine_id: str, *, region: str | None = None) -> Machine:
         """Fetch one machine by id or name.
 
         Raises `NotFoundError` for a destroyed machine's id/name, same as
@@ -537,8 +608,10 @@ class Machines(Namespace):
         completed.
         """
         return m.machine(
-            self._transport.call("GetVm", api_pb2.GetVmRequest(vm_id=machine_id)),
-            self._transport.console_origin,
+            self._transport.call(
+                "GetVm", api_pb2.GetVmRequest(vm_id=machine_id), region=region
+            ),
+            self._transport.console_origin_for(region),
         )
 
     def usage(
@@ -582,7 +655,8 @@ class Machines(Namespace):
         org: str | None = None,
         all_contexts: bool = False,
         labels: Mapping[str, str] | Sequence[str] | None = None,
-    ) -> list[Machine]:
+        region: str | None = None,
+    ) -> RegionalList[Machine]:
         """List machines — personal by default, or an org's with `org`.
 
         `all_contexts=True` ignores `org` and returns everything the caller can
@@ -595,21 +669,33 @@ class Machines(Namespace):
 
         Each machine's ``packages`` come without their ``output_tail``, to
         keep the list small; :meth:`get` has it.
+
+        The list is of one region (``region``, default the client's); its
+        ``elsewhere`` counts the org's machines in each other region.
+        ``region="all"`` lists every region the org has, each machine with
+        its ``region``; ``unavailable`` names any region that could not be
+        reached.
         """
         selector = req.label_selector(labels)
-        resp = self._transport.call(
-            "ListVms", req.list_vms(org=org, all_contexts=all_contexts, labels=selector)
+        if normalize(region) == ALL:
+            request = req.list_vms(org=org, all_contexts=all_contexts, labels=selector)
+            pages, unavailable = self._transport.each_region(
+                "ListVms", request, org=org
+            )
+            return _machine_list(self._transport, selector, pages, unavailable)
+        request = req.list_vms(
+            org=org, all_contexts=all_contexts, labels=selector, with_elsewhere=True
         )
-        console_origin = self._transport.console_origin
-        return [
-            m.machine(v, console_origin)
-            for v in resp.vms
-            if req.labels_match(selector, v.labels)
-        ]
+        resp = self._transport.call("ListVms", request, region=region)
+        return _machine_list(
+            self._transport, selector, [(normalize(region), resp)], [], resp.elsewhere
+        )
 
-    def delete(self, machine_id: str) -> None:
+    def delete(self, machine_id: str, *, region: str | None = None) -> None:
         """Destroy a machine. Terminal."""
-        self._transport.call("DestroyVm", api_pb2.DestroyVmRequest(vm_id=machine_id))
+        self._transport.call(
+            "DestroyVm", api_pb2.DestroyVmRequest(vm_id=machine_id), region=region
+        )
 
     def delete_self(self, *, confirm: str) -> SelfDeleteResult:
         """Delete **the machine this code is running on** — call it inside a
@@ -636,45 +722,59 @@ class Machines(Namespace):
             raise APIConnectionError(f"self-delete request failed: {e}") from e
         return _self_delete_result(resp.status_code, resp.text, _json(resp))
 
-    def rename(self, machine_id: str, new_name: str) -> str:
+    def rename(
+        self, machine_id: str, new_name: str, *, region: str | None = None
+    ) -> str:
         """Rename a machine — **this reboots it**. Returns the new name.
 
         Routing and DNS follow immediately; the in-VM hostname updates on the
         next boot, which is why the reboot happens.
         """
         resp = self._transport.call(
-            "RenameVm", api_pb2.RenameVmRequest(vm_id=machine_id, new_name=new_name)
+            "RenameVm",
+            api_pb2.RenameVmRequest(vm_id=machine_id, new_name=new_name),
+            region=region,
         )
         return resp.name
 
-    def start(self, machine_id: str) -> None:
-        self._transport.call("StartVm", api_pb2.StartVmRequest(vm_id=machine_id))
+    def start(self, machine_id: str, *, region: str | None = None) -> None:
+        self._transport.call(
+            "StartVm", api_pb2.StartVmRequest(vm_id=machine_id), region=region
+        )
 
-    def stop(self, machine_id: str) -> None:
-        self._transport.call("StopVm", api_pb2.StopVmRequest(vm_id=machine_id))
+    def stop(self, machine_id: str, *, region: str | None = None) -> None:
+        self._transport.call(
+            "StopVm", api_pb2.StopVmRequest(vm_id=machine_id), region=region
+        )
 
-    def reboot(self, machine_id: str) -> None:
-        self._transport.call("RebootVm", api_pb2.RebootVmRequest(vm_id=machine_id))
+    def reboot(self, machine_id: str, *, region: str | None = None) -> None:
+        self._transport.call(
+            "RebootVm", api_pb2.RebootVmRequest(vm_id=machine_id), region=region
+        )
 
-    def pause(self, machine_id: str) -> PauseResult:
+    def pause(self, machine_id: str, *, region: str | None = None) -> PauseResult:
         """Suspend to RAM — fast to resume, memory stays resident."""
         resp = self._transport.call(
-            "SuspendVm", api_pb2.SuspendVmRequest(vm_id=machine_id)
+            "SuspendVm", api_pb2.SuspendVmRequest(vm_id=machine_id), region=region
         )
         return PauseResult(suspend_us=resp.suspend_us)
 
-    def resume(self, machine_id: str) -> ResumeResult:
+    def resume(self, machine_id: str, *, region: str | None = None) -> ResumeResult:
         resp = self._transport.call(
-            "ResumeVm", api_pb2.ResumeVmRequest(vm_id=machine_id)
+            "ResumeVm", api_pb2.ResumeVmRequest(vm_id=machine_id), region=region
         )
         return ResumeResult(resume_us=resp.resume_us)
 
-    def hibernate(self, machine_id: str) -> None:
+    def hibernate(self, machine_id: str, *, region: str | None = None) -> None:
         """Suspend to disk. Cheaper than `pause`; waking takes longer."""
-        self._transport.call("HibernateVm", api_pb2.HibernateVmRequest(vm_id=machine_id))
+        self._transport.call(
+            "HibernateVm", api_pb2.HibernateVmRequest(vm_id=machine_id), region=region
+        )
 
-    def wake(self, machine_id: str) -> None:
-        self._transport.call("WakeVm", api_pb2.WakeVmRequest(vm_id=machine_id))
+    def wake(self, machine_id: str, *, region: str | None = None) -> None:
+        self._transport.call(
+            "WakeVm", api_pb2.WakeVmRequest(vm_id=machine_id), region=region
+        )
 
     def resize(
         self,
@@ -682,6 +782,7 @@ class Machines(Namespace):
         *,
         vcpu: int | None = None,
         memory: int | str | None = None,
+        region: str | None = None,
     ) -> ResizeResult:
         """Move a machine to another size class. Sizes it for good, not for now.
 
@@ -700,6 +801,7 @@ class Machines(Namespace):
             self._transport.call(
                 "ResizeVm",
                 req.resize_vm(machine_id=machine_id, vcpu=vcpu, memory=memory),
+                region=region,
             )
         )
 
@@ -712,6 +814,7 @@ class Machines(Namespace):
         reboot: bool = False,
         retry_packages: bool = False,
         expected_spec: MachineSpec | None = None,
+        region: str | None = None,
     ) -> MachineSpecUpdate:
         """Change the spec of a machine created from one, and apply what changes.
         Pass a patch, or a function that extends the current spec with a
@@ -776,6 +879,7 @@ class Machines(Namespace):
                         retry_packages=retry_packages,
                         expected_spec=expected,
                     ),
+                    region=region,
                 )
             )
 
@@ -786,7 +890,7 @@ class Machines(Namespace):
         # reads the spec again and reapplies the function.
         attempt = 0
         while True:
-            current = self.get(machine_id).spec
+            current = self.get(machine_id, region=region).spec
             try:
                 return send(_spec_patch_doc(machine_id, current, patch), current)
             except ConflictError as e:
@@ -815,6 +919,7 @@ class Machines(Namespace):
         ssh: bool | None = None,
         proxies: Sequence[ProxyEntry] | None = None,
         volumes: Sequence[VolumeMount] | None = None,
+        region: str | None = None,
     ) -> Machine:
         """Clone a machine, live. Config left unset is inherited from the source.
 
@@ -835,6 +940,10 @@ class Machines(Namespace):
         ``shared=True`` keeps the fork shared with the source's org; by
         default it is private to you. With an org API key the fork is always
         shared, so the key can reach it.
+
+        ``delete_after`` / ``delete_after_cron`` left as None keep the
+        source's delete-after timer, re-armed from the fork; set, they give
+        the fork its own, written with it (``delete_after=0``: none).
         """
         config = req.vm_config(
             vcpu=vcpu,
@@ -847,23 +956,29 @@ class Machines(Namespace):
             proxies=proxies,
             volumes=volumes,
         )
-        resp = self._transport.call(
-            "ForkVm",
-            req.fork_vm(
-                source=source,
-                name=name,
-                shared=shared,
-                networks=networks,
-                isolated=isolated,
-                config=config,
-                labels=labels,
-            ),
+        request = req.fork_vm(
+            source=source,
+            name=name,
+            shared=shared,
+            networks=networks,
+            isolated=isolated,
+            config=config,
+            labels=labels,
         )
-        self._apply_delete_after(resp.vm_id, delete_after, delete_after_cron)
-        return _with_paused_automations(self._reread(resp), resp.paused_automations)
+        # Neither given: the fork keeps its source's timer, re-armed.
+        req.set_create_delete_after(request, delete_after, delete_after_cron)
+        resp = self._transport.call("ForkVm", request, region=region)
+        return _with_paused_automations(
+            self._complete(resp, delete_after, delete_after_cron, region=region),
+            resp.paused_automations,
+        )
 
     def set_networks(
-        self, machine_id: str, networks: Sequence[str]
+        self,
+        machine_id: str,
+        networks: Sequence[str],
+        *,
+        region: str | None = None,
     ) -> list[str]:
         """Replace the machine's networks — the complete desired set, not an
         add/remove. Returns the set now in effect.
@@ -880,10 +995,13 @@ class Machines(Namespace):
         resp = self._transport.call(
             "SetVmNetworks",
             api_pb2.SetVmNetworksRequest(vm_id=machine_id, networks=list(networks)),
+            region=region,
         )
         return list(resp.networks)
 
-    def set_egress_allow(self, machine_id: str, entries: Sequence[str]) -> list[str]:
+    def set_egress_allow(
+        self, machine_id: str, entries: Sequence[str], *, region: str | None = None
+    ) -> list[str]:
         """Replace the machine's egress allowlist: the complete set of what
         it may reach on the internet. Returns the list now in effect.
 
@@ -900,6 +1018,7 @@ class Machines(Namespace):
         resp = self._transport.call(
             "SetVmEgressAllow",
             api_pb2.SetVmEgressAllowRequest(vm=machine_id, entries=list(entries)),
+            region=region,
         )
         return list(resp.entries)
 
@@ -910,6 +1029,7 @@ class Machines(Namespace):
         remove: Sequence[str] | None = None,
         *,
         replace_all: bool = False,
+        region: str | None = None,
     ) -> dict[str, str]:
         """Edit the machine's labels. Returns the labels now in effect.
 
@@ -928,36 +1048,52 @@ class Machines(Namespace):
             req.update_vm_labels(
                 machine_id=machine_id, set=set, remove=remove, replace_all=replace_all
             ),
+            region=region,
         )
         return dict(resp.labels)
 
-    def share(self, machine_id: str) -> None:
+    def share(self, machine_id: str, *, region: str | None = None) -> None:
         """Make the machine visible to every member of its org."""
-        self._transport.call("ShareVm", api_pb2.ShareVmRequest(vm_id=machine_id))
+        self._transport.call(
+            "ShareVm", api_pb2.ShareVmRequest(vm_id=machine_id), region=region
+        )
 
-    def unshare(self, machine_id: str) -> None:
-        self._transport.call("UnshareVm", api_pb2.UnshareVmRequest(vm_id=machine_id))
+    def unshare(self, machine_id: str, *, region: str | None = None) -> None:
+        self._transport.call(
+            "UnshareVm", api_pb2.UnshareVmRequest(vm_id=machine_id), region=region
+        )
 
-    def set_auto_suspend_timeout(self, machine_id: str, seconds: int) -> None:
+    def set_auto_suspend_timeout(
+        self, machine_id: str, seconds: int, *, region: str | None = None
+    ) -> None:
         """Seconds of idleness before suspend. 0 disables it."""
         self._transport.call(
             "SetAutoSuspendTimeout",
             api_pb2.SetAutoSuspendTimeoutRequest(
                 vm_id=machine_id, timeout_secs=seconds
             ),
+            region=region,
         )
 
-    def set_auto_hibernate_timeout(self, machine_id: str, seconds: int) -> None:
+    def set_auto_hibernate_timeout(
+        self, machine_id: str, seconds: int, *, region: str | None = None
+    ) -> None:
         """Seconds of idleness before hibernation. 0 disables it."""
         self._transport.call(
             "SetAutoHibernateTimeout",
             api_pb2.SetAutoHibernateTimeoutRequest(
                 vm_id=machine_id, timeout_secs=seconds
             ),
+            region=region,
         )
 
     def set_delete_after(
-        self, machine_id: str, seconds: int = 0, *, cron: str | None = None
+        self,
+        machine_id: str,
+        seconds: int = 0,
+        *,
+        cron: str | None = None,
+        region: str | None = None,
     ) -> datetime | None:
         """Permanently delete the machine at a set time, whatever state it is
         in — enforced by the platform, so it fires on a suspended or
@@ -968,18 +1104,26 @@ class Machines(Namespace):
         inherits the timer, re-armed from the moment of the fork. Returns the
         new deadline, or None when cleared."""
         resp = self._transport.call(
-            "SetDeleteAfter", req.set_delete_after(machine_id, seconds, cron)
+            "SetDeleteAfter",
+            req.set_delete_after(machine_id, seconds, cron),
+            region=region,
         )
         return m._epoch_ms(resp.delete_at_ms)
 
     def _apply_delete_after(
-        self, machine_id: str, seconds: int | None, cron: str | None
+        self,
+        machine_id: str,
+        seconds: int | None,
+        cron: str | None,
+        *,
+        region: str | None = None,
     ) -> None:
-        """``delete_after`` / ``delete_after_cron`` on create/fork: not part
-        of the create request, so set right after. Skipped when neither is
-        passed (a fork then keeps the timer it inherited)."""
+        """``delete_after`` / ``delete_after_cron`` on create/fork, set after
+        the create for a server that ignored them in the request (one from
+        before the fields). Skipped when neither is passed (a fork then keeps
+        the timer it inherited)."""
         if seconds is not None or cron is not None:
-            self.set_delete_after(machine_id, seconds or 0, cron=cron)
+            self.set_delete_after(machine_id, seconds or 0, cron=cron, region=region)
 
     def set_bot_protection(
         self,
@@ -987,6 +1131,7 @@ class Machines(Namespace):
         enabled: bool | None = None,
         *,
         mode: BotProtectionMode | None = None,
+        region: str | None = None,
     ) -> None:
         """Set the machine's bot protection mode.
 
@@ -1005,9 +1150,12 @@ class Machines(Namespace):
             api_pb2.SetBotProtectionRequest(
                 vm_id=machine_id, enabled=mode != "off", mode=mode
             ),
+            region=region,
         )
 
-    def set_idle_ignore_outbound(self, machine_id: str, enabled: bool) -> None:
+    def set_idle_ignore_outbound(
+        self, machine_id: str, enabled: bool, *, region: str | None = None
+    ) -> None:
         """Choose what counts as activity for auto-suspend and auto-hibernate.
 
         On: only connections opened TO the machine (SSH, HTTPS, another
@@ -1017,9 +1165,12 @@ class Machines(Namespace):
         self._transport.call(
             "SetIdleIgnoreOutbound",
             api_pb2.SetIdleIgnoreOutboundRequest(vm_id=machine_id, enabled=enabled),
+            region=region,
         )
 
-    def set_ssh(self, machine_id: str, enabled: bool) -> None:
+    def set_ssh(
+        self, machine_id: str, enabled: bool, *, region: str | None = None
+    ) -> None:
         """Turn SSH on or off for the machine.
 
         Off: nothing answers SSH on its port, on the public address or the
@@ -1030,6 +1181,7 @@ class Machines(Namespace):
         self._transport.call(
             "SetSsh",
             api_pb2.SetSshRequest(vm_id=machine_id, enabled=enabled),
+            region=region,
         )
 
     def exec(
@@ -1044,6 +1196,7 @@ class Machines(Namespace):
         rows: int = 0,
         timeout: float | None = None,
         encoding: Literal["utf-8", "buffer"] = "utf-8",
+        region: str | None = None,
     ) -> ExecResult:
         """Run one command and collect its output.
 
@@ -1080,7 +1233,13 @@ class Machines(Namespace):
             try:
                 with _exec_timeout(timeout):
                     return _collect_exec(
-                        self._transport.bidi("Exec", iter([init]), timeout=left),
+                        self._transport.bidi(
+                            "Exec",
+                            iter([init]),
+                            timeout=left,
+                            region=region,
+                            machine=machine_id,
+                        ),
                         encoding=encoding,
                     )
             except BoxdError as err:
@@ -1101,6 +1260,7 @@ class Machines(Namespace):
         cols: int = 0,
         rows: int = 0,
         close_stdin: bool = False,
+        region: str | None = None,
     ) -> ExecStream:
         """Open an interactive exec session. Use it as a context manager."""
         if close_stdin and tty:
@@ -1111,19 +1271,27 @@ class Machines(Namespace):
         init = _exec_init(
             machine_id, command, env=env, tty=tty, cols=cols, rows=rows, cwd=cwd
         )
-        return ExecStream(self._transport, init, close_stdin=close_stdin)
+        return ExecStream(self._transport, init, close_stdin=close_stdin, region=region)
 
-    def logs(self, machine_id: str, *, follow: bool = False) -> Iterator[bytes]:
+    def logs(
+        self, machine_id: str, *, follow: bool = False, region: str | None = None
+    ) -> Iterator[bytes]:
         """Stream console log chunks. `follow=True` keeps the stream open."""
         stream = self._transport.server_stream(
             "StreamLogs",
             api_pb2.StreamLogsRequest(vm_id=machine_id, follow=follow),
+            region=region,
         )
         for chunk in stream:
             yield chunk.data
 
     def wait_until_ready(
-        self, machine_id: str, *, timeout: float = 90.0, poll_interval: float = 0.5
+        self,
+        machine_id: str,
+        *,
+        timeout: float = 90.0,
+        poll_interval: float = 0.5,
+        region: str | None = None,
     ) -> Machine:
         """Poll until the machine is running and `exec` round-trips.
 
@@ -1131,18 +1299,18 @@ class Machines(Namespace):
         and status alone can lag the reality by a second.
         """
         deadline = time.monotonic() + timeout
-        machine = self.get(machine_id)
+        machine = self.get(machine_id, region=region)
         while not _ready_check(machine, machine_id):
             if time.monotonic() >= deadline:
                 raise TimeoutError(
                     f"machine {machine_id} did not reach 'running' within {timeout}s"
                 )
             time.sleep(poll_interval)
-            machine = self.get(machine_id)
+            machine = self.get(machine_id, region=region)
 
         while True:
             try:
-                self.exec(machine_id, "true")
+                self.exec(machine_id, "true", region=region)
                 return machine
             except BoxdError:
                 if time.monotonic() >= deadline:
@@ -1152,17 +1320,24 @@ class Machines(Namespace):
                     ) from None
                 time.sleep(poll_interval)
 
-    def suggest_name(self) -> str:
+    def suggest_name(self, *, region: str | None = None) -> str:
         """A fresh, available auto-generated machine name."""
         return self._transport.call(
-            "SuggestVmName", api_pb2.SuggestVmNameRequest()
+            "SuggestVmName", api_pb2.SuggestVmNameRequest(), region=region
         ).name
 
 
 class Files(Namespace):
     """`boxd.machines.files` — move files in and out of a machine."""
 
-    def upload(self, machine_id: str, path: str, data: bytes | str) -> int:
+    def upload(
+        self,
+        machine_id: str,
+        path: str,
+        data: bytes | str,
+        *,
+        region: str | None = None,
+    ) -> int:
         """Write `data` to `path` inside the machine. Returns bytes written.
 
         Uploads are streamed, so there is no practical size limit. A server
@@ -1178,10 +1353,13 @@ class Files(Namespace):
                 data=data,
                 chunk_size=_UPLOAD_CHUNK_BYTES,
             ),
+            region=region,
         )
         return resp.bytes_written
 
-    def download(self, machine_id: str, path: str) -> bytes:
+    def download(
+        self, machine_id: str, path: str, *, region: str | None = None
+    ) -> bytes:
         """Read a file out of the machine. Streamed, so there is no size cap."""
         chunks: list[bytes] = []
         received = 0
@@ -1189,6 +1367,7 @@ class Files(Namespace):
         for chunk in self._transport.server_stream(
             "DownloadFileStream",
             api_pb2.DownloadFileRequest(vm_id=machine_id, path=path),
+            region=region,
         ):
             if chunk.total_size:
                 total = chunk.total_size
@@ -1201,7 +1380,9 @@ class Files(Namespace):
             )
         return b"".join(chunks)
 
-    def list_dir(self, machine_id: str, path: str) -> DirListing:
+    def list_dir(
+        self, machine_id: str, path: str, *, region: str | None = None
+    ) -> DirListing:
         """Immediate (non-recursive) contents of a directory inside the machine.
 
         A directory bigger than the server's per-listing cap comes back with
@@ -1209,38 +1390,58 @@ class Files(Namespace):
         particular order); use `machines.exec` for an exhaustive listing.
         """
         resp = self._transport.call(
-            "ListDir", api_pb2.ListDirRequest(vm_id=machine_id, path=path)
+            "ListDir",
+            api_pb2.ListDirRequest(vm_id=machine_id, path=path),
+            region=region,
         )
         return m.dir_listing(resp)
 
-    def mkdir(self, machine_id: str, path: str) -> None:
+    def mkdir(self, machine_id: str, path: str, *, region: str | None = None) -> None:
         """Create a directory. The parent must already exist."""
         self._transport.call(
-            "Mkdir", api_pb2.MkdirRequest(vm_id=machine_id, path=path)
+            "Mkdir", api_pb2.MkdirRequest(vm_id=machine_id, path=path), region=region
         )
 
-    def rename(self, machine_id: str, old_path: str, new_path: str) -> None:
+    def rename(
+        self,
+        machine_id: str,
+        old_path: str,
+        new_path: str,
+        *,
+        region: str | None = None,
+    ) -> None:
         """Move/rename a file or directory."""
         self._transport.call(
             "RenamePath",
             api_pb2.RenamePathRequest(
                 vm_id=machine_id, old_path=old_path, new_path=new_path
             ),
+            region=region,
         )
 
-    def delete(self, machine_id: str, path: str) -> None:
+    def delete(self, machine_id: str, path: str, *, region: str | None = None) -> None:
         """Remove a file, or a directory and everything under it."""
         self._transport.call(
-            "DeletePath", api_pb2.DeletePathRequest(vm_id=machine_id, path=path)
+            "DeletePath",
+            api_pb2.DeletePathRequest(vm_id=machine_id, path=path),
+            region=region,
         )
 
-    def copy(self, machine_id: str, old_path: str, new_path: str) -> None:
+    def copy(
+        self,
+        machine_id: str,
+        old_path: str,
+        new_path: str,
+        *,
+        region: str | None = None,
+    ) -> None:
         """Copy a file, or a directory recursively."""
         self._transport.call(
             "CopyPath",
             api_pb2.CopyPathRequest(
                 vm_id=machine_id, old_path=old_path, new_path=new_path
             ),
+            region=region,
         )
 
 
@@ -1248,7 +1449,12 @@ class Ports(Namespace):
     """`boxd.machines.ports` — public TCP/UDP forwards. Max 3 per machine."""
 
     def expose(
-        self, machine_id: str, port: int, *, protocol: str = "tcp"
+        self,
+        machine_id: str,
+        port: int,
+        *,
+        protocol: str = "tcp",
+        region: str | None = None,
     ) -> ExposedPort:
         """Expose a machine port publicly. `protocol` is "tcp" | "udp" | "both".
 
@@ -1261,25 +1467,33 @@ class Ports(Namespace):
                 api_pb2.ExposePortRequest(
                     vm=machine_id, vm_port=port, protocol=protocol
                 ),
+                region=region,
             )
         )
 
-    def unexpose(self, machine_id: str, port: int) -> ExposedPort:
+    def unexpose(
+        self, machine_id: str, port: int, *, region: str | None = None
+    ) -> ExposedPort:
         """Remove a forward, freeing its public port. Echoes what was removed."""
         resp = self._transport.call(
             "UnexposePort",
             api_pb2.UnexposePortRequest(vm=machine_id, vm_port=port),
+            region=region,
         )
         return m.exposed_port(resp.forward)
 
-    def list(self, machine_id: str | None = None) -> list[ExposedPort]:
+    def list(
+        self, machine_id: str | None = None, *, region: str | None = None
+    ) -> list[ExposedPort]:
         """Forwards for one machine, or every forward the caller owns.
 
         Passing a machine narrows server-side; omitting it keeps the
         account-wide view.
         """
         resp = self._transport.call(
-            "ListExposedPorts", api_pb2.ListExposedPortsRequest(vm=machine_id or "")
+            "ListExposedPorts",
+            api_pb2.ListExposedPortsRequest(vm=machine_id or ""),
+            region=region,
         )
         return [m.exposed_port(f) for f in resp.forwards]
 
@@ -1291,7 +1505,9 @@ class Proxies(Namespace):
     A listed route echoes its `machine_id` back.
     """
 
-    def create(self, machine_name: str, name: str, port: int) -> CreatedProxy:
+    def create(
+        self, machine_name: str, name: str, port: int, *, region: str | None = None
+    ) -> CreatedProxy:
         """Add the route `<name>.<machine>.<zone>`, pointed at `port` inside it.
 
         `name` is a subdomain label: lowercase letters, digits and hyphens, not
@@ -1303,23 +1519,32 @@ class Proxies(Namespace):
             self._transport.call(
                 "CreateProxy",
                 api_pb2.CreateProxyRequest(name=name, vm=machine_name, port=port),
+                region=region,
             )
         )
 
-    def list(self, machine_name: str) -> list[Proxy]:
+    def list(self, machine_name: str, *, region: str | None = None) -> list[Proxy]:
         resp = self._transport.call(
-            "ListProxies", api_pb2.ListProxiesRequest(vm=machine_name)
+            "ListProxies", api_pb2.ListProxiesRequest(vm=machine_name), region=region
         )
         return [m.proxy(p) for p in resp.proxies]
 
-    def delete(self, machine_name: str, name: str) -> None:
+    def delete(
+        self, machine_name: str, name: str, *, region: str | None = None
+    ) -> None:
         self._transport.call(
             "DeleteProxy",
             api_pb2.DeleteProxyRequest(name=name, vm=machine_name),
+            region=region,
         )
 
     def set_port(
-        self, machine_name: str, port: int | Literal["auto"], *, name: str | None = None
+        self,
+        machine_name: str,
+        port: int | Literal["auto"],
+        *,
+        name: str | None = None,
+        region: str | None = None,
     ) -> None:
         """Point a route at a different port, or `"auto"` to have the port
         discovered inside the machine instead.
@@ -1346,6 +1571,7 @@ class Proxies(Namespace):
             api_pb2.SetProxyPortRequest(
                 name=name or "", vm=machine_name, port=str(port)
             ),
+            region=region,
         )
 
 
@@ -1356,31 +1582,39 @@ class Checkpoints(Namespace):
     account-level image, and it is deleted with the machine it belongs to.
     """
 
-    def create(self, machine_id: str, name: str) -> CreatedCheckpoint:
+    def create(
+        self, machine_id: str, name: str, *, region: str | None = None
+    ) -> CreatedCheckpoint:
         return m.created_checkpoint(
             self._transport.call(
                 "CreateCheckpoint",
                 api_pb2.CreateCheckpointRequest(vm=machine_id, name=name),
+                region=region,
             )
         )
 
-    def list(self, machine_id: str) -> list[Checkpoint]:
+    def list(self, machine_id: str, *, region: str | None = None) -> list[Checkpoint]:
         resp = self._transport.call(
-            "ListCheckpoints", api_pb2.ListCheckpointsRequest(vm=machine_id)
+            "ListCheckpoints",
+            api_pb2.ListCheckpointsRequest(vm=machine_id),
+            region=region,
         )
         return [m.checkpoint(c) for c in resp.checkpoints]
 
-    def delete(self, machine_id: str, name: str) -> None:
+    def delete(self, machine_id: str, name: str, *, region: str | None = None) -> None:
         self._transport.call(
             "DeleteCheckpoint",
             api_pb2.DeleteCheckpointRequest(vm=machine_id, name=name),
+            region=region,
         )
 
-    def restore(self, machine_id: str, name: str) -> None:
-        """Warm-restore the machine from a checkpoint. It must be `available`."""
+    def restore(self, machine_id: str, name: str, *, region: str | None = None) -> None:
+        """Warm-restore the machine from a checkpoint. It must be `available`.
+        Returns once the machine runs again from the checkpoint."""
         self._transport.call(
             "RestoreCheckpoint",
             api_pb2.RestoreCheckpointRequest(vm=machine_id, name=name),
+            region=region,
         )
 
 
@@ -1393,10 +1627,14 @@ class Backups(Namespace):
     cold-boots into the restored disk).
     """
 
-    def schedule_get(self, machine_id: str) -> BackupSchedule | None:
+    def schedule_get(
+        self, machine_id: str, *, region: str | None = None
+    ) -> BackupSchedule | None:
         """`None` means backups are off."""
         resp = self._transport.call(
-            "GetBackupSchedule", api_pb2.GetBackupScheduleRequest(vm=machine_id)
+            "GetBackupSchedule",
+            api_pb2.GetBackupScheduleRequest(vm=machine_id),
+            region=region,
         )
         return m.backup_schedule(resp)
 
@@ -1407,6 +1645,7 @@ class Backups(Namespace):
         interval_secs: int | None = None,
         cron: str | None = None,
         retention_secs: int,
+        region: str | None = None,
     ) -> None:
         """Enable or update the schedule. Pass exactly one of `interval_secs`
         (relative to the last backup) or `cron` (wall-clock, standard 5-field
@@ -1422,42 +1661,51 @@ class Backups(Namespace):
                 schedule_value=value,
                 retention_secs=retention_secs,
             ),
+            region=region,
         )
 
-    def schedule_clear(self, machine_id: str) -> None:
+    def schedule_clear(self, machine_id: str, *, region: str | None = None) -> None:
         """Disable backups for this machine."""
         self._transport.call(
-            "ClearBackupSchedule", api_pb2.ClearBackupScheduleRequest(vm=machine_id)
+            "ClearBackupSchedule",
+            api_pb2.ClearBackupScheduleRequest(vm=machine_id),
+            region=region,
         )
 
-    def list(self, machine_id: str) -> list[Backup]:
+    def list(self, machine_id: str, *, region: str | None = None) -> list[Backup]:
         resp = self._transport.call(
-            "ListBackups", api_pb2.ListBackupsRequest(vm=machine_id)
+            "ListBackups", api_pb2.ListBackupsRequest(vm=machine_id), region=region
         )
         return [m.backup(b) for b in resp.backups]
 
-    def trigger(self, machine_id: str) -> str:
+    def trigger(self, machine_id: str, *, region: str | None = None) -> str:
         """Back up the machine's disk right now, regardless of any schedule.
         Returns the id of the queued backup."""
         resp = self._transport.call(
-            "TriggerBackup", api_pb2.TriggerBackupRequest(vm=machine_id)
+            "TriggerBackup", api_pb2.TriggerBackupRequest(vm=machine_id), region=region
         )
         return resp.backup_id
 
-    def delete(self, machine_id: str, backup_id: str) -> None:
+    def delete(
+        self, machine_id: str, backup_id: str, *, region: str | None = None
+    ) -> None:
         """Delete a single backup. Refused while it is still being captured or
         while a newer unchanged-since backup still points at it."""
         self._transport.call(
             "DeleteBackup",
             api_pb2.DeleteBackupRequest(vm=machine_id, backup_id=backup_id),
+            region=region,
         )
 
-    def restore(self, machine_id: str, backup_id: str) -> None:
+    def restore(
+        self, machine_id: str, backup_id: str, *, region: str | None = None
+    ) -> None:
         """Restore the machine's disk from a backup IN PLACE. Destructive:
         overwrites the machine's current disk; anything since is lost."""
         self._transport.call(
             "RestoreBackup",
             api_pb2.RestoreBackupRequest(vm=machine_id, backup_id=backup_id),
+            region=region,
         )
 
 
@@ -1502,11 +1750,12 @@ class AsyncMachines(Namespace):
         ssh: bool | None = None,
         proxies: Sequence[ProxyEntry] | None = None,
         volumes: Sequence[VolumeMount] | None = None,
+        region: str | None = None,
     ) -> Machine:
         """Create a machine. Pass `from_snapshot` to restore one instead.
 
-        Re-reads the machine before returning, so the result is complete. It is
-        still only scheduled — call :meth:`wait_until_ready` before using it.
+        The result is the whole machine. It is still only scheduled — call
+        :meth:`wait_until_ready` before using it.
 
         ``idle_ignore_outbound``, ``ssh``, ``labels``, ``spec``: see
         :meth:`Machines.create`.
@@ -1524,7 +1773,8 @@ class AsyncMachines(Namespace):
             isolated=isolated,
             labels=labels,
             spec=spec,
-            sets_delete_after=delete_after is not None or delete_after_cron is not None,
+            delete_after=delete_after,
+            delete_after_cron=delete_after_cron,
             config_kwargs=dict(
                 vcpu=vcpu,
                 memory=memory,
@@ -1537,20 +1787,38 @@ class AsyncMachines(Namespace):
                 volumes=volumes,
             ),
         )
-        created = await self._transport.call(method, request)
-        await self._apply_delete_after(created.vm_id, delete_after, delete_after_cron)
+        created = await self._transport.call(method, request, region=region)
         return _with_paused_automations(
-            await self._reread(created), created.paused_automations, from_snapshot=True
+            await self._complete(
+                created, delete_after, delete_after_cron, region=region
+            ),
+            created.paused_automations,
+            from_snapshot=True,
         )
 
-    async def _reread(self, created) -> Machine:
+    async def _complete(
+        self,
+        created,
+        seconds: int | None,
+        cron: str | None,
+        *,
+        region: str | None = None,
+    ) -> Machine:
+        """See :meth:`Machines._complete`."""
+        answered = _answered_machine(created, seconds, cron)
+        if answered is not None:
+            return m.machine(answered, self._transport.console_origin_for(region))
+        await self._apply_delete_after(created.vm_id, seconds, cron, region=region)
+        return await self._reread(created, region=region)
+
+    async def _reread(self, created, *, region: str | None = None) -> Machine:
         """Fill in the fields the create/fork response does not carry."""
         try:
-            return await self.get(created.vm_id)
+            return await self.get(created.vm_id, region=region)
         except BoxdError:
             return m.machine_from_created(created)
 
-    async def get(self, machine_id: str) -> Machine:
+    async def get(self, machine_id: str, *, region: str | None = None) -> Machine:
         """Fetch one machine by id or name.
 
         Raises `NotFoundError` for a destroyed machine's id/name, same as
@@ -1559,8 +1827,10 @@ class AsyncMachines(Namespace):
         completed.
         """
         return m.machine(
-            await self._transport.call("GetVm", api_pb2.GetVmRequest(vm_id=machine_id)),
-            self._transport.console_origin,
+            await self._transport.call(
+                "GetVm", api_pb2.GetVmRequest(vm_id=machine_id), region=region
+            ),
+            self._transport.console_origin_for(region),
         )
 
     async def usage(
@@ -1604,24 +1874,29 @@ class AsyncMachines(Namespace):
         org: str | None = None,
         all_contexts: bool = False,
         labels: Mapping[str, str] | Sequence[str] | None = None,
-    ) -> list[Machine]:
+        region: str | None = None,
+    ) -> RegionalList[Machine]:
         """List machines — personal by default, or an org's with `org`.
-        ``labels`` filters: see :meth:`Machines.list`."""
+        ``labels`` and ``region`` (``"all"`` too): see :meth:`Machines.list`."""
         selector = req.label_selector(labels)
-        resp = await self._transport.call(
-            "ListVms", req.list_vms(org=org, all_contexts=all_contexts, labels=selector)
+        if normalize(region) == ALL:
+            request = req.list_vms(org=org, all_contexts=all_contexts, labels=selector)
+            pages, unavailable = await self._transport.each_region(
+                "ListVms", request, org=org
+            )
+            return _machine_list(self._transport, selector, pages, unavailable)
+        request = req.list_vms(
+            org=org, all_contexts=all_contexts, labels=selector, with_elsewhere=True
         )
-        console_origin = self._transport.console_origin
-        return [
-            m.machine(v, console_origin)
-            for v in resp.vms
-            if req.labels_match(selector, v.labels)
-        ]
+        resp = await self._transport.call("ListVms", request, region=region)
+        return _machine_list(
+            self._transport, selector, [(normalize(region), resp)], [], resp.elsewhere
+        )
 
-    async def delete(self, machine_id: str) -> None:
+    async def delete(self, machine_id: str, *, region: str | None = None) -> None:
         """Destroy a machine. Terminal."""
         await self._transport.call(
-            "DestroyVm", api_pb2.DestroyVmRequest(vm_id=machine_id)
+            "DestroyVm", api_pb2.DestroyVmRequest(vm_id=machine_id), region=region
         )
 
     async def delete_self(self, *, confirm: str) -> SelfDeleteResult:
@@ -1636,43 +1911,57 @@ class AsyncMachines(Namespace):
             raise APIConnectionError(f"self-delete request failed: {e}") from e
         return _self_delete_result(resp.status_code, resp.text, _json(resp))
 
-    async def rename(self, machine_id: str, new_name: str) -> str:
+    async def rename(
+        self, machine_id: str, new_name: str, *, region: str | None = None
+    ) -> str:
         """Rename a machine — **this reboots it**. Returns the new name."""
         resp = await self._transport.call(
-            "RenameVm", api_pb2.RenameVmRequest(vm_id=machine_id, new_name=new_name)
+            "RenameVm",
+            api_pb2.RenameVmRequest(vm_id=machine_id, new_name=new_name),
+            region=region,
         )
         return resp.name
 
-    async def start(self, machine_id: str) -> None:
-        await self._transport.call("StartVm", api_pb2.StartVmRequest(vm_id=machine_id))
+    async def start(self, machine_id: str, *, region: str | None = None) -> None:
+        await self._transport.call(
+            "StartVm", api_pb2.StartVmRequest(vm_id=machine_id), region=region
+        )
 
-    async def stop(self, machine_id: str) -> None:
-        await self._transport.call("StopVm", api_pb2.StopVmRequest(vm_id=machine_id))
+    async def stop(self, machine_id: str, *, region: str | None = None) -> None:
+        await self._transport.call(
+            "StopVm", api_pb2.StopVmRequest(vm_id=machine_id), region=region
+        )
 
-    async def reboot(self, machine_id: str) -> None:
-        await self._transport.call("RebootVm", api_pb2.RebootVmRequest(vm_id=machine_id))
+    async def reboot(self, machine_id: str, *, region: str | None = None) -> None:
+        await self._transport.call(
+            "RebootVm", api_pb2.RebootVmRequest(vm_id=machine_id), region=region
+        )
 
-    async def pause(self, machine_id: str) -> PauseResult:
+    async def pause(self, machine_id: str, *, region: str | None = None) -> PauseResult:
         """Suspend to RAM — fast to resume, memory stays resident."""
         resp = await self._transport.call(
-            "SuspendVm", api_pb2.SuspendVmRequest(vm_id=machine_id)
+            "SuspendVm", api_pb2.SuspendVmRequest(vm_id=machine_id), region=region
         )
         return PauseResult(suspend_us=resp.suspend_us)
 
-    async def resume(self, machine_id: str) -> ResumeResult:
+    async def resume(
+        self, machine_id: str, *, region: str | None = None
+    ) -> ResumeResult:
         resp = await self._transport.call(
-            "ResumeVm", api_pb2.ResumeVmRequest(vm_id=machine_id)
+            "ResumeVm", api_pb2.ResumeVmRequest(vm_id=machine_id), region=region
         )
         return ResumeResult(resume_us=resp.resume_us)
 
-    async def hibernate(self, machine_id: str) -> None:
+    async def hibernate(self, machine_id: str, *, region: str | None = None) -> None:
         """Suspend to disk. Cheaper than `pause`; waking takes longer."""
         await self._transport.call(
-            "HibernateVm", api_pb2.HibernateVmRequest(vm_id=machine_id)
+            "HibernateVm", api_pb2.HibernateVmRequest(vm_id=machine_id), region=region
         )
 
-    async def wake(self, machine_id: str) -> None:
-        await self._transport.call("WakeVm", api_pb2.WakeVmRequest(vm_id=machine_id))
+    async def wake(self, machine_id: str, *, region: str | None = None) -> None:
+        await self._transport.call(
+            "WakeVm", api_pb2.WakeVmRequest(vm_id=machine_id), region=region
+        )
 
     async def resize(
         self,
@@ -1680,6 +1969,7 @@ class AsyncMachines(Namespace):
         *,
         vcpu: int | None = None,
         memory: int | str | None = None,
+        region: str | None = None,
     ) -> ResizeResult:
         """Move a machine to another size class. Sizes it for good, not for now.
 
@@ -1698,6 +1988,7 @@ class AsyncMachines(Namespace):
             await self._transport.call(
                 "ResizeVm",
                 req.resize_vm(machine_id=machine_id, vcpu=vcpu, memory=memory),
+                region=region,
             )
         )
 
@@ -1710,6 +2001,7 @@ class AsyncMachines(Namespace):
         reboot: bool = False,
         retry_packages: bool = False,
         expected_spec: MachineSpec | None = None,
+        region: str | None = None,
     ) -> MachineSpecUpdate:
         """Change the spec of a machine created from one, and apply what changes.
         Pass a patch, or a function that extends the current spec with a
@@ -1774,6 +2066,7 @@ class AsyncMachines(Namespace):
                         retry_packages=retry_packages,
                         expected_spec=expected,
                     ),
+                    region=region,
                 )
             )
 
@@ -1781,7 +2074,7 @@ class AsyncMachines(Namespace):
             return await send(_spec_patch_doc(machine_id, None, patch), expected_spec)
         attempt = 0
         while True:
-            current = (await self.get(machine_id)).spec
+            current = (await self.get(machine_id, region=region)).spec
             try:
                 return await send(_spec_patch_doc(machine_id, current, patch), current)
             except ConflictError as e:
@@ -1810,6 +2103,7 @@ class AsyncMachines(Namespace):
         ssh: bool | None = None,
         proxies: Sequence[ProxyEntry] | None = None,
         volumes: Sequence[VolumeMount] | None = None,
+        region: str | None = None,
     ) -> Machine:
         """Clone a machine, live. Config left unset is inherited from the source.
 
@@ -1826,6 +2120,10 @@ class AsyncMachines(Namespace):
         ``shared=True`` keeps the fork shared with the source's org; by
         default it is private to you. With an org API key the fork is always
         shared, so the key can reach it.
+
+        ``delete_after`` / ``delete_after_cron`` left as None keep the
+        source's delete-after timer, re-armed from the fork; set, they give
+        the fork its own, written with it (``delete_after=0``: none).
         """
         config = req.vm_config(
             vcpu=vcpu,
@@ -1838,25 +2136,28 @@ class AsyncMachines(Namespace):
             proxies=proxies,
             volumes=volumes,
         )
-        resp = await self._transport.call(
-            "ForkVm",
-            req.fork_vm(
-                source=source,
-                name=name,
-                shared=shared,
-                networks=networks,
-                isolated=isolated,
-                config=config,
-                labels=labels,
-            ),
+        request = req.fork_vm(
+            source=source,
+            name=name,
+            shared=shared,
+            networks=networks,
+            isolated=isolated,
+            config=config,
+            labels=labels,
         )
-        await self._apply_delete_after(resp.vm_id, delete_after, delete_after_cron)
+        req.set_create_delete_after(request, delete_after, delete_after_cron)
+        resp = await self._transport.call("ForkVm", request, region=region)
         return _with_paused_automations(
-            await self._reread(resp), resp.paused_automations
+            await self._complete(resp, delete_after, delete_after_cron, region=region),
+            resp.paused_automations,
         )
 
     async def set_networks(
-        self, machine_id: str, networks: Sequence[str]
+        self,
+        machine_id: str,
+        networks: Sequence[str],
+        *,
+        region: str | None = None,
     ) -> list[str]:
         """Replace the machine's networks — the complete desired set, not an
         add/remove. Returns the set now in effect.
@@ -1873,17 +2174,23 @@ class AsyncMachines(Namespace):
         resp = await self._transport.call(
             "SetVmNetworks",
             api_pb2.SetVmNetworksRequest(vm_id=machine_id, networks=list(networks)),
+            region=region,
         )
         return list(resp.networks)
 
     async def set_egress_allow(
-        self, machine_id: str, entries: Sequence[str]
+        self,
+        machine_id: str,
+        entries: Sequence[str],
+        *,
+        region: str | None = None,
     ) -> list[str]:
         """Replace the machine's egress allowlist. See
         :meth:`Machines.set_egress_allow`."""
         resp = await self._transport.call(
             "SetVmEgressAllow",
             api_pb2.SetVmEgressAllowRequest(vm=machine_id, entries=list(entries)),
+            region=region,
         )
         return list(resp.entries)
 
@@ -1894,6 +2201,7 @@ class AsyncMachines(Namespace):
         remove: Sequence[str] | None = None,
         *,
         replace_all: bool = False,
+        region: str | None = None,
     ) -> dict[str, str]:
         """Edit the machine's labels. See :meth:`Machines.update_labels`."""
         resp = await self._transport.call(
@@ -1901,51 +2209,74 @@ class AsyncMachines(Namespace):
             req.update_vm_labels(
                 machine_id=machine_id, set=set, remove=remove, replace_all=replace_all
             ),
+            region=region,
         )
         return dict(resp.labels)
 
-    async def share(self, machine_id: str) -> None:
+    async def share(self, machine_id: str, *, region: str | None = None) -> None:
         """Make the machine visible to every member of its org."""
-        await self._transport.call("ShareVm", api_pb2.ShareVmRequest(vm_id=machine_id))
-
-    async def unshare(self, machine_id: str) -> None:
         await self._transport.call(
-            "UnshareVm", api_pb2.UnshareVmRequest(vm_id=machine_id)
+            "ShareVm", api_pb2.ShareVmRequest(vm_id=machine_id), region=region
         )
 
-    async def set_auto_suspend_timeout(self, machine_id: str, seconds: int) -> None:
+    async def unshare(self, machine_id: str, *, region: str | None = None) -> None:
+        await self._transport.call(
+            "UnshareVm", api_pb2.UnshareVmRequest(vm_id=machine_id), region=region
+        )
+
+    async def set_auto_suspend_timeout(
+        self, machine_id: str, seconds: int, *, region: str | None = None
+    ) -> None:
         """Seconds of idleness before suspend. 0 disables it."""
         await self._transport.call(
             "SetAutoSuspendTimeout",
             api_pb2.SetAutoSuspendTimeoutRequest(
                 vm_id=machine_id, timeout_secs=seconds
             ),
+            region=region,
         )
 
-    async def set_auto_hibernate_timeout(self, machine_id: str, seconds: int) -> None:
+    async def set_auto_hibernate_timeout(
+        self, machine_id: str, seconds: int, *, region: str | None = None
+    ) -> None:
         """Seconds of idleness before hibernation. 0 disables it."""
         await self._transport.call(
             "SetAutoHibernateTimeout",
             api_pb2.SetAutoHibernateTimeoutRequest(
                 vm_id=machine_id, timeout_secs=seconds
             ),
+            region=region,
         )
 
     async def set_delete_after(
-        self, machine_id: str, seconds: int = 0, *, cron: str | None = None
+        self,
+        machine_id: str,
+        seconds: int = 0,
+        *,
+        cron: str | None = None,
+        region: str | None = None,
     ) -> datetime | None:
         """See :meth:`Machines.set_delete_after`."""
         resp = await self._transport.call(
-            "SetDeleteAfter", req.set_delete_after(machine_id, seconds, cron)
+            "SetDeleteAfter",
+            req.set_delete_after(machine_id, seconds, cron),
+            region=region,
         )
         return m._epoch_ms(resp.delete_at_ms)
 
     async def _apply_delete_after(
-        self, machine_id: str, seconds: int | None, cron: str | None
+        self,
+        machine_id: str,
+        seconds: int | None,
+        cron: str | None,
+        *,
+        region: str | None = None,
     ) -> None:
         """See :meth:`Machines._apply_delete_after`."""
         if seconds is not None or cron is not None:
-            await self.set_delete_after(machine_id, seconds or 0, cron=cron)
+            await self.set_delete_after(
+                machine_id, seconds or 0, cron=cron, region=region
+            )
 
     async def set_bot_protection(
         self,
@@ -1953,6 +2284,7 @@ class AsyncMachines(Namespace):
         enabled: bool | None = None,
         *,
         mode: BotProtectionMode | None = None,
+        region: str | None = None,
     ) -> None:
         """See :meth:`Machines.set_bot_protection`."""
         mode = _bot_protection_mode(enabled, mode)
@@ -1961,20 +2293,27 @@ class AsyncMachines(Namespace):
             api_pb2.SetBotProtectionRequest(
                 vm_id=machine_id, enabled=mode != "off", mode=mode
             ),
+            region=region,
         )
 
-    async def set_idle_ignore_outbound(self, machine_id: str, enabled: bool) -> None:
+    async def set_idle_ignore_outbound(
+        self, machine_id: str, enabled: bool, *, region: str | None = None
+    ) -> None:
         """See :meth:`Machines.set_idle_ignore_outbound`."""
         await self._transport.call(
             "SetIdleIgnoreOutbound",
             api_pb2.SetIdleIgnoreOutboundRequest(vm_id=machine_id, enabled=enabled),
+            region=region,
         )
 
-    async def set_ssh(self, machine_id: str, enabled: bool) -> None:
+    async def set_ssh(
+        self, machine_id: str, enabled: bool, *, region: str | None = None
+    ) -> None:
         """See :meth:`Machines.set_ssh`."""
         await self._transport.call(
             "SetSsh",
             api_pb2.SetSshRequest(vm_id=machine_id, enabled=enabled),
+            region=region,
         )
 
     async def exec(
@@ -1989,6 +2328,7 @@ class AsyncMachines(Namespace):
         rows: int = 0,
         timeout: float | None = None,
         encoding: Literal["utf-8", "buffer"] = "utf-8",
+        region: str | None = None,
     ) -> ExecResult:
         """Run one command and collect its output.
 
@@ -2028,7 +2368,13 @@ class AsyncMachines(Namespace):
                 left = deadline - time.monotonic()
             try:
                 with _exec_timeout(timeout):
-                    call = await self._transport.bidi("Exec", once(), timeout=left)
+                    call = await self._transport.bidi(
+                        "Exec",
+                        once(),
+                        timeout=left,
+                        region=region,
+                        machine=machine_id,
+                    )
                     stdout: list[bytes] = []
                     stderr: list[bytes] = []
                     exit_code = -1
@@ -2057,6 +2403,7 @@ class AsyncMachines(Namespace):
         cols: int = 0,
         rows: int = 0,
         close_stdin: bool = False,
+        region: str | None = None,
     ) -> AsyncExecStream:
         """Open an interactive exec session. Use it as an async context manager."""
         if close_stdin and tty:
@@ -2067,36 +2414,48 @@ class AsyncMachines(Namespace):
         init = _exec_init(
             machine_id, command, env=env, tty=tty, cols=cols, rows=rows, cwd=cwd
         )
-        return AsyncExecStream(self._transport, init, close_stdin=close_stdin)
+        return AsyncExecStream(
+            self._transport, init, close_stdin=close_stdin, region=region
+        )
 
     async def logs(
-        self, machine_id: str, *, follow: bool = False
+        self,
+        machine_id: str,
+        *,
+        follow: bool = False,
+        region: str | None = None,
     ) -> AsyncIterator[bytes]:
         """Stream console log chunks. `follow=True` keeps the stream open."""
         stream = await self._transport.server_stream(
             "StreamLogs",
             api_pb2.StreamLogsRequest(vm_id=machine_id, follow=follow),
+            region=region,
         )
         async for chunk in stream:
             yield chunk.data
 
     async def wait_until_ready(
-        self, machine_id: str, *, timeout: float = 90.0, poll_interval: float = 0.5
+        self,
+        machine_id: str,
+        *,
+        timeout: float = 90.0,
+        poll_interval: float = 0.5,
+        region: str | None = None,
     ) -> Machine:
         """Poll until the machine is running and `exec` round-trips."""
         deadline = time.monotonic() + timeout
-        machine = await self.get(machine_id)
+        machine = await self.get(machine_id, region=region)
         while not _ready_check(machine, machine_id):
             if time.monotonic() >= deadline:
                 raise TimeoutError(
                     f"machine {machine_id} did not reach 'running' within {timeout}s"
                 )
             await asyncio.sleep(poll_interval)
-            machine = await self.get(machine_id)
+            machine = await self.get(machine_id, region=region)
 
         while True:
             try:
-                await self.exec(machine_id, "true")
+                await self.exec(machine_id, "true", region=region)
                 return machine
             except BoxdError:
                 if time.monotonic() >= deadline:
@@ -2106,10 +2465,10 @@ class AsyncMachines(Namespace):
                     ) from None
                 await asyncio.sleep(poll_interval)
 
-    async def suggest_name(self) -> str:
+    async def suggest_name(self, *, region: str | None = None) -> str:
         """A fresh, available auto-generated machine name."""
         resp = await self._transport.call(
-            "SuggestVmName", api_pb2.SuggestVmNameRequest()
+            "SuggestVmName", api_pb2.SuggestVmNameRequest(), region=region
         )
         return resp.name
 
@@ -2117,7 +2476,14 @@ class AsyncMachines(Namespace):
 class AsyncFiles(Namespace):
     """Async twin of :class:`Files`."""
 
-    async def upload(self, machine_id: str, path: str, data: bytes | str) -> int:
+    async def upload(
+        self,
+        machine_id: str,
+        path: str,
+        data: bytes | str,
+        *,
+        region: str | None = None,
+    ) -> int:
         """Write `data` to `path` inside the machine. Returns bytes written."""
         if isinstance(data, str):
             data = data.encode("utf-8")
@@ -2131,10 +2497,12 @@ class AsyncFiles(Namespace):
             ):
                 yield chunk
 
-        resp = await self._transport.call("UploadFileStream", chunks())
+        resp = await self._transport.call("UploadFileStream", chunks(), region=region)
         return resp.bytes_written
 
-    async def download(self, machine_id: str, path: str) -> bytes:
+    async def download(
+        self, machine_id: str, path: str, *, region: str | None = None
+    ) -> bytes:
         """Read a file out of the machine. Streamed, so there is no size cap."""
         chunks: list[bytes] = []
         received = 0
@@ -2142,6 +2510,7 @@ class AsyncFiles(Namespace):
         stream = await self._transport.server_stream(
             "DownloadFileStream",
             api_pb2.DownloadFileRequest(vm_id=machine_id, path=path),
+            region=region,
         )
         async for chunk in stream:
             if chunk.total_size:
@@ -2155,44 +2524,70 @@ class AsyncFiles(Namespace):
             )
         return b"".join(chunks)
 
-    async def list_dir(self, machine_id: str, path: str) -> DirListing:
+    async def list_dir(
+        self, machine_id: str, path: str, *, region: str | None = None
+    ) -> DirListing:
         """Immediate (non-recursive) contents of a directory inside the machine.
 
         See :meth:`Files.list_dir` for `truncated`.
         """
         resp = await self._transport.call(
-            "ListDir", api_pb2.ListDirRequest(vm_id=machine_id, path=path)
+            "ListDir",
+            api_pb2.ListDirRequest(vm_id=machine_id, path=path),
+            region=region,
         )
         return m.dir_listing(resp)
 
-    async def mkdir(self, machine_id: str, path: str) -> None:
+    async def mkdir(
+        self, machine_id: str, path: str, *, region: str | None = None
+    ) -> None:
         """Create a directory. The parent must already exist."""
         await self._transport.call(
-            "Mkdir", api_pb2.MkdirRequest(vm_id=machine_id, path=path)
+            "Mkdir", api_pb2.MkdirRequest(vm_id=machine_id, path=path), region=region
         )
 
-    async def rename(self, machine_id: str, old_path: str, new_path: str) -> None:
+    async def rename(
+        self,
+        machine_id: str,
+        old_path: str,
+        new_path: str,
+        *,
+        region: str | None = None,
+    ) -> None:
         """Move/rename a file or directory."""
         await self._transport.call(
             "RenamePath",
             api_pb2.RenamePathRequest(
                 vm_id=machine_id, old_path=old_path, new_path=new_path
             ),
+            region=region,
         )
 
-    async def delete(self, machine_id: str, path: str) -> None:
+    async def delete(
+        self, machine_id: str, path: str, *, region: str | None = None
+    ) -> None:
         """Remove a file, or a directory and everything under it."""
         await self._transport.call(
-            "DeletePath", api_pb2.DeletePathRequest(vm_id=machine_id, path=path)
+            "DeletePath",
+            api_pb2.DeletePathRequest(vm_id=machine_id, path=path),
+            region=region,
         )
 
-    async def copy(self, machine_id: str, old_path: str, new_path: str) -> None:
+    async def copy(
+        self,
+        machine_id: str,
+        old_path: str,
+        new_path: str,
+        *,
+        region: str | None = None,
+    ) -> None:
         """Copy a file, or a directory recursively."""
         await self._transport.call(
             "CopyPath",
             api_pb2.CopyPathRequest(
                 vm_id=machine_id, old_path=old_path, new_path=new_path
             ),
+            region=region,
         )
 
 
@@ -2200,7 +2595,12 @@ class AsyncPorts(Namespace):
     """Async twin of :class:`Ports`."""
 
     async def expose(
-        self, machine_id: str, port: int, *, protocol: str = "tcp"
+        self,
+        machine_id: str,
+        port: int,
+        *,
+        protocol: str = "tcp",
+        region: str | None = None,
     ) -> ExposedPort:
         """Expose a machine port publicly. `protocol` is "tcp" | "udp" | "both"."""
         return m.exposed_port(
@@ -2209,24 +2609,32 @@ class AsyncPorts(Namespace):
                 api_pb2.ExposePortRequest(
                     vm=machine_id, vm_port=port, protocol=protocol
                 ),
+                region=region,
             )
         )
 
-    async def unexpose(self, machine_id: str, port: int) -> ExposedPort:
+    async def unexpose(
+        self, machine_id: str, port: int, *, region: str | None = None
+    ) -> ExposedPort:
         """Remove a forward, freeing its public port. Echoes what was removed."""
         resp = await self._transport.call(
             "UnexposePort",
             api_pb2.UnexposePortRequest(vm=machine_id, vm_port=port),
+            region=region,
         )
         return m.exposed_port(resp.forward)
 
-    async def list(self, machine_id: str | None = None) -> list[ExposedPort]:
+    async def list(
+        self, machine_id: str | None = None, *, region: str | None = None
+    ) -> list[ExposedPort]:
         """Forwards for one machine, or every forward the caller owns.
 
         Passing a machine narrows the result; omitting it returns them all.
         """
         resp = await self._transport.call(
-            "ListExposedPorts", api_pb2.ListExposedPortsRequest(vm=machine_id or "")
+            "ListExposedPorts",
+            api_pb2.ListExposedPortsRequest(vm=machine_id or ""),
+            region=region,
         )
         return [m.exposed_port(f) for f in resp.forwards]
 
@@ -2234,7 +2642,9 @@ class AsyncPorts(Namespace):
 class AsyncProxies(Namespace):
     """Async twin of :class:`Proxies`."""
 
-    async def create(self, machine_name: str, name: str, port: int) -> CreatedProxy:
+    async def create(
+        self, machine_name: str, name: str, port: int, *, region: str | None = None
+    ) -> CreatedProxy:
         """Add the route `<name>.<machine>.<zone>`, pointed at `port` inside it.
 
         `name` is a subdomain label: lowercase letters, digits and hyphens, not
@@ -2246,23 +2656,34 @@ class AsyncProxies(Namespace):
             await self._transport.call(
                 "CreateProxy",
                 api_pb2.CreateProxyRequest(name=name, vm=machine_name, port=port),
+                region=region,
             )
         )
 
-    async def list(self, machine_name: str) -> list[Proxy]:
+    async def list(
+        self, machine_name: str, *, region: str | None = None
+    ) -> list[Proxy]:
         resp = await self._transport.call(
-            "ListProxies", api_pb2.ListProxiesRequest(vm=machine_name)
+            "ListProxies", api_pb2.ListProxiesRequest(vm=machine_name), region=region
         )
         return [m.proxy(p) for p in resp.proxies]
 
-    async def delete(self, machine_name: str, name: str) -> None:
+    async def delete(
+        self, machine_name: str, name: str, *, region: str | None = None
+    ) -> None:
         await self._transport.call(
             "DeleteProxy",
             api_pb2.DeleteProxyRequest(name=name, vm=machine_name),
+            region=region,
         )
 
     async def set_port(
-        self, machine_name: str, port: int | Literal["auto"], *, name: str | None = None
+        self,
+        machine_name: str,
+        port: int | Literal["auto"],
+        *,
+        name: str | None = None,
+        region: str | None = None,
     ) -> None:
         """Point a route at a different port, or `"auto"` to have the port
         discovered inside the machine instead.
@@ -2289,46 +2710,65 @@ class AsyncProxies(Namespace):
             api_pb2.SetProxyPortRequest(
                 name=name or "", vm=machine_name, port=str(port)
             ),
+            region=region,
         )
 
 
 class AsyncCheckpoints(Namespace):
     """Async twin of :class:`Checkpoints`."""
 
-    async def create(self, machine_id: str, name: str) -> CreatedCheckpoint:
+    async def create(
+        self, machine_id: str, name: str, *, region: str | None = None
+    ) -> CreatedCheckpoint:
         return m.created_checkpoint(
             await self._transport.call(
                 "CreateCheckpoint",
                 api_pb2.CreateCheckpointRequest(vm=machine_id, name=name),
+                region=region,
             )
         )
 
-    async def list(self, machine_id: str) -> list[Checkpoint]:
+    async def list(
+        self, machine_id: str, *, region: str | None = None
+    ) -> list[Checkpoint]:
         resp = await self._transport.call(
-            "ListCheckpoints", api_pb2.ListCheckpointsRequest(vm=machine_id)
+            "ListCheckpoints",
+            api_pb2.ListCheckpointsRequest(vm=machine_id),
+            region=region,
         )
         return [m.checkpoint(c) for c in resp.checkpoints]
 
-    async def delete(self, machine_id: str, name: str) -> None:
+    async def delete(
+        self, machine_id: str, name: str, *, region: str | None = None
+    ) -> None:
         await self._transport.call(
             "DeleteCheckpoint",
             api_pb2.DeleteCheckpointRequest(vm=machine_id, name=name),
+            region=region,
         )
 
-    async def restore(self, machine_id: str, name: str) -> None:
-        """Warm-restore the machine from a checkpoint. It must be `available`."""
+    async def restore(
+        self, machine_id: str, name: str, *, region: str | None = None
+    ) -> None:
+        """Warm-restore the machine from a checkpoint. It must be `available`.
+        Returns once the machine runs again from the checkpoint."""
         await self._transport.call(
             "RestoreCheckpoint",
             api_pb2.RestoreCheckpointRequest(vm=machine_id, name=name),
+            region=region,
         )
 
 
 class AsyncBackups(Namespace):
     """Async twin of :class:`Backups`."""
 
-    async def schedule_get(self, machine_id: str) -> BackupSchedule | None:
+    async def schedule_get(
+        self, machine_id: str, *, region: str | None = None
+    ) -> BackupSchedule | None:
         resp = await self._transport.call(
-            "GetBackupSchedule", api_pb2.GetBackupScheduleRequest(vm=machine_id)
+            "GetBackupSchedule",
+            api_pb2.GetBackupScheduleRequest(vm=machine_id),
+            region=region,
         )
         return m.backup_schedule(resp)
 
@@ -2339,6 +2779,7 @@ class AsyncBackups(Namespace):
         interval_secs: int | None = None,
         cron: str | None = None,
         retention_secs: int,
+        region: str | None = None,
     ) -> None:
         if (interval_secs is None) == (cron is None):
             raise ValueError("pass exactly one of interval_secs or cron")
@@ -2351,38 +2792,49 @@ class AsyncBackups(Namespace):
                 schedule_value=value,
                 retention_secs=retention_secs,
             ),
+            region=region,
         )
 
-    async def schedule_clear(self, machine_id: str) -> None:
+    async def schedule_clear(
+        self, machine_id: str, *, region: str | None = None
+    ) -> None:
         await self._transport.call(
-            "ClearBackupSchedule", api_pb2.ClearBackupScheduleRequest(vm=machine_id)
+            "ClearBackupSchedule",
+            api_pb2.ClearBackupScheduleRequest(vm=machine_id),
+            region=region,
         )
 
-    async def list(self, machine_id: str) -> list[Backup]:
+    async def list(self, machine_id: str, *, region: str | None = None) -> list[Backup]:
         resp = await self._transport.call(
-            "ListBackups", api_pb2.ListBackupsRequest(vm=machine_id)
+            "ListBackups", api_pb2.ListBackupsRequest(vm=machine_id), region=region
         )
         return [m.backup(b) for b in resp.backups]
 
-    async def trigger(self, machine_id: str) -> str:
+    async def trigger(self, machine_id: str, *, region: str | None = None) -> str:
         """Back up the machine's disk right now, regardless of any schedule.
         Returns the id of the queued backup."""
         resp = await self._transport.call(
-            "TriggerBackup", api_pb2.TriggerBackupRequest(vm=machine_id)
+            "TriggerBackup", api_pb2.TriggerBackupRequest(vm=machine_id), region=region
         )
         return resp.backup_id
 
-    async def delete(self, machine_id: str, backup_id: str) -> None:
+    async def delete(
+        self, machine_id: str, backup_id: str, *, region: str | None = None
+    ) -> None:
         """Delete a single backup. Refused while it is still being captured or
         while a newer unchanged-since backup still points at it."""
         await self._transport.call(
             "DeleteBackup",
             api_pb2.DeleteBackupRequest(vm=machine_id, backup_id=backup_id),
+            region=region,
         )
 
-    async def restore(self, machine_id: str, backup_id: str) -> None:
+    async def restore(
+        self, machine_id: str, backup_id: str, *, region: str | None = None
+    ) -> None:
         """Restore the machine's disk from a backup IN PLACE. Destructive."""
         await self._transport.call(
             "RestoreBackup",
             api_pb2.RestoreBackupRequest(vm=machine_id, backup_id=backup_id),
+            region=region,
         )

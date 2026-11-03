@@ -1503,6 +1503,7 @@ def test_sync_and_async_clients_expose_the_same_namespaces():
         "teams",
         "api_keys",
         "account",
+        "regions",
     }
 
 

@@ -1,4 +1,5 @@
 import type { Transport } from "./_rpc.js";
+import type { RegionOption } from "./regions.js";
 import { BoxdApiDefinition } from "./_generated/definitions.js";
 import { toCreatedProxy, toProxy, type CreatedProxy, type Proxy } from "./models.js";
 import type {
@@ -30,26 +31,35 @@ export class MachineProxies {
    * starting or ending with one. It cannot be empty — every machine already
    * has its default route, and this call only ever adds a named one beside it.
    */
-  async create(machine: string, name: string, port: number): Promise<CreatedProxy> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.createProxy,
+  async create(
+    machine: string,
+    name: string,
+    port: number,
+    opts: RegionOption = {},
+  ): Promise<CreatedProxy> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.createProxy,
       { name, vm: machine, vmName: "", port },
+      { region: opts.region },
     );
     return toCreatedProxy(resp);
   }
 
-  async list(machine: string): Promise<Proxy[]> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.listProxies,
+  async list(machine: string, opts: RegionOption = {}): Promise<Proxy[]> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.listProxies,
       { vm: machine, vmName: "" },
+      { region: opts.region },
     );
     return (resp.proxies ?? []).map(toProxy);
   }
 
-  async delete(machine: string, name: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.deleteProxy, {
-      name,
-      vm: machine,
-      vmName: "",
-    });
+  async delete(machine: string, name: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.deleteProxy,
+      { name, vm: machine, vmName: "" },
+      { region: opts.region },
+    );
   }
 
   /**
@@ -76,10 +86,12 @@ export class MachineProxies {
   async setPort(
     machine: string,
     port: number | "auto",
-    params: { name?: string } = {},
+    params: { name?: string } & RegionOption = {},
   ): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.setProxyPort,
+    await this.transport.unary(
+      BoxdApiDefinition.methods.setProxyPort,
       { name: params.name ?? "", vm: machine, vmName: "", port: String(port) },
+      { region: params.region },
     );
   }
 }

@@ -25,6 +25,7 @@ from ..models import (
     OrgMachineLimit,
     OrgMembers,
     OrgUsage,
+    Region,
 )
 from . import Namespace
 
@@ -121,7 +122,9 @@ class Orgs(Namespace):
             api_pb2.SetOrgMemberRoleRequest(org_id=org, user_id=user_id, role=role),
         )
 
-    def set_domain(self, org: str, domain: str) -> OrgDomain:
+    def set_domain(
+        self, org: str, domain: str, *, region: str | None = None
+    ) -> OrgDomain:
         """Set the org's wildcard apex (e.g. "preview.mysaas.com").
 
         Requires org admin. Starts verification immediately — call this only
@@ -132,23 +135,29 @@ class Orgs(Namespace):
         resolver caching the "no records" answer, delaying propagation once
         delegation is actually there. A control loop then verifies
         delegation, issues certs, and flips the domain to `active`.
+
+        An org has at most one domain in each region: ``region`` picks it
+        (default: the client's region), and the domain is delegated to that
+        region's nameservers.
         """
         resp = self._transport.call(
-            "SetOrgDomain", api_pb2.SetOrgDomainRequest(org_id=org, domain=domain)
+            "SetOrgDomain",
+            api_pb2.SetOrgDomainRequest(org_id=org, domain=domain),
+            region=region,
         )
         return m.org_domain(resp.domain)
 
-    def get_domain(self, org: str) -> OrgDomain | None:
-        """The org's current wildcard domain, or `None` if unset."""
+    def get_domain(self, org: str, *, region: str | None = None) -> OrgDomain | None:
+        """The org's current wildcard domain in a region, or `None` if unset."""
         resp = self._transport.call(
-            "GetOrgDomain", api_pb2.GetOrgDomainRequest(org_id=org)
+            "GetOrgDomain", api_pb2.GetOrgDomainRequest(org_id=org), region=region
         )
         return m.org_domain(resp.domain) if resp.HasField("domain") else None
 
-    def clear_domain(self, org: str) -> None:
-        """Remove the org's wildcard domain. Requires org admin."""
+    def clear_domain(self, org: str, *, region: str | None = None) -> None:
+        """Remove the org's wildcard domain in a region. Requires org admin."""
         self._transport.call(
-            "ClearOrgDomain", api_pb2.ClearOrgDomainRequest(org_id=org)
+            "ClearOrgDomain", api_pb2.ClearOrgDomainRequest(org_id=org), region=region
         )
 
     def set_machine_defaults(
@@ -355,6 +364,58 @@ class Orgs(Namespace):
         )
         return m.opened_machine_limit_request(resp)
 
+    def regions(self, org: str = "") -> list[Region]:
+        """Every region, and where the org stands with each: ``org_state`` is
+        "enabled" (it can use it; its home region always is), "requested" or
+        "available". Readable by any member."""
+        resp = self._transport.call(
+            "ListRegions", api_pb2.ListRegionsRequest(org_id=org)
+        )
+        return [m.region(r) for r in resp.regions]
+
+    def request_region(self, region: str, org: str = "") -> str:
+        """Ask boxd to enable a region for the org. Org admins only, with
+        their login or an API key of theirs issued for the org.
+
+        Returns "requested", or "enabled" when the org has it already. boxd
+        enables a requested region; until then a call that names it fails
+        with `RegionNotEnabledError`.
+        """
+        return self._transport.call(
+            "RequestOrgRegion",
+            api_pb2.RequestOrgRegionRequest(org_id=org, region=region),
+        ).state
+
+    def get_default_region(self, org: str = "") -> str | None:
+        """The org's default region for new machines and disks; None = not set.
+
+        The SDK does not pick a region from it: a client goes where its
+        ``region=`` (or `BOXD_REGION`) says. Other tools may use it.
+        """
+        return self.get_machine_defaults(org).region
+
+    def set_default_region(self, region: str, org: str = "") -> None:
+        """Set the org's default region: its home region or one it has
+        enabled. Requires org admin. Leaves the default size as it is."""
+        if not region:
+            raise ValueError(
+                "set_default_region needs a region. To drop the default, "
+                "call clear_default_region"
+            )
+        self._transport.call(
+            "SetOrgMachineDefaults",
+            req.set_org_machine_defaults(
+                org=org, vcpu=None, memory=None, region=region
+            ),
+        )
+
+    def clear_default_region(self, org: str = "") -> None:
+        """Drop the org's default region. Requires org admin."""
+        self._transport.call(
+            "SetOrgMachineDefaults",
+            req.set_org_machine_defaults(org=org, vcpu=None, memory=None, region=""),
+        )
+
     def usage(
         self,
         *,
@@ -524,7 +585,9 @@ class AsyncOrgs(Namespace):
             api_pb2.SetOrgMemberRoleRequest(org_id=org, user_id=user_id, role=role),
         )
 
-    async def set_domain(self, org: str, domain: str) -> OrgDomain:
+    async def set_domain(
+        self, org: str, domain: str, *, region: str | None = None
+    ) -> OrgDomain:
         """Set the org's wildcard apex (e.g. "preview.mysaas.com").
 
         Requires org admin. Starts verification immediately — call this only
@@ -535,23 +598,31 @@ class AsyncOrgs(Namespace):
         resolver caching the "no records" answer, delaying propagation once
         delegation is actually there. A control loop then verifies
         delegation, issues certs, and flips the domain to `active`.
+
+        An org has at most one domain in each region: ``region`` picks it
+        (default: the client's region), and the domain is delegated to that
+        region's nameservers.
         """
         resp = await self._transport.call(
-            "SetOrgDomain", api_pb2.SetOrgDomainRequest(org_id=org, domain=domain)
+            "SetOrgDomain",
+            api_pb2.SetOrgDomainRequest(org_id=org, domain=domain),
+            region=region,
         )
         return m.org_domain(resp.domain)
 
-    async def get_domain(self, org: str) -> OrgDomain | None:
-        """The org's current wildcard domain, or `None` if unset."""
+    async def get_domain(
+        self, org: str, *, region: str | None = None
+    ) -> OrgDomain | None:
+        """The org's current wildcard domain in a region, or `None` if unset."""
         resp = await self._transport.call(
-            "GetOrgDomain", api_pb2.GetOrgDomainRequest(org_id=org)
+            "GetOrgDomain", api_pb2.GetOrgDomainRequest(org_id=org), region=region
         )
         return m.org_domain(resp.domain) if resp.HasField("domain") else None
 
-    async def clear_domain(self, org: str) -> None:
-        """Remove the org's wildcard domain. Requires org admin."""
+    async def clear_domain(self, org: str, *, region: str | None = None) -> None:
+        """Remove the org's wildcard domain in a region. Requires org admin."""
         await self._transport.call(
-            "ClearOrgDomain", api_pb2.ClearOrgDomainRequest(org_id=org)
+            "ClearOrgDomain", api_pb2.ClearOrgDomainRequest(org_id=org), region=region
         )
 
     async def set_machine_defaults(
@@ -720,6 +791,48 @@ class AsyncOrgs(Namespace):
             ),
         )
         return m.opened_machine_limit_request(resp)
+
+    async def regions(self, org: str = "") -> list[Region]:
+        """Every region, and where the org stands with each."""
+        resp = await self._transport.call(
+            "ListRegions", api_pb2.ListRegionsRequest(org_id=org)
+        )
+        return [m.region(r) for r in resp.regions]
+
+    async def request_region(self, region: str, org: str = "") -> str:
+        """Ask boxd to enable a region for the org. Org admins only.
+        Returns "requested", or "enabled" when the org has it already."""
+        resp = await self._transport.call(
+            "RequestOrgRegion",
+            api_pb2.RequestOrgRegionRequest(org_id=org, region=region),
+        )
+        return resp.state
+
+    async def get_default_region(self, org: str = "") -> str | None:
+        """The org's default region for new machines and disks; None = not set."""
+        return (await self.get_machine_defaults(org)).region
+
+    async def set_default_region(self, region: str, org: str = "") -> None:
+        """Set the org's default region: its home region or one it has
+        enabled. Requires org admin. Leaves the default size as it is."""
+        if not region:
+            raise ValueError(
+                "set_default_region needs a region. To drop the default, "
+                "call clear_default_region"
+            )
+        await self._transport.call(
+            "SetOrgMachineDefaults",
+            req.set_org_machine_defaults(
+                org=org, vcpu=None, memory=None, region=region
+            ),
+        )
+
+    async def clear_default_region(self, org: str = "") -> None:
+        """Drop the org's default region. Requires org admin."""
+        await self._transport.call(
+            "SetOrgMachineDefaults",
+            req.set_org_machine_defaults(org=org, vcpu=None, memory=None, region=""),
+        )
 
     async def usage(
         self,

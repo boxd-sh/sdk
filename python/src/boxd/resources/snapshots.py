@@ -7,7 +7,8 @@ import warnings
 from .. import _mappers as m
 from ..errors import NotFoundError
 from .._generated import api_pb2
-from ..models import CreatedSnapshot, Snapshot
+from .._regions import ALL, normalize
+from ..models import CreatedSnapshot, RegionalList, Snapshot
 from . import Namespace
 
 
@@ -25,6 +26,14 @@ def _warn_paused_automations(created: CreatedSnapshot) -> CreatedSnapshot:
     return created
 
 
+def _snapshot_list(pages, unavailable, elsewhere=()) -> RegionalList[Snapshot]:
+    return RegionalList(
+        [m.snapshot(s, region) for region, resp in pages for s in resp.snapshots],
+        elsewhere=m.region_counts(elsewhere),
+        unavailable=unavailable,
+    )
+
+
 class Snapshots(Namespace):
     """Create, inspect and delete snapshots.
 
@@ -32,7 +41,9 @@ class Snapshots(Namespace):
     :meth:`boxd.machines.create` as ``create(from_snapshot=...)``.
     """
 
-    def create(self, machine_id: str, name: str) -> CreatedSnapshot:
+    def create(
+        self, machine_id: str, name: str, *, region: str | None = None
+    ) -> CreatedSnapshot:
         """Capture a running machine. Re-saving the same name bumps the version.
 
         The machine's running automations are captured with it, and every
@@ -44,37 +55,64 @@ class Snapshots(Namespace):
                 self._transport.call(
                     "CreateSnapshot",
                     api_pb2.CreateSnapshotRequest(vm=machine_id, name=name),
+                    region=region,
                 )
             )
         )
 
-    def get(self, name: str, *, org: str | None = None) -> Snapshot:
+    def get(
+        self, name: str, *, org: str | None = None, region: str | None = None
+    ) -> Snapshot:
         """Fetch one snapshot by name or id."""
-        resp = self._transport.call(
-            "GetSnapshot", api_pb2.GetSnapshotRequest(name=name, org=org or "")
-        )
+        request = api_pb2.GetSnapshotRequest(name=name, org=org or "")
+        resp = self._transport.call("GetSnapshot", request, region=region)
         if not resp.HasField("snapshot"):
-            raise NotFoundError(f"snapshot not found: {name}")
+            raise self._transport.find_elsewhere(
+                NotFoundError(f"snapshot not found: {name}"),
+                "GetSnapshot",
+                request,
+                region=region,
+            )
         return m.snapshot(resp.snapshot)
 
-    def list(self, *, org: str | None = None) -> list[Snapshot]:
-        """List snapshots. Snapshots never cross an org boundary."""
-        resp = self._transport.call(
-            "ListSnapshots", api_pb2.ListSnapshotsRequest(org=org or "")
-        )
-        return [m.snapshot(s) for s in resp.snapshots]
+    def list(
+        self, *, org: str | None = None, region: str | None = None
+    ) -> RegionalList[Snapshot]:
+        """List snapshots. Snapshots never cross an org boundary.
 
-    def delete(self, name: str, *, org: str | None = None) -> None:
+        The list is of one region (``region``, default the client's); its
+        ``elsewhere`` counts the org's snapshots in each other region.
+        ``region="all"`` lists every region the org has.
+        """
+        if normalize(region) == ALL:
+            pages, unavailable = self._transport.each_region(
+                "ListSnapshots", api_pb2.ListSnapshotsRequest(org=org or ""), org=org
+            )
+            return _snapshot_list(pages, unavailable)
+        resp = self._transport.call(
+            "ListSnapshots",
+            api_pb2.ListSnapshotsRequest(org=org or "", with_elsewhere=True),
+            region=region,
+        )
+        return _snapshot_list([(normalize(region), resp)], [], resp.elsewhere)
+
+    def delete(
+        self, name: str, *, org: str | None = None, region: str | None = None
+    ) -> None:
         """Delete a snapshot by name or id."""
         self._transport.call(
-            "DeleteSnapshot", api_pb2.DeleteSnapshotRequest(name=name, org=org or "")
+            "DeleteSnapshot",
+            api_pb2.DeleteSnapshotRequest(name=name, org=org or ""),
+            region=region,
         )
 
 
 class AsyncSnapshots(Namespace):
     """Async twin of :class:`Snapshots`."""
 
-    async def create(self, machine_id: str, name: str) -> CreatedSnapshot:
+    async def create(
+        self, machine_id: str, name: str, *, region: str | None = None
+    ) -> CreatedSnapshot:
         """Capture a running machine. Re-saving the same name bumps the version.
 
         Running automations are captured too; see :meth:`Snapshots.create`.
@@ -84,28 +122,48 @@ class AsyncSnapshots(Namespace):
                 await self._transport.call(
                     "CreateSnapshot",
                     api_pb2.CreateSnapshotRequest(vm=machine_id, name=name),
+                    region=region,
                 )
             )
         )
 
-    async def get(self, name: str, *, org: str | None = None) -> Snapshot:
+    async def get(
+        self, name: str, *, org: str | None = None, region: str | None = None
+    ) -> Snapshot:
         """Fetch one snapshot by name or id."""
-        resp = await self._transport.call(
-            "GetSnapshot", api_pb2.GetSnapshotRequest(name=name, org=org or "")
-        )
+        request = api_pb2.GetSnapshotRequest(name=name, org=org or "")
+        resp = await self._transport.call("GetSnapshot", request, region=region)
         if not resp.HasField("snapshot"):
-            raise NotFoundError(f"snapshot not found: {name}")
+            raise await self._transport.find_elsewhere(
+                NotFoundError(f"snapshot not found: {name}"),
+                "GetSnapshot",
+                request,
+                region=region,
+            )
         return m.snapshot(resp.snapshot)
 
-    async def list(self, *, org: str | None = None) -> list[Snapshot]:
-        """List snapshots."""
+    async def list(
+        self, *, org: str | None = None, region: str | None = None
+    ) -> RegionalList[Snapshot]:
+        """List snapshots. ``region`` (``"all"`` too): see :meth:`Snapshots.list`."""
+        if normalize(region) == ALL:
+            pages, unavailable = await self._transport.each_region(
+                "ListSnapshots", api_pb2.ListSnapshotsRequest(org=org or ""), org=org
+            )
+            return _snapshot_list(pages, unavailable)
         resp = await self._transport.call(
-            "ListSnapshots", api_pb2.ListSnapshotsRequest(org=org or "")
+            "ListSnapshots",
+            api_pb2.ListSnapshotsRequest(org=org or "", with_elsewhere=True),
+            region=region,
         )
-        return [m.snapshot(s) for s in resp.snapshots]
+        return _snapshot_list([(normalize(region), resp)], [], resp.elsewhere)
 
-    async def delete(self, name: str, *, org: str | None = None) -> None:
+    async def delete(
+        self, name: str, *, org: str | None = None, region: str | None = None
+    ) -> None:
         """Delete a snapshot by name or id."""
         await self._transport.call(
-            "DeleteSnapshot", api_pb2.DeleteSnapshotRequest(name=name, org=org or "")
+            "DeleteSnapshot",
+            api_pb2.DeleteSnapshotRequest(name=name, org=org or ""),
+            region=region,
         )

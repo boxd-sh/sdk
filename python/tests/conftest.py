@@ -21,6 +21,7 @@ def clean_env(monkeypatch):
         "BOXD_TOKEN",
         "BOXD_BASE_URL",
         "BOXD_API_URL",
+        "BOXD_REGION",
         "BOXD_VM_ID",
         "BOXD_VM_NAME",
         "BOXD_VM_HOST",

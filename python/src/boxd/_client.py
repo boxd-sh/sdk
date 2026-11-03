@@ -8,6 +8,7 @@ namespace returns is plain data.
 from __future__ import annotations
 
 from ._credentials import AsyncCredentials, SyncCredentials
+from ._regions import AsyncRouter, SyncRouter
 from ._transport import AsyncTransport, SyncTransport
 from ._urls import DEFAULT_BASE_URL, exchange_url_for, resolve_base_url
 from .resources.account import Account, AsyncAccount
@@ -16,6 +17,7 @@ from .resources.disks import AsyncDisks, Disks
 from .resources.domains import AsyncDomains, Domains
 from .resources.machines import AsyncMachines, Machines
 from .resources.orgs import AsyncOrgs, Orgs
+from .resources.regions import AsyncRegions, Regions
 from .resources.snapshots import AsyncSnapshots, Snapshots
 from .resources.teams import AsyncTeams, Teams
 from .resources.vars import AsyncEnv, AsyncSecrets, Env, Secrets
@@ -31,6 +33,7 @@ class Boxd:
 
         boxd = Boxd()                                   # production
         boxd = Boxd(api_key="bxd_...")
+        boxd = Boxd(region="nyc")                       # machines in New York
         boxd = Boxd(base_url="https://boxd.example.com:9443")  # any other cluster
 
     Args:
@@ -40,6 +43,11 @@ class Boxd:
         base_url: The cluster to talk to. Defaults to `BOXD_BASE_URL`, then
             production. There is no `environment` argument — one URL selects
             a cluster and everything else follows from it.
+        region: The region machines, snapshots and disks are created in and
+            looked up in (``"fra"``, ``"nyc"``, ...). Defaults to
+            `BOXD_REGION`, then the region `base_url` serves. Account and org
+            calls always go to `base_url`. Every such method also takes its
+            own ``region=``.
         timeout: Per-request timeout in seconds.
         max_retries: Retries for connection failures, with exponential backoff.
 
@@ -53,6 +61,7 @@ class Boxd:
         api_key: str | None = None,
         token: str | None = None,
         base_url: str | None = None,
+        region: str | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECS,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
@@ -62,11 +71,19 @@ class Boxd:
             token=token,
             exchange_url=exchange_url_for(resolved or DEFAULT_BASE_URL),
         )
-        self._transport = SyncTransport(
-            base_url=resolved,
-            credentials=credentials,
-            timeout=timeout,
-            max_retries=max_retries,
+
+        def connect(url: str | None, *, derived: bool = False) -> SyncTransport:
+            # Every region's endpoint, and home's, share the one credential.
+            return SyncTransport(
+                base_url=url,
+                credentials=credentials,
+                timeout=timeout,
+                max_retries=max_retries,
+                derived=derived,
+            )
+
+        self._transport = SyncRouter(
+            connect(resolved), region=region, connect=connect, credentials=credentials
         )
 
         self.machines = Machines(self._transport)
@@ -79,11 +96,18 @@ class Boxd:
         self.teams = Teams(self._transport)
         self.api_keys = ApiKeys(self._transport)
         self.account = Account(self._transport)
+        self.regions = Regions(self._transport)
 
     @property
     def base_url(self) -> str:
-        """The cluster this client talks to."""
+        """The cluster this client talks to: its home."""
         return self._transport.base_url
+
+    @property
+    def region(self) -> str | None:
+        """The client's region (``region=`` or `BOXD_REGION`); None = the
+        region `base_url` serves."""
+        return self._transport.region
 
     def close(self) -> None:
         """Close the underlying connection. Safe to call more than once."""
@@ -111,6 +135,7 @@ class AsyncBoxd:
         api_key: str | None = None,
         token: str | None = None,
         base_url: str | None = None,
+        region: str | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECS,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
@@ -120,11 +145,19 @@ class AsyncBoxd:
             token=token,
             exchange_url=exchange_url_for(resolved or DEFAULT_BASE_URL),
         )
-        self._transport = AsyncTransport(
-            base_url=resolved,
-            credentials=credentials,
-            timeout=timeout,
-            max_retries=max_retries,
+
+        def connect(url: str | None, *, derived: bool = False) -> AsyncTransport:
+            # Every region's endpoint, and home's, share the one credential.
+            return AsyncTransport(
+                base_url=url,
+                credentials=credentials,
+                timeout=timeout,
+                max_retries=max_retries,
+                derived=derived,
+            )
+
+        self._transport = AsyncRouter(
+            connect(resolved), region=region, connect=connect, credentials=credentials
         )
 
         self.machines = AsyncMachines(self._transport)
@@ -137,11 +170,18 @@ class AsyncBoxd:
         self.teams = AsyncTeams(self._transport)
         self.api_keys = AsyncApiKeys(self._transport)
         self.account = AsyncAccount(self._transport)
+        self.regions = AsyncRegions(self._transport)
 
     @property
     def base_url(self) -> str:
-        """The cluster this client talks to."""
+        """The cluster this client talks to: its home."""
         return self._transport.base_url
+
+    @property
+    def region(self) -> str | None:
+        """The client's region (``region=`` or `BOXD_REGION`); None = the
+        region `base_url` serves."""
+        return self._transport.region
 
     async def close(self) -> None:
         """Close the underlying connection. Safe to call more than once."""

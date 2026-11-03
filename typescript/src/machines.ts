@@ -1,5 +1,7 @@
 import type { Platform } from "./_platform.js";
+import { ALL_REGIONS, eachRegion, normalizeRegion } from "./_regions.js";
 import type { DuplexCall, Transport } from "./_rpc.js";
+import type { RegionOption } from "./regions.js";
 import { AsyncByteQueue, ExecStream } from "./exec.js";
 import {
   APIConnectionError,
@@ -24,6 +26,7 @@ import {
   toMachineFromCreate,
   toMachineUsageReport,
   toMachineSpecUpdate,
+  toRegionalList,
   toResizeResult,
   type BotProtectionMode,
   type ExecBytesResult,
@@ -32,6 +35,7 @@ import {
   type MachineConfig,
   type MachineSpecUpdate,
   type MachineUsageReport,
+  type RegionalList,
   type ResizeResult,
   type SelfDeleteResult,
 } from "./models.js";
@@ -90,7 +94,7 @@ import type {
 } from "./_generated/definitions.js";
 
 /** Options for `machines.updateSpec()`. */
-export interface MachineUpdateSpecOptions {
+export interface MachineUpdateSpecOptions extends RegionOption {
   /** Return the diff and change nothing. */
   dryRun?: boolean;
   /**
@@ -121,15 +125,17 @@ export interface MachineUpdateSpecOptions {
 /** How many times the function form of `updateSpec` tries again on a conflict. */
 const UPDATE_SPEC_RETRIES = 3;
 
-/** What both ways of creating a machine share. */
-interface MachineCreateCommon {
+/** What both ways of creating a machine share. `region` is where it is
+ *  created (default: the client's). */
+interface MachineCreateCommon extends RegionOption {
   name?: string;
   /** Org (name or id) to create in — you must be a member. Empty = personal. */
   org?: string;
   config?: MachineConfig;
   /**
    * Permanently delete the machine this many seconds from now (wall-clock),
-   * whatever state it is in. Change or clear it later with
+   * whatever state it is in. The timer is written together with the machine,
+   * in the same call. Change or clear it later with
    * {@link Machines.setDeleteAfter}.
    */
   deleteAfter?: number;
@@ -233,6 +239,13 @@ export type MachineCreateParams =
   | MachineCreateFromSpecParams;
 
 export interface MachineListParams {
+  /**
+   * The region to list (default: the client's); the list's `elsewhere`
+   * counts the org's machines in each other region. `"all"` lists every
+   * region the org has, each machine with its `region`; `unavailable` names
+   * any region that could not be reached.
+   */
+  region?: string;
   /** Org name. Empty = your personal machines. */
   org?: string;
   /** Every machine you can reach, across every org. Ignores `org`. */
@@ -246,7 +259,7 @@ export interface MachineListParams {
   labels?: string[] | Record<string, string>;
 }
 
-export interface MachineUpdateLabelsParams {
+export interface MachineUpdateLabelsParams extends RegionOption {
   /** Keys to add or overwrite. */
   set?: Record<string, string>;
   /** Keys to delete. A key the machine doesn't have is fine. */
@@ -280,7 +293,7 @@ function labelsMatch(selector: string[], labels: Record<string, string>): boolea
   });
 }
 
-export interface MachineForkParams {
+export interface MachineForkParams extends RegionOption {
   name?: string;
   config?: MachineConfig;
   /**
@@ -314,7 +327,7 @@ export interface MachineForkParams {
   labels?: Record<string, string>;
 }
 
-export interface ExecParams {
+export interface ExecParams extends RegionOption {
   /** Argv (shell-quoted for you) or a ready-made shell command line. */
   command: string | string[];
   /** Prefixed onto the command line as `K=V` assignments. */
@@ -361,13 +374,13 @@ export interface StreamExecParams extends Omit<ExecParams, "timeout" | "encoding
  * resolves the other. Passing neither is refused rather than treated as "keep
  * the current size", which would make the call a silent no-op.
  */
-export interface MachineResizeParams {
+export interface MachineResizeParams extends RegionOption {
   vcpu?: number;
   /** One of the supported sizes: `"4G"`, `"8G"`, `"16G"`, `"32G"`. */
   memory?: string;
 }
 
-export interface WaitUntilReadyParams {
+export interface WaitUntilReadyParams extends RegionOption {
   /** Milliseconds. Default 90s. */
   timeout?: number;
   /** Milliseconds between polls. Default 500ms. */
@@ -495,10 +508,10 @@ function notePausedAutomations(machine: Machine, n: number, origin: string): Mac
  */
 
 /**
- * A create's spec in wire form. A delete-after timer is set by a second call
- * once the machine exists, which the creator of a machine for someone else
- * (`assignTo`) may not make: it is the assignee's. Refused before anything
- * is created rather than after.
+ * A create's spec in wire form. A machine created for someone else
+ * (`assignTo`) is the assignee's to manage, so the create can't also give it
+ * a delete-after timer (the server refuses it too). Refused before anything
+ * is sent.
  */
 function specForCreate(
   spec: MachineSpecBuilder | MachineSpec,
@@ -512,6 +525,48 @@ function specForCreate(
     );
   }
   return wire;
+}
+
+/** The delete-after options a create, restore or fork takes. */
+interface DeleteAfterParams {
+  deleteAfter?: number;
+  deleteAfterCron?: string;
+}
+
+/**
+ * The request's delete-after fields, so the server writes the timer together
+ * with the machine. Both unset when the call names no timer: a create gets
+ * none, a fork keeps its source's. Both at once is refused before anything
+ * is sent.
+ */
+function deleteAfterFields(params: DeleteAfterParams): {
+  deleteAfterSecs: number | undefined;
+  deleteAfterCron: string | undefined;
+} {
+  const { deleteAfter, deleteAfterCron } = params;
+  if (deleteAfterCron !== undefined && deleteAfter) {
+    throw new BoxdError("pass deleteAfter or deleteAfterCron, not both");
+  }
+  return { deleteAfterSecs: deleteAfter, deleteAfterCron };
+}
+
+/**
+ * Whether the machine a create answered with shows the delete-after timer
+ * the call asked for. A server that knows the fields always does; the check
+ * keeps a server that answered with the machine but not the timer from
+ * leaving it unset.
+ */
+function deleteAfterApplied(m: GetVmResponse, params: DeleteAfterParams): boolean {
+  const at = m.deleteAtMs ?? 0;
+  const cron = m.deleteAfterCron ?? "";
+  if (params.deleteAfterCron !== undefined) {
+    const asked = params.deleteAfterCron.trim();
+    return asked === "" ? at === 0 : at > 0 && cron === asked;
+  }
+  if (params.deleteAfter !== undefined) {
+    return params.deleteAfter === 0 ? at === 0 : at > 0 && cron === "";
+  }
+  return true;
 }
 
 /** Waits before each retry of an exec whose machine agent didn't answer. */
@@ -579,9 +634,11 @@ export class Machines {
           isolated: params.isolated ?? false,
           labels: params.labels ?? {},
           spec: params.spec ? specForCreate(params.spec, params) : undefined,
+          ...deleteAfterFields(params),
         },
+        { region: params.region },
       );
-      const machine = await this.#complete(resp, params.deleteAfter, params.deleteAfterCron);
+      const machine = await this.#complete(resp, params);
       // The snapshot's automations came along paused, like a fork's.
       return notePausedAutomations(machine, resp.pausedAutomations ?? 0, "from the snapshot ");
     }
@@ -601,8 +658,9 @@ export class Machines {
         isolated: false,
         labels: {},
         spec: specForCreate(params.spec, params),
-      });
-      const machine = await this.#complete(resp, params.deleteAfter, params.deleteAfterCron);
+        ...deleteAfterFields(params),
+      }, { region: params.region });
+      const machine = await this.#complete(resp, params);
       // A team or snapshot base is a restore, whose automations came along paused.
       return notePausedAutomations(machine, resp.pausedAutomations ?? 0, "from the snapshot ");
     }
@@ -623,11 +681,12 @@ export class Machines {
       networks: params.networks ?? [],
       isolated: params.isolated ?? false,
       labels: params.labels ?? {},
+      ...deleteAfterFields(params),
     };
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.createVm,
-      req,
-    );
-    return this.#complete(resp, params.deleteAfter, params.deleteAfterCron);
+    const resp = await this.transport.unary(BoxdApiDefinition.methods.createVm, req, {
+      region: params.region,
+    });
+    return this.#complete(resp, params);
   }
 
   /**
@@ -638,11 +697,13 @@ export class Machines {
    * `delete(id)` resolves is a reliable way to confirm teardown completed
    *.
    */
-  async get(id: string): Promise<Machine> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.getVm, {
-      vmId: id,
-    });
-    return toMachine(resp, await this.transport.consoleOrigin());
+  async get(id: string, opts: RegionOption = {}): Promise<Machine> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.getVm,
+      { vmId: id },
+      { region: opts.region },
+    );
+    return toMachine(resp, await this.transport.consoleOrigin(opts.region));
   }
 
   /**
@@ -677,24 +738,53 @@ export class Machines {
    * List machines: personal by default, an org's with `org`, everything you
    * can reach with `allContexts`. Each machine's `packages` come without
    * their `outputTail`, to keep the list small; `get()` has it.
+   *
+   * The list is of one region (`region`, default the client's); its
+   * `elsewhere` counts the org's machines in each other region.
+   * `{ region: "all" }` lists every region the org has.
    */
-  async list(params: MachineListParams = {}): Promise<Machine[]> {
+  async list(params: MachineListParams = {}): Promise<RegionalList<Machine>> {
     const selector = labelSelector(params.labels);
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.listVms, {
+    const req = {
       org: params.org ?? "",
       allContexts: params.allContexts ?? false,
       labelSelector: selector,
-    });
-    const consoleOrigin = await this.transport.consoleOrigin();
-    return (resp.vms ?? [])
-      .map((v) => toMachine(v, consoleOrigin))
-      .filter((m) => labelsMatch(selector, m.labels));
+      withElsewhere: false,
+    };
+    const region = normalizeRegion(params.region);
+    const all = region === ALL_REGIONS;
+    const { pages, unavailable } = all
+      ? await eachRegion(this.transport, BoxdApiDefinition.methods.listVms, req, params.org)
+      : {
+          pages: [
+            {
+              region,
+              resp: await this.transport.unary(
+                BoxdApiDefinition.methods.listVms,
+                { ...req, withElsewhere: true },
+                { region },
+              ),
+            },
+          ],
+          unavailable: [],
+        };
+    const machines: Machine[] = [];
+    for (const page of pages) {
+      const consoleOrigin = await this.transport.consoleOrigin(page.region);
+      for (const v of page.resp.vms ?? []) {
+        const machine = toMachine(v, consoleOrigin, page.region);
+        if (labelsMatch(selector, machine.labels)) machines.push(machine);
+      }
+    }
+    return toRegionalList(machines, all ? [] : pages[0]?.resp.elsewhere, unavailable);
   }
 
-  async delete(id: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.destroyVm, {
-      vmId: id,
-    });
+  async delete(id: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.destroyVm,
+      { vmId: id },
+      { region: opts.region },
+    );
   }
 
   /**
@@ -761,52 +851,74 @@ export class Machines {
    * machine**: routing and DNS follow immediately, but the in-VM hostname only
    * changes on the next boot. Returns the new name.
    */
-  async rename(id: string, newName: string): Promise<string> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.renameVm,
+  async rename(id: string, newName: string, opts: RegionOption = {}): Promise<string> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.renameVm,
       { vmId: id, newName },
+      { region: opts.region },
     );
     return resp.name;
   }
 
-  async start(id: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.startVm, { vmId: id });
+  async start(id: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.startVm,
+      { vmId: id },
+      { region: opts.region },
+    );
   }
 
-  async stop(id: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.stopVm, { vmId: id });
+  async stop(id: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.stopVm,
+      { vmId: id },
+      { region: opts.region },
+    );
   }
 
-  async reboot(id: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.rebootVm, {
-      vmId: id,
-    });
+  async reboot(id: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.rebootVm,
+      { vmId: id },
+      { region: opts.region },
+    );
   }
 
   /** Suspend to RAM. Returns how long the freeze took, in microseconds. */
-  async pause(id: string): Promise<{ suspendUs: number }> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.suspendVm,
+  async pause(id: string, opts: RegionOption = {}): Promise<{ suspendUs: number }> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.suspendVm,
       { vmId: id },
+      { region: opts.region },
     );
     return { suspendUs: resp.suspendUs };
   }
 
   /** Resume a paused machine. Returns the thaw time in microseconds. */
-  async resume(id: string): Promise<{ resumeUs: number }> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.resumeVm,
+  async resume(id: string, opts: RegionOption = {}): Promise<{ resumeUs: number }> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.resumeVm,
       { vmId: id },
+      { region: opts.region },
     );
     return { resumeUs: resp.resumeUs };
   }
 
   /** Suspend to disk. Frees the host's memory; `wake` restores it. */
-  async hibernate(id: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.hibernateVm, {
-      vmId: id,
-    });
+  async hibernate(id: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.hibernateVm,
+      { vmId: id },
+      { region: opts.region },
+    );
   }
 
-  async wake(id: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.wakeVm, { vmId: id });
+  async wake(id: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.wakeVm,
+      { vmId: id },
+      { region: opts.region },
+    );
   }
 
   /**
@@ -834,6 +946,7 @@ export class Machines {
         vcpu: params.vcpu ?? 0,
         memoryBytes: params.memory ? parseSize(params.memory) : 0,
       },
+      { region: params.region },
     );
     return toResizeResult(resp);
   }
@@ -895,7 +1008,7 @@ export class Machines {
           reboot: opts.reboot ?? false,
           retryPackages: opts.retryPackages ?? false,
           expectedSpec: expected ? JSON.stringify(expected) : "",
-        })
+        }, { region: opts.region })
         .then(toMachineSpecUpdate);
     if (typeof patch !== "function") {
       checkSpecPatch(patch);
@@ -905,7 +1018,7 @@ export class Machines {
     // that spec along: a change made in between refuses it (ConflictError),
     // and it reads the spec again and reapplies the function.
     for (let attempt = 0; ; attempt++) {
-      const current = (await this.get(id)).spec;
+      const current = (await this.get(id, { region: opts.region })).spec;
       if (!current) {
         throw new BoxdError(
           `spec: machine ${JSON.stringify(id)} wasn't created from a spec, so it has no spec to update`,
@@ -939,8 +1052,10 @@ export class Machines {
       // "inherit", never "de-isolate".
       isolated: params.isolated ?? false,
       labels: params.labels ?? {},
-    });
-    const machine = await this.#complete(resp, params.deleteAfter, params.deleteAfterCron);
+      // Unset: the fork keeps its source's timer, re-armed from the fork.
+      ...deleteAfterFields(params),
+    }, { region: params.region });
+    const machine = await this.#complete(resp, params);
     return notePausedAutomations(machine, resp.pausedAutomations ?? 0, "");
   }
 
@@ -956,9 +1071,11 @@ export class Machines {
    *
    * See {@link MachineNetworking} for the full rule.
    */
-  async setNetworks(id: string, networks: string[]): Promise<string[]> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.setVmNetworks,
+  async setNetworks(id: string, networks: string[], opts: RegionOption = {}): Promise<string[]> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.setVmNetworks,
       { vmId: id, networks },
+      { region: opts.region },
     );
     return resp.networks ?? [];
   }
@@ -975,11 +1092,12 @@ export class Machines {
    * admitted. Pass `["none"]` to let the machine reach nothing else, and `[]`
    * to clear. Takes effect within a second.
    */
-  async setEgressAllow(id: string, entries: string[]): Promise<string[]> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.setVmEgressAllow, {
-      vm: id,
-      entries,
-    });
+  async setEgressAllow(id: string, entries: string[], opts: RegionOption = {}): Promise<string[]> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.setVmEgressAllow,
+      { vm: id, entries },
+      { region: opts.region },
+    );
     return resp.entries ?? [];
   }
 
@@ -1011,32 +1129,42 @@ export class Machines {
       set: params.set ?? {},
       remove,
       replaceAll: params.replaceAll ?? false,
-    });
+    }, { region: params.region });
     return resp.labels ?? {};
   }
 
   /** Make the machine visible to its whole org. A machine never changes org. */
-  async share(id: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.shareVm, { vmId: id });
+  async share(id: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.shareVm,
+      { vmId: id },
+      { region: opts.region },
+    );
   }
 
-  async unshare(id: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.unshareVm, {
-      vmId: id,
-    });
+  async unshare(id: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.unshareVm,
+      { vmId: id },
+      { region: opts.region },
+    );
   }
 
   /** Seconds of idleness before auto-suspend. `0` disables. */
-  async setAutoSuspendTimeout(id: string, seconds: number): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.setAutoSuspendTimeout,
+  async setAutoSuspendTimeout(id: string, seconds: number, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.setAutoSuspendTimeout,
       { vmId: id, timeoutSecs: seconds },
+      { region: opts.region },
     );
   }
 
   /** Seconds of idleness before auto-hibernate. `0` disables. */
-  async setAutoHibernateTimeout(id: string, seconds: number): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.setAutoHibernateTimeout,
+  async setAutoHibernateTimeout(id: string, seconds: number, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.setAutoHibernateTimeout,
       { vmId: id, timeoutSecs: seconds },
+      { region: opts.region },
     );
   }
 
@@ -1048,9 +1176,11 @@ export class Machines {
    * from the moment of the fork. Resolves to the new deadline, or `null`
    * when cleared.
    */
-  async setDeleteAfter(id: string, seconds: number): Promise<Date | null> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.setDeleteAfter,
+  async setDeleteAfter(id: string, seconds: number, opts: RegionOption = {}): Promise<Date | null> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.setDeleteAfter,
       { vmId: id, deleteAfterSecs: seconds, deleteAfterCron: "" },
+      { region: opts.region },
     );
     return resp.deleteAtMs ? new Date(resp.deleteAtMs) : null;
   }
@@ -1060,9 +1190,11 @@ export class Machines {
    * of a cron expression, UTC (`"0 18 * * *"` = the next 18:00). Resolves to
    * that deadline.
    */
-  async setDeleteAfterCron(id: string, cron: string): Promise<Date | null> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.setDeleteAfter,
+  async setDeleteAfterCron(id: string, cron: string, opts: RegionOption = {}): Promise<Date | null> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.setDeleteAfter,
       { vmId: id, deleteAfterSecs: 0, deleteAfterCron: cron },
+      { region: opts.region },
     );
     return resp.deleteAtMs ? new Date(resp.deleteAtMs) : null;
   }
@@ -1079,11 +1211,17 @@ export class Machines {
    *
    * A boolean is the older form: `true` is `"on"`, `false` is `"off"`.
    */
-  async setBotProtection(id: string, mode: BotProtectionMode | boolean): Promise<void> {
+  async setBotProtection(
+    id: string,
+    mode: BotProtectionMode | boolean,
+    opts: RegionOption = {},
+  ): Promise<void> {
     const m: BotProtectionMode = typeof mode === "boolean" ? (mode ? "on" : "off") : mode;
-    await this.transport.unary(BoxdApiDefinition.methods.setBotProtection,
+    await this.transport.unary(
+      BoxdApiDefinition.methods.setBotProtection,
       // `enabled` rides along for a server that predates the mode.
       { vmId: id, enabled: m !== "off", mode: m },
+      { region: opts.region },
     );
   }
 
@@ -1093,9 +1231,11 @@ export class Machines {
    * reset the idle clock, so its own outbound traffic no longer keeps it
    * awake. Off: any traffic does. Applies to a running machine at once.
    */
-  async setIdleIgnoreOutbound(id: string, enabled: boolean): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.setIdleIgnoreOutbound,
+  async setIdleIgnoreOutbound(id: string, enabled: boolean, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.setIdleIgnoreOutbound,
       { vmId: id, enabled },
+      { region: opts.region },
     );
   }
 
@@ -1106,9 +1246,11 @@ export class Machines {
    * use SSH and keep working. The port stays allocated, so turning SSH back on
    * keeps the address. Can't be called from inside the machine itself.
    */
-  async setSsh(id: string, enabled: boolean): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.setSsh,
+  async setSsh(id: string, enabled: boolean, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.setSsh,
       { vmId: id, enabled },
+      { region: opts.region },
     );
   }
 
@@ -1154,7 +1296,10 @@ export class Machines {
     params: ExecParams,
     left: number | undefined,
   ): Promise<ExecResult | ExecBytesResult> {
-    const call = this.transport.duplex(BoxdApiDefinition.methods.exec);
+    const call = this.transport.duplex(BoxdApiDefinition.methods.exec, {
+      region: params.region,
+      machine: id,
+    });
     const init = execChunk({
       vmId: id,
       command: commandLine(params.command, params.env, params.cwd),
@@ -1265,7 +1410,10 @@ export class Machines {
 
     void (async () => {
       try {
-        const call = this.transport.duplex<ExecChunk, ExecChunk>(BoxdApiDefinition.methods.exec);
+        const call = this.transport.duplex<ExecChunk, ExecChunk>(BoxdApiDefinition.methods.exec, {
+          region: params.region,
+          machine: id,
+        });
         if (cancelled) {
           call.cancel();
           return;
@@ -1318,12 +1466,16 @@ export class Machines {
   }
 
   /** Console output. `follow: true` keeps the stream open. */
-  async *logs(id: string, params: { follow?: boolean } = {}): AsyncGenerator<Uint8Array> {
+  async *logs(
+    id: string,
+    params: { follow?: boolean } & RegionOption = {},
+  ): AsyncGenerator<Uint8Array> {
     const req: StreamLogsRequest = { vmId: id, follow: params.follow ?? false };
     // No deadline: a follow stream is meant to stay open indefinitely — the
     // client's normal per-call timeout would otherwise silently kill it.
     const call = this.transport.serverStream(BoxdApiDefinition.methods.streamLogs, req, {
       deadline: false,
+      region: params.region,
     });
 
     const queue = new AsyncByteQueue();
@@ -1350,7 +1502,8 @@ export class Machines {
     const pollInterval = params.pollInterval ?? 500;
     const deadline = Date.now() + timeout;
 
-    let machine = await this.get(id);
+    const region = { region: params.region };
+    let machine = await this.get(id, region);
     while (machine.status !== "running" && Date.now() < deadline) {
       if (TERMINAL_STATES.has(machine.status)) {
         throw new BoxdError(
@@ -1358,7 +1511,7 @@ export class Machines {
         );
       }
       await sleep(pollInterval);
-      machine = await this.get(id);
+      machine = await this.get(id, region);
     }
     if (machine.status !== "running") {
       throw new BoxdError(`machine ${machine.name} did not reach 'running' within ${timeout}ms`);
@@ -1366,7 +1519,7 @@ export class Machines {
 
     while (Date.now() < deadline) {
       try {
-        await this.exec(id, { command: ["true"] });
+        await this.exec(id, { command: ["true"], ...region });
         return machine;
       } catch {
         await sleep(pollInterval);
@@ -1378,32 +1531,40 @@ export class Machines {
   }
 
   /** A fresh, available auto-generated name — what the CLI pre-fills prompts with. */
-  async suggestName(): Promise<string> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.suggestVmName,
+  async suggestName(opts: RegionOption = {}): Promise<string> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.suggestVmName,
       {},
+      { region: opts.region },
     );
     return resp.name;
   }
 
   /**
-   * Creating answers with fewer fields than reading back, so re-read to hand
-   * back a complete `Machine`. If that read fails, fall back to the partial
-   * mapping rather than failing a create that actually succeeded.
+   * The machine a create, restore or fork made. A server that knows the
+   * request's delete-after fields writes the timer together with the machine
+   * and answers with the whole machine (`machine`): one call in all. One
+   * from before them ignored the timer and answered with fewer fields, so
+   * here the timer is set and the machine read back, as before. If that read
+   * fails, the partial mapping stands in rather than failing a create that
+   * actually succeeded.
    */
   async #complete(
     resp: CreateVmResponse | ForkVmResponse,
-    deleteAfter?: number,
-    deleteAfterCron?: string,
+    params: DeleteAfterParams & RegionOption,
   ): Promise<Machine> {
-    // Not part of the create request, so set right after it.
+    const { deleteAfter, deleteAfterCron } = params;
+    const region = { region: params.region };
+    if (resp.machine && deleteAfterApplied(resp.machine, params)) {
+      return toMachine(resp.machine, await this.transport.consoleOrigin(params.region));
+    }
     if (deleteAfterCron !== undefined) {
-      if (deleteAfter) throw new BoxdError("pass deleteAfter or deleteAfterCron, not both");
-      await this.setDeleteAfterCron(resp.vmId, deleteAfterCron);
+      await this.setDeleteAfterCron(resp.vmId, deleteAfterCron, region);
     } else if (deleteAfter !== undefined) {
-      await this.setDeleteAfter(resp.vmId, deleteAfter);
+      await this.setDeleteAfter(resp.vmId, deleteAfter, region);
     }
     try {
-      return await this.get(resp.vmId);
+      return await this.get(resp.vmId, region);
     } catch {
       return toMachineFromCreate(resp);
     }

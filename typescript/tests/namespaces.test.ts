@@ -283,7 +283,13 @@ describe("machines", () => {
   it("list passes org and allContexts through", async () => {
     const t = new FakeTransport([{ vms: [] }]);
     await new Machines(asTransport(t)).list({ org: "acme", allContexts: true });
-    expect(t.calls[0]!.req).toEqual({ org: "acme", allContexts: true, labelSelector: [] });
+    expect(t.calls[0]!.req).toEqual({
+      org: "acme",
+      allContexts: true,
+      labelSelector: [],
+      // The counts in the org's other regions come back with the list.
+      withElsewhere: true,
+    });
   });
 
   it("list filters by labels, as selector strings or an object", async () => {
@@ -1238,7 +1244,8 @@ describe("orgs", () => {
     const orgs = new Orgs(asTransport(t));
     const set = await orgs.setDomain("o1", "preview.example.com");
     expect(set.status).toBe("pending");
-    expect(t.calls[0]!.req).toEqual({ orgId: "o1", domain: "preview.example.com" });
+    // `region: ""`: the region the call is sent to.
+    expect(t.calls[0]!.req).toEqual({ orgId: "o1", domain: "preview.example.com", region: "" });
     expect(await orgs.getDomain("o1")).toBeNull();
     await orgs.clearDomain("o1");
     expect(t.calls.map((c) => c.method)).toEqual(["SetOrgDomain", "GetOrgDomain", "ClearOrgDomain"]);

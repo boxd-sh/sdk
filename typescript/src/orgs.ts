@@ -17,6 +17,7 @@ import {
   toOrgMachineLimit,
   toOrgMembers,
   toOrgUsage,
+  toRegion,
   type BillingActivityEntry,
   type BillingActivityPage,
   type BotProtectionMode,
@@ -33,7 +34,9 @@ import {
   type OrgMachineLimit,
   type OrgMembers,
   type OrgUsage,
+  type Region,
 } from "./models.js";
+import type { RegionOption } from "./regions.js";
 import type {
   ClearOrgDomainRequest,
   ClearOrgDomainResponse,
@@ -211,26 +214,36 @@ export class Orgs {
    * the "no records" answer, delaying propagation once delegation is
    * actually there. A control loop then verifies delegation, issues certs,
    * and flips it to `active`.
+   *
+   * An org has at most one domain in each region: `region` picks it (default:
+   * the client's), and the domain is delegated to that region's nameservers.
    */
-  async setDomain(org: string, domain: string): Promise<OrgDomain> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.setOrgDomain,
-      { orgId: org, domain },
+  async setDomain(org: string, domain: string, opts: RegionOption = {}): Promise<OrgDomain> {
+    // `region: ""` is the region the call is sent to, which `opts.region` picks.
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.setOrgDomain,
+      { orgId: org, domain, region: "" },
+      { region: opts.region },
     );
     return toOrgDomain(resp.domain!);
   }
 
-  /** The org's current wildcard domain, or `null` if unset. */
-  async getDomain(org: string): Promise<OrgDomain | null> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.getOrgDomain,
-      { orgId: org },
+  /** The org's current wildcard domain in a region, or `null` if unset. */
+  async getDomain(org: string, opts: RegionOption = {}): Promise<OrgDomain | null> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.getOrgDomain,
+      { orgId: org, region: "" },
+      { region: opts.region },
     );
     return resp.domain ? toOrgDomain(resp.domain) : null;
   }
 
-  /** Remove the org's wildcard domain. Requires org admin. */
-  async clearDomain(org: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.clearOrgDomain,
-      { orgId: org },
+  /** Remove the org's wildcard domain in a region. Requires org admin. */
+  async clearDomain(org: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.clearOrgDomain,
+      { orgId: org, region: "" },
+      { region: opts.region },
     );
   }
 
@@ -245,7 +258,7 @@ export class Orgs {
    * Only machines created afterwards are affected. Every existing machine
    * keeps the size it was created with; use `machines.resize` to move one.
    *
-   * `org` defaults to your home org.
+   * `org` defaults to your default org, the one a list with no `org` shows.
    */
   async setMachineDefaults(org = "", params: OrgMachineDefaultsParams = {}): Promise<void> {
     if (params.vcpu === undefined && params.memory === undefined) {
@@ -450,6 +463,66 @@ export class Orgs {
       message: params.message ?? "",
     });
     return toMachineLimitRequest(resp);
+  }
+
+  /**
+   * Every region, and where the org stands with each: `orgState` is
+   * `"enabled"` (it can use it; its home region always is), `"requested"` or
+   * `"available"`. Readable by any member. `org` defaults to your default org, the one a list with no `org` shows.
+   */
+  async regions(org = ""): Promise<Region[]> {
+    const resp = await this.transport.unary(BoxdApiDefinition.methods.listRegions, { orgId: org });
+    return (resp.regions ?? []).map(toRegion);
+  }
+
+  /**
+   * Ask boxd to enable a region for the org. Org admins only, with their
+   * login or an API key of theirs issued for the org.
+   *
+   * Resolves to `"requested"`, or `"enabled"` when the org has it already.
+   * boxd enables a requested region; until then a call that names it throws
+   * `RegionNotEnabledError`.
+   */
+  async requestRegion(region: string, org = ""): Promise<string> {
+    const resp = await this.transport.unary(BoxdApiDefinition.methods.requestOrgRegion, {
+      orgId: org,
+      region,
+    });
+    return resp.state;
+  }
+
+  /**
+   * The org's default region for new machines and disks; `null` = not set.
+   * The SDK does not pick a region from it: a client goes where its `region`
+   * (or `BOXD_REGION`) says. Other tools may use it.
+   */
+  async getDefaultRegion(org = ""): Promise<string | null> {
+    return (await this.getMachineDefaults(org)).region;
+  }
+
+  /**
+   * Set the org's default region: its home region or one it has enabled.
+   * Requires org admin. Leaves the default size as it is.
+   */
+  async setDefaultRegion(region: string, org = ""): Promise<void> {
+    if (!region) {
+      throw new BoxdError(
+        "setDefaultRegion needs a region. To drop the default, call clearDefaultRegion",
+      );
+    }
+    // The region alone leaves the size as it is.
+    await this.transport.unary(BoxdApiDefinition.methods.setOrgMachineDefaults, {
+      orgId: org,
+      region,
+    });
+  }
+
+  /** Drop the org's default region. Requires org admin. */
+  async clearDefaultRegion(org = ""): Promise<void> {
+    await this.transport.unary(BoxdApiDefinition.methods.setOrgMachineDefaults, {
+      orgId: org,
+      region: "",
+    });
   }
 
   async usage(params: OrgUsageParams = {}): Promise<OrgUsage> {

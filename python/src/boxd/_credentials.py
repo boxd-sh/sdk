@@ -1,13 +1,15 @@
-"""Credential resolution: explicit token, API-key exchange, or in-VM metadata.
+"""Credential resolution: explicit token, API key, or in-VM metadata.
 
-The gRPC API accepts exactly one credential — ``Authorization: Bearer <JWT>``.
-A ``bxd_`` key is never sent to :9443. Everything here exists to obtain a JWT
-and keep it fresh.
+The gRPC API takes ``Authorization: Bearer <JWT>``, and a ``bxd_`` API key as
+the bearer itself. A key goes as itself over TLS, or to a loopback address
+(:meth:`_CredentialsBase.raw_key`); otherwise, and once a server refuses it as
+one from before raw keys does (the transport's ``_refuses_raw_key``), it is
+exchanged for a JWT that is kept fresh, as every client did before.
 
 Resolution order, first match wins:
 
 1. explicit ``token``           — used as-is, never refreshed
-2. explicit ``api_key``         — exchanged for a JWT
+2. explicit ``api_key``         — sent as itself, or exchanged for a JWT
 3. ``BOXD_TOKEN``, then ``BOXD_API_KEY`` — same handling
 4. in-VM metadata adapter       — no credentials required
 5. otherwise :class:`AuthenticationError` (reason ``"missing_credentials"``)
@@ -289,6 +291,24 @@ class _CredentialsBase:
         self._expires_at: float = 0.0
         # Base URL learned from the metadata adapter (in-VM mode only).
         self.discovered_base_url: str | None = None
+        # A server refused the key itself as an older one does: exchange it
+        # from now on, for the life of the client, every endpoint included.
+        self._raw_key_refused = False
+
+    def raw_key(self, *, allowed: bool) -> str | None:
+        """The API key, when a call should carry it as the bearer itself.
+
+        ``allowed`` says the endpoint is reached over TLS or on a loopback
+        address. ``None`` means use :meth:`token` (a token, an in-VM
+        credential, or the session exchanged for the key).
+        """
+        if self.mode != "exchange" or not allowed or self._raw_key_refused:
+            return None
+        return self._api_key
+
+    def raw_key_refused(self) -> None:
+        """A server refused the key itself: exchange it from now on."""
+        self._raw_key_refused = True
 
     @property
     def mode(self) -> str:

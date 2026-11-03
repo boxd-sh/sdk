@@ -17,9 +17,11 @@ class ScriptedTransport:
         self.outputs = outputs
         self.requests = None
 
-    def bidi(self, method, requests):
+    def bidi(self, method, requests, *, region=None, machine=None):
         self.method = method
         self.requests = requests
+        self.region = region
+        self.machine = machine
         # The first chunk (the command) is consumed eagerly, as the real
         # transport would.
         self.init = next(requests)

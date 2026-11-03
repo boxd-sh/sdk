@@ -130,6 +130,7 @@ class Fs(Namespace):
         *,
         offset: int = 0,
         length: int | None = None,
+        region: str | None = None,
     ) -> bytes:
         """A file's contents (following symlinks), from ``offset`` for
         ``length`` bytes or to the end.
@@ -139,7 +140,11 @@ class Fs(Namespace):
         :class:`~boxd.errors.MachineFilesystemError` with reason
         ``"not_a_regular_file"``.
         """
-        return b"".join(self.read_stream(machine_id, path, offset=offset, length=length))
+        return b"".join(
+            self.read_stream(
+                machine_id, path, offset=offset, length=length, region=region
+            )
+        )
 
     def read_stream(
         self,
@@ -148,6 +153,7 @@ class Fs(Namespace):
         *,
         offset: int = 0,
         length: int | None = None,
+        region: str | None = None,
     ) -> Iterator[bytes]:
         """:meth:`read`, a chunk at a time, for files too big to hold in
         memory. Raises at the end if the stream was cut short."""
@@ -156,7 +162,9 @@ class Fs(Namespace):
         )
         check = _ReadCheck(path)
         with _naming(path):
-            for chunk in self._transport.server_stream("FsRead", request):
+            for chunk in self._transport.server_stream(
+                "FsRead", request, region=region
+            ):
                 data = check.take(chunk)
                 if data:
                     yield data
@@ -169,6 +177,7 @@ class Fs(Namespace):
         data: WriteData,
         *,
         mode: int | None = None,
+        region: str | None = None,
     ) -> FsEntry:
         """Replace a file's contents, creating it and any missing parent
         directories. Returns the file as written.
@@ -183,20 +192,28 @@ class Fs(Namespace):
         framer, whole = _framer(machine_id, path, data, mode, async_ok=False)
         pieces: Iterable[bytes] = [whole] if whole is not None else data  # type: ignore[assignment]
         with _naming(path):
-            resp = self._transport.call("FsWrite", req.fs_write_chunks(framer, pieces))
+            resp = self._transport.call(
+                "FsWrite", req.fs_write_chunks(framer, pieces), region=region
+            )
         return m.fs_entry(resp.entry)
 
-    def stat(self, machine_id: str, path: FsPath) -> FsEntry:
+    def stat(
+        self, machine_id: str, path: FsPath, *, region: str | None = None
+    ) -> FsEntry:
         """A file's, directory's or symlink's details. A symlink is described
         by what it points to; ``is_symlink`` and ``symlink_target`` say it is
         one."""
         with _naming(path):
             resp = self._transport.call(
-                "FsStat", api_pb2.FsStatRequest(vm_id=machine_id, path=req.fs_path(path))
+                "FsStat",
+                api_pb2.FsStatRequest(vm_id=machine_id, path=req.fs_path(path)),
+                region=region,
             )
         return m.fs_entry(resp.entry)
 
-    def exists(self, machine_id: str, path: FsPath) -> bool:
+    def exists(
+        self, machine_id: str, path: FsPath, *, region: str | None = None
+    ) -> bool:
         """Whether ``path`` exists, like ``os.path.exists``: False for a
         dangling symlink and for any path the filesystem can't resolve.
 
@@ -204,33 +221,55 @@ class Fs(Namespace):
         can't be reached, or is too old for this API.
         """
         try:
-            entry = self.stat(machine_id, path)
+            entry = self.stat(machine_id, path, region=region)
         except MachineFilesystemError:
             return False
         return entry.target_type is not None
 
-    def list(self, machine_id: str, path: FsPath) -> list[FsEntry]:
+    def list(
+        self, machine_id: str, path: FsPath, *, region: str | None = None
+    ) -> list[FsEntry]:
         """A directory's entries, one level, in no particular order. There is
         no cap on how many."""
-        return [entry for entry in self.iter_list(machine_id, path)]
+        return [entry for entry in self.iter_list(machine_id, path, region=region)]
 
-    def iter_list(self, machine_id: str, path: FsPath) -> Iterator[FsEntry]:
+    def iter_list(
+        self, machine_id: str, path: FsPath, *, region: str | None = None
+    ) -> Iterator[FsEntry]:
         """:meth:`list`, lazily: entries arrive in batches as the machine
         reads the directory."""
         request = api_pb2.FsListRequest(vm_id=machine_id, path=req.fs_path(path))
         with _naming(path):
-            for chunk in self._transport.server_stream("FsList", request):
+            for chunk in self._transport.server_stream(
+                "FsList", request, region=region
+            ):
                 for entry in chunk.entries:
                     yield m.fs_entry(entry)
 
-    def mkdir(self, machine_id: str, path: FsPath, *, mode: int | None = None) -> None:
+    def mkdir(
+        self,
+        machine_id: str,
+        path: FsPath,
+        *,
+        mode: int | None = None,
+        region: str | None = None,
+    ) -> None:
         """Create a directory and any missing parents (``mkdir -p``). An
         existing directory is fine; a file in the way raises
         ``FileExistsError``. New directories get ``mode``, or 0o755."""
         with _naming(path):
-            self._transport.call("FsMkdir", _mkdir(machine_id, path, mode))
+            self._transport.call(
+                "FsMkdir", _mkdir(machine_id, path, mode), region=region
+            )
 
-    def remove(self, machine_id: str, path: FsPath, *, recursive: bool = False) -> None:
+    def remove(
+        self,
+        machine_id: str,
+        path: FsPath,
+        *,
+        recursive: bool = False,
+        region: str | None = None,
+    ) -> None:
         """Remove a file or a symlink (never what it points to). A directory
         needs ``recursive=True``, which removes everything in it; without it
         a directory raises ``IsADirectoryError``. The root directory is
@@ -241,6 +280,7 @@ class Fs(Namespace):
                 api_pb2.FsRemoveRequest(
                     vm_id=machine_id, path=req.fs_path(path), recursive=recursive
                 ),
+                region=region,
             )
 
     def rename(
@@ -250,6 +290,7 @@ class Fs(Namespace):
         new_path: FsPath,
         *,
         overwrite: bool = True,
+        region: str | None = None,
     ) -> None:
         """Move or rename a file or directory. With ``overwrite=False`` an
         existing ``new_path`` raises ``FileExistsError`` instead of being
@@ -263,9 +304,12 @@ class Fs(Namespace):
                     new_path=req.fs_path(new_path),
                     no_replace=not overwrite,
                 ),
+                region=region,
             )
 
-    def realpath(self, machine_id: str, path: FsPath) -> str:
+    def realpath(
+        self, machine_id: str, path: FsPath, *, region: str | None = None
+    ) -> str:
         """``path`` made absolute, with symlinks, ``.`` and ``..`` resolved,
         like ``os.path.realpath``: components that don't exist are kept as
         written. A symlink loop raises an ``OSError`` with ``errno.ELOOP``."""
@@ -273,6 +317,7 @@ class Fs(Namespace):
             resp = self._transport.call(
                 "FsRealpath",
                 api_pb2.FsRealpathRequest(vm_id=machine_id, path=req.fs_path(path)),
+                region=region,
             )
         return m.fs_text(resp.path)
 
@@ -305,13 +350,14 @@ class AsyncFs(Namespace):
         *,
         offset: int = 0,
         length: int | None = None,
+        region: str | None = None,
     ) -> bytes:
         """See :meth:`Fs.read`."""
         return b"".join(
             [
                 chunk
                 async for chunk in self.read_stream(
-                    machine_id, path, offset=offset, length=length
+                    machine_id, path, offset=offset, length=length, region=region
                 )
             ]
         )
@@ -323,6 +369,7 @@ class AsyncFs(Namespace):
         *,
         offset: int = 0,
         length: int | None = None,
+        region: str | None = None,
     ) -> AsyncIterator[bytes]:
         """See :meth:`Fs.read_stream`."""
         request = req.fs_read(
@@ -330,7 +377,9 @@ class AsyncFs(Namespace):
         )
         check = _ReadCheck(path)
         with _naming(path):
-            stream = await self._transport.server_stream("FsRead", request)
+            stream = await self._transport.server_stream(
+                "FsRead", request, region=region
+            )
             async for chunk in stream:
                 data = check.take(chunk)
                 if data:
@@ -344,6 +393,7 @@ class AsyncFs(Namespace):
         data: AsyncWriteData,
         *,
         mode: int | None = None,
+        region: str | None = None,
     ) -> FsEntry:
         """See :meth:`Fs.write`. ``data`` may also be an async iterable of
         byte chunks."""
@@ -353,47 +403,74 @@ class AsyncFs(Namespace):
             resp = await self._transport.call(
                 "FsWrite",
                 _async_chunks(framer, pieces),  # type: ignore[arg-type]
+                region=region,
             )
         return m.fs_entry(resp.entry)
 
-    async def stat(self, machine_id: str, path: FsPath) -> FsEntry:
+    async def stat(
+        self, machine_id: str, path: FsPath, *, region: str | None = None
+    ) -> FsEntry:
         """See :meth:`Fs.stat`."""
         with _naming(path):
             resp = await self._transport.call(
-                "FsStat", api_pb2.FsStatRequest(vm_id=machine_id, path=req.fs_path(path))
+                "FsStat",
+                api_pb2.FsStatRequest(vm_id=machine_id, path=req.fs_path(path)),
+                region=region,
             )
         return m.fs_entry(resp.entry)
 
-    async def exists(self, machine_id: str, path: FsPath) -> bool:
+    async def exists(
+        self, machine_id: str, path: FsPath, *, region: str | None = None
+    ) -> bool:
         """See :meth:`Fs.exists`."""
         try:
-            entry = await self.stat(machine_id, path)
+            entry = await self.stat(machine_id, path, region=region)
         except MachineFilesystemError:
             return False
         return entry.target_type is not None
 
-    async def list(self, machine_id: str, path: FsPath) -> list[FsEntry]:
+    async def list(
+        self, machine_id: str, path: FsPath, *, region: str | None = None
+    ) -> list[FsEntry]:
         """See :meth:`Fs.list`."""
-        return [entry async for entry in self.iter_list(machine_id, path)]
+        return [
+            entry async for entry in self.iter_list(machine_id, path, region=region)
+        ]
 
-    async def iter_list(self, machine_id: str, path: FsPath) -> AsyncIterator[FsEntry]:
+    async def iter_list(
+        self, machine_id: str, path: FsPath, *, region: str | None = None
+    ) -> AsyncIterator[FsEntry]:
         """See :meth:`Fs.iter_list`."""
         request = api_pb2.FsListRequest(vm_id=machine_id, path=req.fs_path(path))
         with _naming(path):
-            stream = await self._transport.server_stream("FsList", request)
+            stream = await self._transport.server_stream(
+                "FsList", request, region=region
+            )
             async for chunk in stream:
                 for entry in chunk.entries:
                     yield m.fs_entry(entry)
 
     async def mkdir(
-        self, machine_id: str, path: FsPath, *, mode: int | None = None
+        self,
+        machine_id: str,
+        path: FsPath,
+        *,
+        mode: int | None = None,
+        region: str | None = None,
     ) -> None:
         """See :meth:`Fs.mkdir`."""
         with _naming(path):
-            await self._transport.call("FsMkdir", _mkdir(machine_id, path, mode))
+            await self._transport.call(
+                "FsMkdir", _mkdir(machine_id, path, mode), region=region
+            )
 
     async def remove(
-        self, machine_id: str, path: FsPath, *, recursive: bool = False
+        self,
+        machine_id: str,
+        path: FsPath,
+        *,
+        recursive: bool = False,
+        region: str | None = None,
     ) -> None:
         """See :meth:`Fs.remove`."""
         with _naming(path):
@@ -402,6 +479,7 @@ class AsyncFs(Namespace):
                 api_pb2.FsRemoveRequest(
                     vm_id=machine_id, path=req.fs_path(path), recursive=recursive
                 ),
+                region=region,
             )
 
     async def rename(
@@ -411,6 +489,7 @@ class AsyncFs(Namespace):
         new_path: FsPath,
         *,
         overwrite: bool = True,
+        region: str | None = None,
     ) -> None:
         """See :meth:`Fs.rename`."""
         with _naming(old_path, new_path):
@@ -422,13 +501,17 @@ class AsyncFs(Namespace):
                     new_path=req.fs_path(new_path),
                     no_replace=not overwrite,
                 ),
+                region=region,
             )
 
-    async def realpath(self, machine_id: str, path: FsPath) -> str:
+    async def realpath(
+        self, machine_id: str, path: FsPath, *, region: str | None = None
+    ) -> str:
         """See :meth:`Fs.realpath`."""
         with _naming(path):
             resp = await self._transport.call(
                 "FsRealpath",
                 api_pb2.FsRealpathRequest(vm_id=machine_id, path=req.fs_path(path)),
+                region=region,
             )
         return m.fs_text(resp.path)

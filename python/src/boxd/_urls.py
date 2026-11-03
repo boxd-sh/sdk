@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 from typing import NamedTuple
 
 # gRPC front door, over TLS. The proxy still accepts plain HTTP/2 on the same
@@ -91,6 +92,64 @@ def resolve_endpoint(base_url: str) -> Endpoint:
         return Endpoint(target=base_url[len("https://") :].rstrip("/"), use_tls=True)
     is_local = base_url.startswith("localhost") or base_url.startswith("127.")
     return Endpoint(target=base_url.rstrip("/"), use_tls=not is_local)
+
+
+def is_loopback_target(target: str) -> bool:
+    """Whether a ``host:port`` (as :func:`resolve_endpoint` gives it) is a
+    loopback address: ``localhost``, ``127.*`` or ``[::1]``."""
+    target = target.strip()
+    if target.startswith("["):
+        host = target[1 : target.find("]")] if "]" in target else target[1:]
+    else:
+        host = target.split(":", 1)[0]
+    host = host.lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def raw_key_allowed(base_url: str) -> bool:
+    """Whether an API key may go as the bearer itself to `base_url`: over TLS,
+    or in plaintext to a loopback address, which never leaves the machine."""
+    endpoint = resolve_endpoint(base_url)
+    return endpoint.use_tls or is_loopback_target(endpoint.target)
+
+
+_DNS_LABEL = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?")
+_PORT = re.compile(r"[0-9]+")
+
+
+def region_base_url(home_base_url: str, region: str) -> str | None:
+    """A region's API endpoint by the platform's naming: ``<region>.<host>`` on
+    the home base URL's scheme and port (home ``https://boxd.sh:9443`` → nyc
+    ``https://nyc.boxd.sh:9443``).
+
+    None when the home host is not a DNS name a region can be put in front of
+    (an IP literal, ``localhost``, a name of one label), when the base URL has
+    a path, or when `region` is not one label.
+    """
+    if not _DNS_LABEL.fullmatch(region):
+        return None
+    url = home_base_url.strip().rstrip("/")
+    scheme = next((s for s in ("https://", "http://") if url.startswith(s)), "")
+    authority = url[len(scheme) :]
+    if "/" in authority or authority.startswith("["):
+        return None
+    host, sep, port = authority.partition(":")
+    host = host.lower()
+    labels = host.split(".")
+    dns_name = (
+        len(labels) > 1
+        and all(_DNS_LABEL.fullmatch(label) for label in labels)
+        and not labels[-1].isdigit()  # a dotted quad, valid or not
+        and labels[-1] != "localhost"
+    )
+    if not dns_name or (sep and not _PORT.fullmatch(port)):
+        return None
+    return f"{scheme}{region}.{host}{sep}{port}"
 
 
 def _is_ip(host: str) -> bool:

@@ -40,6 +40,7 @@ Resources return plain data — a `Machine` has fields, not methods.
 ```python
 Boxd()                                     # production
 Boxd(api_key="bxd_...")
+Boxd(region="nyc")                         # machines in another region
 Boxd(base_url="https://boxd.example.com:9443")   # any other cluster
 ```
 
@@ -50,6 +51,7 @@ Every argument is keyword-only.
 | `api_key` | `BOXD_API_KEY` | — |
 | `token` | `BOXD_TOKEN` | — |
 | `base_url` | `BOXD_BASE_URL` (or the deprecated `BOXD_API_URL`) | `https://boxd.sh:9443` |
+| `region` | `BOXD_REGION` | the region `base_url` serves — see [Regions](#regions) |
 | `timeout` | — | 60.0 seconds |
 | `max_retries` | — | 2 |
 
@@ -145,6 +147,68 @@ an async generator you drive with `async for`.
 
 Use `AsyncBoxd` when you already have an event loop (FastAPI, asyncio scripts,
 anyio). Use `Boxd` everywhere else — scripts, notebooks, Django views.
+
+## Regions
+
+boxd runs in several regions, each with its own API. A machine, snapshot or
+disk lives in one region. Your account, organizations, API keys, environment
+variables and billing live in your home region and work in every region with
+the same credential.
+
+Pick a region for the client, or for one call:
+
+```python
+boxd = Boxd(region="nyc")                 # or set BOXD_REGION=nyc
+boxd.machines.create("api")               # created in nyc
+boxd.machines.get("api")                  # looked up in nyc
+boxd.machines.get("web", region="fra")    # this call only
+boxd.region                               # "nyc"
+```
+
+With no region, every call goes to `base_url`, as before. Every method on
+machines (and `files`, `fs`, `ports`, `proxies`, `checkpoints`, `backups`),
+snapshots, disks, custom domains and org domains takes `region=`. Account and
+organization calls always go to `base_url`.
+
+```python
+for r in boxd.regions.list():
+    r.id, r.name, r.home, r.org_state   # "enabled" | "requested" | "available"
+
+machines = boxd.machines.list()           # the client's region
+machines.elsewhere                        # [RegionCount(region="fra", count=3)]
+everywhere = boxd.machines.list(region="all")
+[(m.name, m.region) for m in everywhere]
+everywhere.unavailable                    # regions that could not be reached just now
+```
+
+`snapshots.list()` and `disks.list()` take `region="all"` and carry
+`elsewhere` too. `machine.region`, `snapshot.region` and `disk.region` say
+where each one lives.
+
+An organization can use its home region and the regions enabled for it.
+Creating or listing machines or snapshots in any other region raises
+`RegionNotEnabledError`. An org admin can ask for one:
+
+```python
+boxd.orgs.regions("acme")                   # where the org stands with each region
+boxd.orgs.request_region("nyc", "acme")     # "requested", or "enabled" if it has it
+boxd.orgs.set_default_region("nyc", "acme") # recorded for the org; the SDK
+boxd.orgs.get_default_region("acme")        # does not route by it
+boxd.orgs.clear_default_region("acme")
+```
+
+When a machine, snapshot or disk is not in the region a call went to, the SDK
+asks where else your organizations have that name, and the `NotFoundError`
+says so:
+
+```python
+try:
+    boxd.machines.get("web")
+except NotFoundError as e:
+    print(e)              # ...; there is a machine "web" in fra: pass region="fra"
+    e.elsewhere           # [ElsewhereItem(region="fra", name="web", org_id=..., id=...)]
+    e.close               # names one or two letters off, in other regions
+```
 
 ## Machines
 
@@ -611,6 +675,7 @@ machine.source.name             # source machine, or snapshot name
 machine.source.version          # int | None — snapshots only; a fork has none
 machine.source.id               # str | None — provenance; may not resolve
 
+machine.region                  # str | None — where it lives; None when boxd runs in one region
 machine.hibernated_at           # datetime | None — None = not hibernated
 machine.last_connected_at       # datetime | None — None = never connected
 machine.boot_time_ms            # int | None — last boot; None = never booted
@@ -986,11 +1051,13 @@ snapshot.memory_bytes
 snapshot.use_count      # machines restored from it so far
 snapshot.storage        # "local" | "archiving" | "archived" | "unarchiving"
 snapshot.archived       # True unless storage is "local": machines can't be created from it
+snapshot.region         # str | None — where it lives
 
 volume = boxd.disks.list()[0]
 volume.id, volume.name, volume.size_bytes
 volume.status           # "creating" | "ready" | "destroyed" — attach once "ready"
 volume.created_at       # datetime | None
+volume.region           # str | None — where it lives
 volume.attachments      # [DiskAttachment(machine_id, machine_name, mount_path, mount_mode)]
                         # mount_mode is "ro" or "rw"
 ```
@@ -1049,7 +1116,9 @@ boxd.orgs.clear_domain("acme")
 
 `set_domain` starts verification immediately — call it only once NS
 delegation is actually live, for the same reason as per-machine domains
-above. A background check then verifies delegation and issues certs
+above. An org has at most one domain in each region: `region=` picks which
+(default: the client's region), and the domain is delegated to that region's
+nameservers. A background check then verifies delegation and issues certs
 automatically, then flips `status` to `"active"`.
 
 An org also has a default machine size: what a `create` that names no size
@@ -1211,7 +1280,8 @@ from boxd import (
     BoxdError,               # base class — catch this to catch everything
     AuthenticationError,     # no usable credential, or it was rejected
     PermissionDeniedError,   # authenticated, but not allowed
-    NotFoundError,
+    RegionNotEnabledError,   # a PermissionDeniedError: the org can't use that region yet
+    NotFoundError,           # .elsewhere / .close: the name in other regions
     ConflictError,           # already exists, fights the current state, or it changed meanwhile
     RateLimitError,          # rate limit or quota
     APIStatusError,          # any other error from the server

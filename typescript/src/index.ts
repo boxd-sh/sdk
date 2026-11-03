@@ -1,6 +1,6 @@
 import { nodePlatform } from "./_platformNode.js";
 import { Transport } from "./_transport.js";
-import { BoxdCore, resolveOptions, type BoxdOptions } from "./client.js";
+import { BoxdCore, directRouting, resolveOptions, type BoxdOptions } from "./client.js";
 
 /**
  * ```ts
@@ -17,7 +17,13 @@ import { BoxdCore, resolveOptions, type BoxdOptions } from "./client.js";
  */
 export class Boxd extends BoxdCore {
   constructor(opts: BoxdOptions = {}) {
-    super(new Transport(resolveOptions(opts, nodePlatform)), nodePlatform);
+    const resolved = resolveOptions(opts, nodePlatform);
+    super(new Transport(resolved), nodePlatform, {
+      region: resolved.region,
+      // Another region's endpoint, sharing the credential.
+      connect: (resolveBaseURL, opts) => new Transport({ ...resolved, resolveBaseURL, ...opts }),
+      direct: directRouting(resolved),
+    });
   }
 }
 export type { BoxdOptions };
@@ -102,6 +108,8 @@ export { ApiKeys } from "./apiKeys.js";
 export type { ApiKeyCreateParams } from "./apiKeys.js";
 export { AccountNamespace } from "./account.js";
 export type { LinkSshKeyParams } from "./account.js";
+export { Regions } from "./regions.js";
+export type { RegionOption } from "./regions.js";
 
 // Streaming
 export { AsyncByteQueue, ExecStream } from "./exec.js";
@@ -171,6 +179,10 @@ export type {
   PortProtocol,
   Proxy,
   ProxyPortMode,
+  Region,
+  RegionalList,
+  RegionCount,
+  RegionOrgState,
   ResizeResult,
   SelfDeleteResult,
   Secret,
@@ -199,10 +211,12 @@ export {
   NotFoundError,
   PermissionDeniedError,
   RateLimitError,
+  RegionNotEnabledError,
 } from "./errors.js";
 export type {
   AuthenticationErrorReason,
   BoxdErrorOptions,
+  ElsewhereItem,
   FilesystemErrorReason,
 } from "./errors.js";
 

@@ -38,12 +38,24 @@ _EOF = object()
 class ExecStream:
     """A live, interactive exec session (blocking)."""
 
-    def __init__(self, transport, init: api_pb2.ExecChunk, *, close_stdin: bool = False):
+    def __init__(
+        self,
+        transport,
+        init: api_pb2.ExecChunk,
+        *,
+        close_stdin: bool = False,
+        region: str | None = None,
+    ):
         self._machine_id = init.vm_id
         self._stdin: queue.Queue = queue.Queue()
         self._exit_code: int | None = None
         self._closed = False
-        self._call = transport.bidi("Exec", self._requests(init, close_stdin))
+        self._call = transport.bidi(
+            "Exec",
+            self._requests(init, close_stdin),
+            region=region,
+            machine=init.vm_id,
+        )
 
     def _requests(self, init: api_pb2.ExecChunk, close_stdin: bool):
         yield init
@@ -130,10 +142,18 @@ class AsyncExecStream:
                 ...
     """
 
-    def __init__(self, transport, init: api_pb2.ExecChunk, *, close_stdin: bool = False):
+    def __init__(
+        self,
+        transport,
+        init: api_pb2.ExecChunk,
+        *,
+        close_stdin: bool = False,
+        region: str | None = None,
+    ):
         self._transport = transport
         self._init = init
         self._close_stdin = close_stdin
+        self._region = region
         self._stdin: asyncio.Queue = asyncio.Queue()
         self._exit_code: int | None = None
         self._closed = False
@@ -141,7 +161,12 @@ class AsyncExecStream:
 
     async def _start(self) -> None:
         if self._call is None:
-            self._call = await self._transport.bidi("Exec", self._requests())
+            self._call = await self._transport.bidi(
+                "Exec",
+                self._requests(),
+                region=self._region,
+                machine=self._init.vm_id,
+            )
 
     async def _requests(self):
         yield self._init

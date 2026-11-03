@@ -39,6 +39,22 @@ export function isLocalUrl(url: string): boolean {
   return url.startsWith("localhost") || url.startsWith("127.");
 }
 
+/**
+ * Whether a `host:port` (as {@link resolveEndpoint} gives it) is a loopback
+ * address: `localhost`, `127.*` or `[::1]`. Plaintext to one never leaves the
+ * machine, so an API key may go as itself there, as over TLS.
+ */
+export function isLoopbackHost(hostPort: string): boolean {
+  const host = bareHost(hostPort.trim()).toLowerCase();
+  return host === "localhost" || host === "[::1]" || /^127(\.\d{1,3}){3}$/.test(host);
+}
+
+/** Whether an API key may go as itself to `baseURL`: TLS, or loopback. */
+export function rawKeyAllowed(baseURL: string): boolean {
+  const { host, useTls } = resolveEndpoint(baseURL);
+  return useTls || isLoopbackHost(host);
+}
+
 export interface Endpoint {
   /** Bare `host:port` to pass to the gRPC client. */
   host: string;
@@ -64,6 +80,34 @@ export function resolveEndpoint(url: string): Endpoint {
     return { host: url.slice("https://".length), useTls: true };
   }
   return { host: url, useTls: !isLocalUrl(url) };
+}
+
+/** One DNS label: letters, digits and inner hyphens. */
+const DNS_LABEL = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
+
+/**
+ * A region's API endpoint by the platform's naming: `<region>.<host>` on the
+ * home base URL's scheme and port (home `https://boxd.sh:9443` → nyc
+ * `https://nyc.boxd.sh:9443`). Undefined when the home host is not a DNS name
+ * a region can be put in front of (an IP literal, `localhost`, a name of one
+ * label), when the base URL has a path, or when `region` is not one label.
+ */
+export function regionBaseURL(homeBaseURL: string, region: string): string | undefined {
+  if (!DNS_LABEL.test(region)) return undefined;
+  const trimmed = homeBaseURL.trim().replace(/\/+$/, "");
+  const scheme = ["https://", "http://"].find((s) => trimmed.startsWith(s)) ?? "";
+  const authority = trimmed.slice(scheme.length);
+  if (authority.includes("/")) return undefined;
+  const host = bareHost(authority).toLowerCase();
+  const port = authority.slice(host.length);
+  const labels = host.split(".");
+  const dnsName =
+    labels.length > 1 &&
+    labels.every((l) => DNS_LABEL.test(l)) &&
+    !/^\d+$/.test(labels[labels.length - 1]!) && // a dotted quad, valid or not
+    labels[labels.length - 1] !== "localhost";
+  if (!dnsName || (port !== "" && !/^:\d+$/.test(port))) return undefined;
+  return `${scheme}${region}.${host}${port}`;
 }
 
 /** Path the console serves the API-key → JWT exchange on. */

@@ -1,4 +1,5 @@
 import type { Transport } from "./_rpc.js";
+import type { RegionOption } from "./regions.js";
 import { BoxdApiDefinition } from "./_generated/definitions.js";
 import { toCustomDomain, type CustomDomain } from "./models.js";
 import type {
@@ -36,25 +37,31 @@ export class Domains {
   constructor(private readonly transport: Transport) {}
 
   /** Point `domain` at a machine. DNS must already be set — see class docs. */
-  async create(params: { domain: string; machine: string }): Promise<CustomDomain> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.addCustomDomain,
+  async create(params: { domain: string; machine: string } & RegionOption): Promise<CustomDomain> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.addCustomDomain,
       { domain: params.domain, vmId: params.machine },
+      { region: params.region },
     );
     return toCustomDomain(resp.domain!);
   }
 
   /** List custom domains bound to machines you own. */
-  async list(): Promise<CustomDomain[]> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.listCustomDomains,
+  async list(opts: RegionOption = {}): Promise<CustomDomain[]> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.listCustomDomains,
       {},
+      { region: opts.region },
     );
     return (resp.domains ?? []).map(toCustomDomain);
   }
 
   /** Remove a domain binding. */
-  async delete(domain: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.removeCustomDomain,
+  async delete(domain: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.removeCustomDomain,
       { domain },
+      { region: opts.region },
     );
   }
 }

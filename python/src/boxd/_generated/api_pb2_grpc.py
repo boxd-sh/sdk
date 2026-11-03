@@ -604,6 +604,21 @@ class BoxdApiStub(object):
                 request_serializer=api__pb2.RequestOrgMachineLimitRequest.SerializeToString,
                 response_deserializer=api__pb2.RequestOrgMachineLimitResponse.FromString,
                 _registered_method=True)
+        self.ListRegions = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/ListRegions',
+                request_serializer=api__pb2.ListRegionsRequest.SerializeToString,
+                response_deserializer=api__pb2.ListRegionsResponse.FromString,
+                _registered_method=True)
+        self.RequestOrgRegion = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/RequestOrgRegion',
+                request_serializer=api__pb2.RequestOrgRegionRequest.SerializeToString,
+                response_deserializer=api__pb2.RequestOrgRegionResponse.FromString,
+                _registered_method=True)
+        self.FindElsewhere = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/FindElsewhere',
+                request_serializer=api__pb2.FindElsewhereRequest.SerializeToString,
+                response_deserializer=api__pb2.FindElsewhereResponse.FromString,
+                _registered_method=True)
         self.CreateOrg = channel.unary_unary(
                 '/boxd.api.v1.BoxdApi/CreateOrg',
                 request_serializer=api__pb2.CreateOrgRequest.SerializeToString,
@@ -913,6 +928,9 @@ class BoxdApiServicer(object):
         covering <vm>.preview.mysaas.com for every org-billed VM). Same
         already-pointed-DNS expectation as AddCustomDomain, this time NS
         delegation. Set/Clear require org admin; Get is readable by any org member.
+        An org has at most one domain in each region, set through that region's
+        API (`region` names it; "" is the region the endpoint serves), and the
+        domain is delegated to that region's nameservers (ns1 and ns2 of its zone).
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -1559,6 +1577,33 @@ class BoxdApiServicer(object):
 
     def RequestOrgMachineLimit(self, request, context):
         """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListRegions(self, request, context):
+        """The regions boxd runs in. Each has its own API endpoint and DNS zone,
+        and a machine, snapshot or disk lives in one of them. An org can use
+        its home region and the regions enabled for it; ListRegions says which,
+        for an org you belong to. An org admin can ask for another region with
+        RequestOrgRegion (with their login, or an API key of theirs issued for
+        the org; a token minted inside a machine can't); boxd enables it.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RequestOrgRegion(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def FindElsewhere(self, request, context):
+        """Where else a name is: the regions where your orgs have a machine, snapshot,
+        disk or template of that name, and close names (one or two letters off).
+        Answers "not found here" with where to look instead.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -2283,6 +2328,21 @@ def add_BoxdApiServicer_to_server(servicer, server):
                     servicer.RequestOrgMachineLimit,
                     request_deserializer=api__pb2.RequestOrgMachineLimitRequest.FromString,
                     response_serializer=api__pb2.RequestOrgMachineLimitResponse.SerializeToString,
+            ),
+            'ListRegions': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListRegions,
+                    request_deserializer=api__pb2.ListRegionsRequest.FromString,
+                    response_serializer=api__pb2.ListRegionsResponse.SerializeToString,
+            ),
+            'RequestOrgRegion': grpc.unary_unary_rpc_method_handler(
+                    servicer.RequestOrgRegion,
+                    request_deserializer=api__pb2.RequestOrgRegionRequest.FromString,
+                    response_serializer=api__pb2.RequestOrgRegionResponse.SerializeToString,
+            ),
+            'FindElsewhere': grpc.unary_unary_rpc_method_handler(
+                    servicer.FindElsewhere,
+                    request_deserializer=api__pb2.FindElsewhereRequest.FromString,
+                    response_serializer=api__pb2.FindElsewhereResponse.SerializeToString,
             ),
             'CreateOrg': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateOrg,
@@ -5453,6 +5513,87 @@ class BoxdApi(object):
             '/boxd.api.v1.BoxdApi/RequestOrgMachineLimit',
             api__pb2.RequestOrgMachineLimitRequest.SerializeToString,
             api__pb2.RequestOrgMachineLimitResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListRegions(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/ListRegions',
+            api__pb2.ListRegionsRequest.SerializeToString,
+            api__pb2.ListRegionsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RequestOrgRegion(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/RequestOrgRegion',
+            api__pb2.RequestOrgRegionRequest.SerializeToString,
+            api__pb2.RequestOrgRegionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def FindElsewhere(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/FindElsewhere',
+            api__pb2.FindElsewhereRequest.SerializeToString,
+            api__pb2.FindElsewhereResponse.FromString,
             options,
             channel_credentials,
             insecure,

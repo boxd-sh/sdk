@@ -46,6 +46,7 @@ import type {
   OrgMemberInfo,
   OrgSummary,
   ProxyInfo,
+  Region as WireRegion,
   RequestOrgMachineLimitResponse,
   ResizeVmResponse,
   UpdateMachineSpecResponse,
@@ -327,6 +328,12 @@ export interface Machine {
    * `/var/log/boxd/packages.log` in the machine.
    */
   packages: MachinePackage[];
+  /**
+   * The region the machine lives in (`"fra"`, `"nyc"`, ...). Pass it as
+   * `{ region }` to reach the machine from a client set to another region.
+   * `null` when boxd runs in one place.
+   */
+  region: string | null;
 }
 
 /**
@@ -565,8 +572,12 @@ export function toMachineSource(s: VmSource | undefined): MachineSource | null {
   };
 }
 
-/** `consoleOrigin` fills `access.desktopUrl`; the caller has it, the wire does not. */
-export function toMachine(v: GetVmResponse, consoleOrigin = ""): Machine {
+/**
+ * `consoleOrigin` fills `access.desktopUrl`; the caller has it, the wire does
+ * not. `region` is where the machine was listed from, for a server that does
+ * not say (one that predates regions).
+ */
+export function toMachine(v: GetVmResponse, consoleOrigin = "", region?: string): Machine {
   // `billingOrg`/`billingOrgId` name the machine's org whether or not it is
   // shared. `org`/`orgId` are the same org, blanked when it is private — so
   // they answer "is it shared", and nothing else.
@@ -618,6 +629,7 @@ export function toMachine(v: GetVmResponse, consoleOrigin = ""): Machine {
     createdByName: v.createdByName || null,
     requirements: (v.requirements ?? []).map(toMachineRequirement),
     packages: (v.packages ?? []).map(toMachinePackage),
+    region: v.region || region || null,
   };
 }
 
@@ -726,6 +738,7 @@ export function toMachineFromCreate(v: {
     createdByName: null,
     requirements: [],
     packages: [],
+    region: null,
   };
 }
 
@@ -1087,9 +1100,11 @@ export interface Snapshot {
    * nor can it be saved again, until an operator unarchives it.
    */
   archived: boolean;
+  /** The region the snapshot lives in. `null` when boxd runs in one place. */
+  region: string | null;
 }
 
-export function toSnapshot(s: SnapshotInfo): Snapshot {
+export function toSnapshot(s: SnapshotInfo, region?: string): Snapshot {
   return {
     id: s.snapshotId,
     name: s.name,
@@ -1104,6 +1119,7 @@ export function toSnapshot(s: SnapshotInfo): Snapshot {
     // A server that predates archiving sends neither: on local disk.
     storage: s.storage || "local",
     archived: s.archived ?? false,
+    region: s.region || region || null,
   };
 }
 
@@ -1155,6 +1171,8 @@ export interface Disk {
   /** `null` on disks created before the platform recorded a creation time. */
   createdAt: Date | null;
   attachments: DiskAttachment[];
+  /** The region the disk lives in. `null` when boxd runs in one place. */
+  region: string | null;
 }
 
 function toDiskAttachment(a: WireDiskAttachment): DiskAttachment {
@@ -1166,7 +1184,7 @@ function toDiskAttachment(a: WireDiskAttachment): DiskAttachment {
   };
 }
 
-export function toDisk(d: DiskInfo): Disk {
+export function toDisk(d: DiskInfo, region?: string): Disk {
   return {
     id: d.diskId,
     name: d.name,
@@ -1174,6 +1192,7 @@ export function toDisk(d: DiskInfo): Disk {
     status: d.status as DiskStatus,
     createdAt: optionalMillisToDate(d.createdAt),
     attachments: (d.attachments ?? []).map(toDiskAttachment),
+    region: d.region || region || null,
   };
 }
 
@@ -1277,6 +1296,11 @@ export interface OrgDomain {
   status: string;
   /** Empty when active / healthy. */
   lastError: string;
+  /**
+   * The region the domain is bound in: an org has at most one domain in each.
+   * `null` when boxd runs in one place.
+   */
+  region: string | null;
 }
 
 export function toOrgDomain(d: OrgDomainInfo): OrgDomain {
@@ -1285,6 +1309,7 @@ export function toOrgDomain(d: OrgDomainInfo): OrgDomain {
     domain: d.domain,
     status: d.status,
     lastError: d.lastError,
+    region: d.region || null,
   };
 }
 
@@ -1324,6 +1349,11 @@ export interface OrgMachineDefaults {
   /** The org quota. A create or resize above it is refused, never clamped. */
   ceilingVcpu: number;
   ceilingMemoryBytes: number;
+  /**
+   * The org's default region for new machines and disks. `null` = not set.
+   * See {@link Orgs.setDefaultRegion}.
+   */
+  region: string | null;
 }
 
 export function toOrgMachineDefaults(d: GetOrgMachineDefaultsResponse): OrgMachineDefaults {
@@ -1334,7 +1364,82 @@ export function toOrgMachineDefaults(d: GetOrgMachineDefaultsResponse): OrgMachi
     memoryBytes: d.memoryBytes,
     ceilingVcpu: d.ceilingVcpu,
     ceilingMemoryBytes: d.ceilingMemoryBytes,
+    region: d.region || null,
   };
+}
+
+// ─── Regions ─────────────────────────────────────────────────────────────
+
+/**
+ * Where an org stands with a region: `"enabled"` (it can use it; its home
+ * region always is), `"requested"` (an org admin asked and boxd has yet to
+ * enable it) or `"available"` (it can ask with {@link Orgs.requestRegion}).
+ */
+export type RegionOrgState = "enabled" | "requested" | "available";
+
+/**
+ * A region boxd runs in. Each has its own API endpoint, and a machine,
+ * snapshot or disk lives in exactly one of them.
+ */
+export interface Region {
+  /** A short code, e.g. `"fra"`: what `region` takes. */
+  id: string;
+  /** E.g. `"Frankfurt"`. */
+  name: string;
+  /** Machines here are reached at `<name>.<zone>`. */
+  zone: string;
+  apiEndpoint: string;
+  consoleEndpoint: string;
+  latitude: number;
+  longitude: number;
+  /** Accounts, orgs, keys and billing live in the home region. */
+  home: boolean;
+  /** Where the org asked about stands with this region. A plain string, so a
+   *  state added later doesn't break older clients. */
+  orgState: RegionOrgState | (string & {});
+}
+
+export function toRegion(r: WireRegion): Region {
+  return {
+    id: r.id,
+    name: r.name,
+    zone: r.zone,
+    apiEndpoint: r.apiEndpoint,
+    consoleEndpoint: r.consoleEndpoint,
+    latitude: r.latitude,
+    longitude: r.longitude,
+    home: r.home,
+    orgState: r.orgState,
+  };
+}
+
+/** How many of something the org has in one other region. */
+export interface RegionCount {
+  region: string;
+  count: number;
+}
+
+/**
+ * A plain array of what a `list()` call found, plus where else there is
+ * more. `elsewhere` counts what the org has in each OTHER region, for a list
+ * of one region. `unavailable` names the regions a `{ region: "all" }` list
+ * could not reach just now; their items are missing.
+ */
+export type RegionalList<T> = T[] & {
+  elsewhere: RegionCount[];
+  unavailable: string[];
+};
+
+/** @internal */
+export function toRegionalList<T>(
+  items: T[],
+  elsewhere: Array<{ region: string; count: number }> = [],
+  unavailable: string[] = [],
+): RegionalList<T> {
+  return Object.assign(items, {
+    elsewhere: elsewhere.map((c) => ({ region: c.region, count: Number(c.count) })),
+    unavailable,
+  });
 }
 
 /** An open request for a higher machine limit. */
@@ -1612,7 +1717,10 @@ export interface Team {
    */
   isAdmin: boolean;
   members: TeamMember[];
-  /** `null` when no default is set. */
+  /**
+   * The default snapshot in the region the call went to (each region has
+   * its own); `null` when none is set there.
+   */
   defaultSnapshotId: string | null;
 }
 

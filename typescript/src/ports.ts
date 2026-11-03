@@ -1,4 +1,5 @@
 import type { Transport } from "./_rpc.js";
+import type { RegionOption } from "./regions.js";
 import { BoxdApiDefinition } from "./_generated/definitions.js";
 import { toExposedPort, type ExposedPort, type PortProtocol } from "./models.js";
 import type {
@@ -26,18 +27,22 @@ export class MachinePorts {
   async expose(
     id: string,
     port: number,
-    params: { protocol?: PortProtocol } = {},
+    params: { protocol?: PortProtocol } & RegionOption = {},
   ): Promise<ExposedPort> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.exposePort,
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.exposePort,
       { vm: id, vmId: "", vmPort: port, protocol: params.protocol ?? "tcp" },
+      { region: params.region },
     );
     return toExposedPort(resp);
   }
 
   /** Remove the forward and free its public port. Echoes back what was removed. */
-  async unexpose(id: string, port: number): Promise<ExposedPort> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.unexposePort,
+  async unexpose(id: string, port: number, opts: RegionOption = {}): Promise<ExposedPort> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.unexposePort,
       { vm: id, vmId: "", vmPort: port },
+      { region: opts.region },
     );
     return toExposedPort(resp.forward!);
   }
@@ -46,9 +51,11 @@ export class MachinePorts {
    * Forwards for one machine, or — with no argument — every forward you own
    * across the account.
    */
-  async list(id?: string): Promise<ExposedPort[]> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.listExposedPorts,
+  async list(id?: string, opts: RegionOption = {}): Promise<ExposedPort[]> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.listExposedPorts,
       { vm: id ?? "" },
+      { region: opts.region },
     );
     return (resp.forwards ?? []).map(toExposedPort);
   }

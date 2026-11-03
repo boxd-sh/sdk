@@ -1,4 +1,5 @@
 import type { Transport } from "./_rpc.js";
+import type { RegionOption } from "./regions.js";
 import { BoxdApiDefinition } from "./_generated/definitions.js";
 import { toBackup, toBackupSchedule, type Backup, type BackupSchedule } from "./models.js";
 import type {
@@ -28,9 +29,11 @@ export class MachineBackups {
   constructor(private readonly transport: Transport) {}
 
   /** `null` means backups are off. */
-  async schedule(id: string): Promise<BackupSchedule | null> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.getBackupSchedule,
+  async schedule(id: string, opts: RegionOption = {}): Promise<BackupSchedule | null> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.getBackupSchedule,
       { vm: id },
+      { region: opts.region },
     );
     return toBackupSchedule(resp);
   }
@@ -42,51 +45,64 @@ export class MachineBackups {
    */
   async setSchedule(
     id: string,
-    opts: { intervalSecs: number; retentionSecs: number } | { cron: string; retentionSecs: number },
+    opts: ({ intervalSecs: number; retentionSecs: number } | { cron: string; retentionSecs: number }) &
+      RegionOption,
   ): Promise<void> {
     const [scheduleKind, scheduleValue] =
       "intervalSecs" in opts ? (["interval", String(opts.intervalSecs)] as const) : (["cron", opts.cron] as const);
-    await this.transport.unary(BoxdApiDefinition.methods.setBackupSchedule,
+    await this.transport.unary(
+      BoxdApiDefinition.methods.setBackupSchedule,
       { vm: id, scheduleKind, scheduleValue, retentionSecs: opts.retentionSecs },
+      { region: opts.region },
     );
   }
 
   /** Disable backups for this machine. */
-  async clearSchedule(id: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.clearBackupSchedule,
+  async clearSchedule(id: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.clearBackupSchedule,
       { vm: id },
+      { region: opts.region },
     );
   }
 
-  async list(id: string): Promise<Backup[]> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.listBackups,
+  async list(id: string, opts: RegionOption = {}): Promise<Backup[]> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.listBackups,
       { vm: id },
+      { region: opts.region },
     );
     return (resp.backups ?? []).map(toBackup);
   }
 
   /** Back up the machine's disk right now, regardless of any schedule.
    * Resolves to the id of the queued backup. */
-  async trigger(id: string): Promise<string> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.triggerBackup,
+  async trigger(id: string, opts: RegionOption = {}): Promise<string> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.triggerBackup,
       { vm: id },
+      { region: opts.region },
     );
     return resp.backupId;
   }
 
   /** Delete a single backup. Rejected while it is still being captured or
    * while a newer unchanged-since backup still points at it. */
-  async delete(id: string, backupId: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.deleteBackup,
+  async delete(id: string, backupId: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.deleteBackup,
       { vm: id, backupId },
+      { region: opts.region },
     );
   }
 
   /** Restore the machine's disk from a backup IN PLACE. Destructive: overwrites
    * the machine's current disk; anything since is lost. */
-  async restore(id: string, backupId: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.restoreBackup,
+  async restore(id: string, backupId: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.restoreBackup,
       { vm: id, backupId },
+      { region: opts.region },
     );
   }
 }

@@ -1,13 +1,20 @@
 import { Credentials } from "./auth.js";
 import type { Platform } from "./_platform.js";
+import {
+  RegionRouter,
+  checkClientRegion,
+  type DirectRouting,
+  type RegionTransportFactory,
+} from "./_regions.js";
 import type { Transport } from "./_rpc.js";
-import { deriveExchangeUrl, readEnv } from "./utils.js";
+import { deriveExchangeUrl, rawKeyAllowed, readEnv } from "./utils.js";
 import { AccountNamespace } from "./account.js";
 import { ApiKeys } from "./apiKeys.js";
 import { Disks } from "./disks.js";
 import { Domains } from "./domains.js";
 import { Machines } from "./machines.js";
 import { Orgs } from "./orgs.js";
+import { Regions } from "./regions.js";
 import { Snapshots } from "./snapshots.js";
 import { Teams } from "./teams.js";
 import { EnvVars, Secrets } from "./vars.js";
@@ -22,7 +29,11 @@ export const DEFAULT_TIMEOUT_MS = 60_000;
 export const DEFAULT_MAX_RETRIES = 2;
 
 export interface BoxdOptions {
-  /** API key. Exchanged for a session token and kept fresh. `BOXD_API_KEY`. */
+  /**
+   * API key. `BOXD_API_KEY`. Sent as the bearer itself over TLS (or to a
+   * loopback address); otherwise, and against a server too old to take it,
+   * exchanged for a session token that is kept fresh.
+   */
   apiKey?: string;
   /** A token, used verbatim and never refreshed. `BOXD_TOKEN`. */
   token?: string;
@@ -32,6 +43,13 @@ export interface BoxdOptions {
    * client at that machine's own cluster — so the same code runs anywhere.
    */
   baseURL?: string;
+  /**
+   * The region machines, snapshots and disks are created in and looked up in
+   * (`"fra"`, `"nyc"`, ...). `BOXD_REGION`. Defaults to the region `baseURL`
+   * serves. Account and org calls always go to `baseURL`. Every such method
+   * also takes its own `{ region }`.
+   */
+  region?: string;
   /** Per-request deadline in milliseconds. Default 60s. */
   timeout?: number;
   /** Retries on connection failures. Default 2. */
@@ -55,6 +73,7 @@ export function resolveOptions(
   defaultBaseURL: string;
   timeoutMs: number;
   maxRetries: number;
+  region?: string;
 } {
   const explicitBaseURL =
     opts.baseURL ?? readEnv("BOXD_BASE_URL") ?? readEnv("BOXD_API_URL") ?? undefined;
@@ -67,7 +86,30 @@ export function resolveOptions(
     exchangeUrl: deriveExchangeUrl(explicitBaseURL ?? DEFAULT_BASE_URL),
     readFile: platform.readFile,
   });
-  return { creds, explicitBaseURL, defaultBaseURL: DEFAULT_BASE_URL, timeoutMs, maxRetries };
+  const region = checkClientRegion(opts.region ?? readEnv("BOXD_REGION"));
+  return {
+    creds,
+    explicitBaseURL,
+    defaultBaseURL: DEFAULT_BASE_URL,
+    timeoutMs,
+    maxRetries,
+    region,
+  };
+}
+
+/**
+ * What the region router needs to send a call straight to a region (direct
+ * mode, `_regions.ts`): home's base URL, resolved as the home transport
+ * resolves it, and whether a call to an endpoint carries the API key itself.
+ */
+export function directRouting(
+  resolved: Pick<ReturnType<typeof resolveOptions>, "creds" | "explicitBaseURL" | "defaultBaseURL">,
+): DirectRouting {
+  const { creds, explicitBaseURL, defaultBaseURL } = resolved;
+  return {
+    homeBaseURL: async () => explicitBaseURL ?? (await creds.clusterUrl()) ?? defaultBaseURL,
+    sendsRawKey: (baseURL) => creds.sendsRawKey(rawKeyAllowed(baseURL)),
+  };
 }
 
 /**
@@ -82,7 +124,7 @@ export function resolveOptions(
  * goes for Node builtins: the entry passes a {@link Platform} instead.
  */
 export class BoxdCore {
-  readonly #transport: Transport;
+  readonly #transport: RegionRouter;
 
   readonly machines: Machines;
   readonly snapshots: Snapshots;
@@ -94,8 +136,21 @@ export class BoxdCore {
   readonly teams: Teams;
   readonly apiKeys: ApiKeys;
   readonly account: AccountNamespace;
+  /** The regions boxd runs in, and which ones your org can use. */
+  readonly regions: Regions;
 
-  constructor(transport: Transport, platform: Platform) {
+  /**
+   * `home` talks to `baseURL`; `connect` makes a transport for another
+   * region's endpoint, sharing the credential; `direct` lets a call skip
+   * asking home where a region is ({@link directRouting}). Every namespace
+   * gets the region router built from them.
+   */
+  constructor(
+    home: Transport,
+    platform: Platform,
+    regions: { region?: string; connect: RegionTransportFactory; direct?: DirectRouting },
+  ) {
+    const transport = new RegionRouter(home, regions);
     this.#transport = transport;
     // Namespaces get the transport, never `this` — that is what keeps the
     // wire plumbing off the client's public surface.
@@ -109,6 +164,13 @@ export class BoxdCore {
     this.teams = new Teams(transport);
     this.apiKeys = new ApiKeys(transport);
     this.account = new AccountNamespace(transport);
+    this.regions = new Regions(transport);
+  }
+
+  /** The client's region (`region` or `BOXD_REGION`); `undefined` = the
+   *  region `baseURL` serves. */
+  get region(): string | undefined {
+    return this.#transport.region;
   }
 
   /** Close the channel. Safe to call more than once. */

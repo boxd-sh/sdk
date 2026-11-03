@@ -27,46 +27,58 @@ def dns_instructions(domain: str, *, machine_name: str, machine_ip: str, zone: s
 class Domains(Namespace):
     """Bind, list, and remove custom domains on your machines."""
 
-    def create(self, domain: str, machine_id: str) -> CustomDomain:
+    def create(
+        self, domain: str, machine_id: str, *, region: str | None = None
+    ) -> CustomDomain:
         """Point `domain` at a machine. DNS must already be set — see module docs."""
         resp = self._transport.call(
             "AddCustomDomain",
             api_pb2.AddCustomDomainRequest(domain=domain, vm_id=machine_id),
+            region=region,
         )
         return m.custom_domain(resp.domain)
 
-    def list(self) -> list[CustomDomain]:
+    def list(self, *, region: str | None = None) -> list[CustomDomain]:
         """List custom domains bound to machines you own."""
-        resp = self._transport.call("ListCustomDomains", api_pb2.ListCustomDomainsRequest())
+        resp = self._transport.call(
+            "ListCustomDomains", api_pb2.ListCustomDomainsRequest(), region=region
+        )
         return [m.custom_domain(d) for d in resp.domains]
 
-    def delete(self, domain: str) -> None:
+    def delete(self, domain: str, *, region: str | None = None) -> None:
         """Remove a domain binding."""
         self._transport.call(
-            "RemoveCustomDomain", api_pb2.RemoveCustomDomainRequest(domain=domain)
+            "RemoveCustomDomain",
+            api_pb2.RemoveCustomDomainRequest(domain=domain),
+            region=region,
         )
 
 
 class AsyncDomains(Namespace):
     """Async twin of :class:`Domains`."""
 
-    async def create(self, domain: str, machine_id: str) -> CustomDomain:
+    async def create(
+        self, domain: str, machine_id: str, *, region: str | None = None
+    ) -> CustomDomain:
         """Point `domain` at a machine. DNS must already be set — see module docs."""
         resp = await self._transport.call(
             "AddCustomDomain",
             api_pb2.AddCustomDomainRequest(domain=domain, vm_id=machine_id),
+            region=region,
         )
         return m.custom_domain(resp.domain)
 
-    async def list(self) -> list[CustomDomain]:
+    async def list(self, *, region: str | None = None) -> list[CustomDomain]:
         """List custom domains bound to machines you own."""
         resp = await self._transport.call(
-            "ListCustomDomains", api_pb2.ListCustomDomainsRequest()
+            "ListCustomDomains", api_pb2.ListCustomDomainsRequest(), region=region
         )
         return [m.custom_domain(d) for d in resp.domains]
 
-    async def delete(self, domain: str) -> None:
+    async def delete(self, domain: str, *, region: str | None = None) -> None:
         """Remove a domain binding."""
         await self._transport.call(
-            "RemoveCustomDomain", api_pb2.RemoveCustomDomainRequest(domain=domain)
+            "RemoveCustomDomain",
+            api_pb2.RemoveCustomDomainRequest(domain=domain),
+            region=region,
         )

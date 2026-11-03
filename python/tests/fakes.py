@@ -32,11 +32,13 @@ class FakeRpcError(grpc.RpcError):
 class FakeTransport:
     """Records `(method, request)` and returns queued responses.
 
-    A queued item that is an exception is raised instead of returned.
+    A queued item that is an exception is raised instead of returned. The
+    `region=` each call was given lands in `regions`, in step with `calls`.
     """
 
     def __init__(self, responses=None):
         self.calls: list[tuple[str, object]] = []
+        self.regions: list[str | None] = []
         self._responses = list(responses or [])
 
     @property
@@ -45,8 +47,15 @@ class FakeTransport:
         `access.desktop_url` from it."""
         return "https://app.boxd.sh"
 
-    def _next(self, method, request):
+    def console_origin_for(self, region) -> str:
+        return self.console_origin
+
+    def find_elsewhere(self, err, method, request, *, region=None):
+        return err
+
+    def _next(self, method, request, region=None):
         self.calls.append((method, request))
+        self.regions.append(region)
         if not self._responses:
             return None
         item = self._responses.pop(0)
@@ -54,27 +63,31 @@ class FakeTransport:
             raise item
         return item
 
-    def call(self, method, request):
-        return self._next(method, request)
+    def call(self, method, request, *, region=None):
+        return self._next(method, request, region)
 
-    def server_stream(self, method, request):
-        return iter(self._next(method, request) or [])
+    def server_stream(self, method, request, *, region=None):
+        return iter(self._next(method, request, region) or [])
 
-    def bidi(self, method, requests, *, timeout=None):
+    def bidi(self, method, requests, *, timeout=None, region=None, machine=None):
         # Drain the request iterator so tests can assert on what was sent.
         self.sent = list(requests)
         self.bidi_timeout = timeout
-        return iter(self._next(method, self.sent) or [])
+        self.bidi_machine = machine
+        return iter(self._next(method, self.sent, region) or [])
 
 
 class FakeAsyncTransport(FakeTransport):
     """Async twin — same recording, awaited."""
 
-    async def call(self, method, request):
-        return self._next(method, request)
+    async def find_elsewhere(self, err, method, request, *, region=None):
+        return err
 
-    async def server_stream(self, method, request):
-        items = self._next(method, request) or []
+    async def call(self, method, request, *, region=None):
+        return self._next(method, request, region)
+
+    async def server_stream(self, method, request, *, region=None):
+        items = self._next(method, request, region) or []
 
         async def gen():
             for item in items:
@@ -82,10 +95,11 @@ class FakeAsyncTransport(FakeTransport):
 
         return gen()
 
-    async def bidi(self, method, requests, *, timeout=None):
+    async def bidi(self, method, requests, *, timeout=None, region=None, machine=None):
         self.sent = [chunk async for chunk in requests]
         self.bidi_timeout = timeout
-        items = self._next(method, self.sent) or []
+        self.bidi_machine = machine
+        items = self._next(method, self.sent, region) or []
 
         async def gen():
             for item in items:
@@ -106,6 +120,13 @@ class FakeCredentials:
     def token(self):
         self.fetches += 1
         return self.value
+
+    def raw_key(self, *, allowed):
+        """A token, never an API key sent as itself."""
+        return None
+
+    def raw_key_refused(self):
+        pass
 
 
 class FakeAsyncCredentials(FakeCredentials):

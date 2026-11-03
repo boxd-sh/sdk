@@ -80,6 +80,9 @@ service BoxdApi {
   // covering <vm>.preview.mysaas.com for every org-billed VM). Same
   // already-pointed-DNS expectation as AddCustomDomain, this time NS
   // delegation. Set/Clear require org admin; Get is readable by any org member.
+  // An org has at most one domain in each region, set through that region's
+  // API (`region` names it; "" is the region the endpoint serves), and the
+  // domain is delegated to that region's nameservers (ns1 and ns2 of its zone).
   rpc SetOrgDomain(SetOrgDomainRequest)     returns (SetOrgDomainResponse);
   rpc GetOrgDomain(GetOrgDomainRequest)     returns (GetOrgDomainResponse);
   rpc ClearOrgDomain(ClearOrgDomainRequest) returns (ClearOrgDomainResponse);
@@ -307,6 +310,19 @@ service BoxdApi {
   rpc GetOrgMachineLimit(GetOrgMachineLimitRequest)         returns (GetOrgMachineLimitResponse);
   rpc RequestOrgMachineLimit(RequestOrgMachineLimitRequest) returns (RequestOrgMachineLimitResponse);
 
+  // The regions boxd runs in. Each has its own API endpoint and DNS zone,
+  // and a machine, snapshot or disk lives in one of them. An org can use
+  // its home region and the regions enabled for it; ListRegions says which,
+  // for an org you belong to. An org admin can ask for another region with
+  // RequestOrgRegion (with their login, or an API key of theirs issued for
+  // the org; a token minted inside a machine can't); boxd enables it.
+  rpc ListRegions(ListRegionsRequest)             returns (ListRegionsResponse);
+  rpc RequestOrgRegion(RequestOrgRegionRequest)   returns (RequestOrgRegionResponse);
+  // Where else a name is: the regions where your orgs have a machine, snapshot,
+  // disk or template of that name, and close names (one or two letters off).
+  // Answers "not found here" with where to look instead.
+  rpc FindElsewhere(FindElsewhereRequest)         returns (FindElsewhereResponse);
+
   // Org creation, roster, and membership (self-serve, same business rules as
   // the console). Any signed-in
   // user may create an org (becomes its owner+admin); invite/revoke/remove/
@@ -487,6 +503,19 @@ message CreateVmRequest {
   // refused, naming it. A spec whose base is a snapshot restores that
   // snapshot, as CreateVmFromSnapshot does.
   MachineSpec spec = 15;
+  // Delete-after timer the machine is born with, written together with the
+  // machine itself, so it never exists without the timer: permanently delete
+  // it `delete_after_secs` seconds of wall-clock time after it is created,
+  // or at the next match of `delete_after_cron` (UTC, e.g. "0 18 * * *").
+  // Same rules and errors as SetDeleteAfter: one or the other, not both.
+  // Unset, zero or empty: no timer. Refused for a machine created for
+  // someone else (`spec.assign_to`): it is theirs to manage. Change or clear
+  // the timer later with SetDeleteAfter. The response's `machine` shows it
+  // (`delete_at_ms`, `delete_after_cron`). A server from before these
+  // fields ignores them and answers without `machine`: a client that gets
+  // no `machine` back sets the timer with SetDeleteAfter itself.
+  optional uint64 delete_after_secs = 16;
+  optional string delete_after_cron = 17;
 }
 
 // What a machine spec boots from.
@@ -603,6 +632,12 @@ message CreateVmResponse {
   // handled twice; `run restart <id>` inside it starts one there. 0 for a
   // plain create, or a snapshot that captured none.
   uint32 paused_automations = 8;
+  // The new machine, as GetVm returns it, delete-after timer included, so
+  // a create needs no GetVm after it. Unset when the server could not read
+  // the machine back in time (rare) or the caller may not read it (a
+  // machine created for someone else), and from servers older than this
+  // field: call GetVm then.
+  GetVmResponse machine = 9;
 }
 
 message DestroyVmRequest  { string vm_id = 1; }
@@ -882,6 +917,8 @@ message GetVmResponse {
   // SSH is off: nothing answers on `ssh_port` (see NetworkConfig.ssh). The
   // port stays allocated. Inverted so a server that predates it reads as on.
   bool ssh_disabled = 41;
+  // The region the machine lives in; "" when boxd runs in one place.
+  string region = 42;
 }
 
 // Patch a machine's spec (GetVmResponse.spec).
@@ -1084,6 +1121,8 @@ message ListVmsRequest {
   // the value) or "key" (the machine has the label); entries are ANDed.
   // Empty = no filter.
   repeated string label_selector = 3;
+  // Also count the org's machines in its other regions (`elsewhere`).
+  bool with_elsewhere = 4;
 }
 message ListVmsResponse {
   repeated GetVmResponse vms = 1;
@@ -1091,6 +1130,8 @@ message ListVmsResponse {
   // (`ssh-ed25519 AAAA...`). All VM SSH connections terminate at the proxy and
   // present this key, so the CLI writes one `known_hosts` line per VM with it.
   string ssh_host_key = 2;
+  // With `with_elsewhere`: how many machines the org has in each other region.
+  repeated RegionCount elsewhere = 3;
 }
 
 // Logs and exec
@@ -1194,6 +1235,7 @@ message CustomDomainInfo {
 message SetOrgDomainRequest {
   string org_id = 1;
   string domain = 2;  // bare apex, e.g. "preview.mysaas.com" (wildcard implied)
+  string region = 3;  // "" = the region this endpoint serves
 }
 
 message SetOrgDomainResponse {
@@ -1202,6 +1244,7 @@ message SetOrgDomainResponse {
 
 message GetOrgDomainRequest {
   string org_id = 1;
+  string region = 2;  // "" = the region this endpoint serves
 }
 
 message GetOrgDomainResponse {
@@ -1213,6 +1256,7 @@ message GetOrgDomainResponse {
 
 message ClearOrgDomainRequest {
   string org_id = 1;
+  string region = 2;  // "" = the region this endpoint serves
 }
 
 message ClearOrgDomainResponse {}
@@ -1222,6 +1266,7 @@ message OrgDomainInfo {
   string domain     = 2;
   string status     = 3;  // "pending" | "active"
   string last_error = 4;
+  string region     = 5;  // where the domain is bound; "" when boxd runs in one place
 }
 
 // Config
@@ -1419,6 +1464,14 @@ message ForkVmRequest {
   // Machine labels. The fork inherits the source's labels; these
   // are merged over them key by key. Same rules as CreateVmRequest.labels.
   map<string, string> labels = 7;
+  // Delete-after timer for the fork. Both unset: the fork inherits its
+  // source's timer, re-armed from the moment of the fork. Either set: this
+  // timer instead, written together with the fork (see
+  // CreateVmRequest.delete_after_secs); zero and empty give the fork no
+  // timer. Same rules and errors as SetDeleteAfter. A server from before
+  // these fields ignores them and answers without `machine`.
+  optional uint64 delete_after_secs = 8;
+  optional string delete_after_cron = 9;
 }
 
 message ForkVmResponse {
@@ -1435,6 +1488,8 @@ message ForkVmResponse {
   // same schedule or webhook is not handled twice; `run restart <id>` inside
   // the fork starts one there. 0 when the source has none.
   uint32 paused_automations = 9;
+  // The fork, as GetVm returns it. Same as CreateVmResponse.machine.
+  GetVmResponse machine = 10;
 }
 
 // Proxies
@@ -1770,9 +1825,12 @@ message ListSnapshotsRequest {
   // Org context (name or id); empty = the caller's active/anchor context.
   // Snapshots never cross an org boundary; key-fenced callers are pinned.
   string org = 1;
+  // Also count the org's snapshots in its other regions (`elsewhere`).
+  bool with_elsewhere = 2;
 }
 message ListSnapshotsResponse {
   repeated SnapshotInfo snapshots = 1;
+  repeated RegionCount elsewhere = 2;
 }
 
 message GetSnapshotRequest {
@@ -1807,6 +1865,10 @@ message CreateVmFromSnapshotRequest {
   // MachineSpec). Its base, if set, must be this snapshot. Can't be combined
   // with `labels` or `isolated`; put them in the spec.
   MachineSpec spec = 7;
+  // Delete-after timer the machine is born with. A snapshot carries no
+  // timer, so unset means none. See CreateVmRequest.delete_after_secs.
+  optional uint64 delete_after_secs = 8;
+  optional string delete_after_cron = 9;
 }
 // Returns a CreateVmResponse — identical shape to `new`, so the CLI renders it
 // the same way.
@@ -1841,6 +1903,8 @@ message SnapshotInfo {
   // `archived` is true for the other three.
   bool   archived         = 15;
   string storage          = 16;
+  // The region the snapshot lives in; "" when boxd runs in one place.
+  string region = 17;
 }
 
 // --- Checkpoints ---
@@ -1909,10 +1973,14 @@ message CreateDiskResponse {
   reserved 5;
 }
 
-message ListDisksRequest {}
+message ListDisksRequest {
+  // Also count your disks in your orgs' other regions (`elsewhere`).
+  bool with_elsewhere = 1;
+}
 
 message ListDisksResponse {
   repeated DiskInfo disks = 1;
+  repeated RegionCount elsewhere = 2;
 }
 
 message DiskInfo {
@@ -1931,6 +1999,8 @@ message DiskInfo {
   reserved 7;
   // Wall-clock unix epoch MILLISECONDS the disk was created.
   int64 created_at = 8;
+  // The region the disk lives in; "" when boxd runs in one place.
+  string region = 9;
 }
 
 message DiskAttachment {
@@ -2409,19 +2479,22 @@ message GetOrgBackupsDefaultResponse {
 }
 
 message SetOrgMachineDefaultsRequest {
-  string org_id = 1;  // name or id; "" = your home org
+  string org_id = 1;  // name or id; "" = your default org (the one a list with no org shows; an API key's own org)
   // Both absent (or 0) clears the org default (default machines size at the
   // org quota). Otherwise names a size class, like a create or resize: one
   // dimension snaps to its class (vcpu 1 = 1 vCPU / 4 GiB); must be within
   // the org quota ceiling and at or above the boot floor (512 MiB, 1 vCPU).
   optional uint32 vcpu         = 2;
   optional uint64 memory_bytes = 3;
+  // The org's default region for new machines and disks: one of its enabled
+  // regions, or "" to clear it. Absent leaves it as it is.
+  optional string region       = 4;
 }
 
 message SetOrgMachineDefaultsResponse {}
 
 message GetOrgMachineDefaultsRequest {
-  string org_id = 1;  // name or id; "" = your home org
+  string org_id = 1;  // name or id; "" = your default org (the one a list with no org shows; an API key's own org)
 }
 
 message ResizeVmRequest {
@@ -2446,6 +2519,9 @@ message GetOrgMachineDefaultsResponse {
   // org may name them whatever its ceiling. Smallest memory first; empty for
   // almost every org.
   repeated GrantedMachineSize granted_sizes = 6;
+  // The org's default region for new machines and disks; "" = none set (clients
+  // then use the closest of the org's regions).
+  string region = 7;
 }
 
 message GrantedMachineSize {
@@ -2720,4 +2796,65 @@ message RequestOrgMachineLimitRequest {
 message RequestOrgMachineLimitResponse {
   int64  requested_at      = 1;  // unix seconds
   uint32 requested_max_vms = 2;
+}
+
+message ListRegionsRequest {
+  string org_id = 1;  // name or id; "" = your default org (the one a list with no org shows; an API key's own org)
+}
+
+message Region {
+  string id               = 1;  // a short code, e.g. "fra"
+  string name             = 2;  // e.g. "Frankfurt"
+  string zone             = 3;  // machines are reached at <name>.<zone>
+  string api_endpoint     = 4;  // the region's API
+  string console_endpoint = 5;
+  double latitude         = 6;
+  double longitude        = 7;
+  bool   home             = 8;  // accounts, billing and settings live in the home region
+  // For the org asked about: "enabled" (it can create here: always the
+  // home region), "requested" (an admin asked), or "available".
+  string org_state        = 9;
+}
+
+message ListRegionsResponse {
+  repeated Region regions = 1;
+  string org_id           = 2;
+  // The region this endpoint serves; "" when boxd runs in one place.
+  string this_region      = 3;
+}
+
+message RequestOrgRegionRequest {
+  string org_id = 1;  // name or id; "" = your default org (the one a list with no org shows; an API key's own org)
+  string region = 2;
+}
+
+message RequestOrgRegionResponse {
+  string state = 1;  // "requested", or "enabled" when the org has it already
+}
+
+message FindElsewhereRequest {
+  string kind = 1;  // machine, snapshot, disk or template
+  string name = 2;
+  string org  = 3;  // org context (name or id); empty = every org you belong to
+}
+
+message ElsewhereItem {
+  string region = 1;
+  string name   = 2;
+  string org_id = 3;
+  string id     = 4;
+}
+
+message RegionCount {
+  string region = 1;
+  uint64 count  = 2;
+}
+
+message FindElsewhereResponse {
+  // The same name, in another region.
+  repeated ElsewhereItem exact      = 1;
+  // A name one or two letters off, in another region; a few at most.
+  repeated ElsewhereItem close      = 2;
+  // Regions that could not be asked just now.
+  repeated string        unavailable = 3;
 }

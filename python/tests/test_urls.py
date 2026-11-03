@@ -1,4 +1,5 @@
-"""Base-URL resolution, the derived exchange URL, and endpoint splitting."""
+"""Base-URL resolution, the derived exchange URL, endpoint splitting, and a
+region's name derived from home's."""
 
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ from boxd._urls import (
     DEFAULT_BASE_URL,
     console_base_url,
     exchange_url_for,
+    region_base_url,
     resolve_base_url,
     resolve_endpoint,
 )
@@ -137,3 +139,44 @@ def test_resolve_endpoint(url, target, tls):
     endpoint = resolve_endpoint(url)
     assert endpoint.target == target
     assert endpoint.use_tls is tls
+
+
+# --- region_base_url ---
+
+
+@pytest.mark.parametrize(
+    "home,expected",
+    [
+        ("https://boxd.example.com:9443", "https://nyc.boxd.example.com:9443"),
+        ("https://boxd.example.com:9443/", "https://nyc.boxd.example.com:9443"),
+        ("http://boxd.example.com:9443", "http://nyc.boxd.example.com:9443"),
+        ("boxd.example.com:9443", "nyc.boxd.example.com:9443"),
+        ("https://Boxd.Example.com", "https://nyc.boxd.example.com"),
+    ],
+)
+def test_a_region_is_named_after_homes_host_on_its_scheme_and_port(home, expected):
+    assert region_base_url(home, "nyc") == expected
+
+
+@pytest.mark.parametrize(
+    "home",
+    [
+        "https://192.0.2.10:9443",
+        "https://[2001:db8::1]:9443",
+        "http://localhost:9443",
+        "https://api.localhost:9443",
+        "http://127.0.0.1:9443",
+        "https://boxd:9443",
+        "https://boxd.example.com:9443/api",
+        "https://boxd.example.com:port",
+    ],
+)
+def test_no_region_name_under_an_address_localhost_or_one_label(home):
+    assert region_base_url(home, "nyc") is None
+
+
+def test_a_region_is_one_label():
+    assert region_base_url("https://boxd.example.com:9443", "us-east") == (
+        "https://us-east.boxd.example.com:9443"
+    )
+    assert region_base_url("https://boxd.example.com:9443", "n.yc") is None

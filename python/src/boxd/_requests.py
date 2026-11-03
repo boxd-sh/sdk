@@ -195,6 +195,19 @@ def fork_vm(
     return request
 
 
+def set_create_delete_after(request, seconds: int | None, cron: str | None) -> None:
+    """The delete-after timer a create, restore or fork carries, so the
+    server writes it together with the machine. Neither given: nothing is
+    sent (a create gets no timer, a fork keeps its source's). Both: refused
+    before the round trip, as :func:`set_delete_after` does."""
+    if seconds and cron:
+        raise ValueError("pass delete_after or delete_after_cron, not both")
+    if seconds is not None:
+        request.delete_after_secs = seconds
+    if cron is not None:
+        request.delete_after_cron = cron
+
+
 def label_selector(
     labels: Mapping[str, str] | Sequence[str] | None,
 ) -> list[str]:
@@ -238,11 +251,13 @@ def list_vms(
     org: str | None,
     all_contexts: bool,
     labels: Mapping[str, str] | Sequence[str] | None = None,
+    with_elsewhere: bool = False,
 ) -> api_pb2.ListVmsRequest:
     return api_pb2.ListVmsRequest(
         org=org or "",
         all_contexts=all_contexts,
         label_selector=label_selector(labels),
+        with_elsewhere=with_elsewhere,
     )
 
 
@@ -512,18 +527,26 @@ def move_var(
 
 
 def set_org_machine_defaults(
-    *, org: str | None, vcpu: int | None, memory: int | str | None
+    *,
+    org: str | None,
+    vcpu: int | None,
+    memory: int | str | None,
+    region: str | None = None,
 ) -> api_pb2.SetOrgMachineDefaultsRequest:
     """Build a `SetOrgMachineDefaults` request.
 
-    Both fields are `optional` on the wire, and absence is what clears the
+    Both size fields are `optional` on the wire, and absence is what clears the
     default — so an unset argument must stay unset rather than become 0.
+    `region` is `optional` too: absent leaves the org's default region as it
+    is, "" clears it.
     """
     request = api_pb2.SetOrgMachineDefaultsRequest(org_id=org or "")
     if vcpu is not None:
         request.vcpu = vcpu
     if memory is not None:
         request.memory_bytes = parse_size(memory)
+    if region is not None:
+        request.region = region
     return request
 
 

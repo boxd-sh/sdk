@@ -32,10 +32,10 @@ import {
 import { BoxdApiDefinition } from "./_generated/definitions.js";
 import { maybeNotifyUpdate, VERSION_REQUEST_HEADER, VERSION_RESPONSE_HEADER } from "./_versionCheck.js";
 import { VERSION } from "./_version.js";
-import type { Credentials } from "./auth.js";
+import { DirectKey, type Credentials } from "./auth.js";
 import { fromGrpcError } from "./errors.js";
 import { withRetries } from "./_retry.js";
-import { consoleBaseUrl, resolveEndpoint } from "./utils.js";
+import { consoleBaseUrl, isLoopbackHost, resolveEndpoint } from "./utils.js";
 import type {
   DuplexCall,
   MethodDef,
@@ -56,6 +56,16 @@ export interface TransportOptions {
   creds: Credentials;
   /** Explicit endpoint. Unset lets the surrounding machine name its cluster. */
   explicitBaseURL?: string;
+  /** A region's endpoint, looked up when the channel is first dialled
+   *  (`_regions.ts`). Wins over everything else. */
+  resolveBaseURL?: () => Promise<string>;
+  /**
+   * The endpoint is a region's name derived from home's, not one home named
+   * (`_regions.ts`, direct mode). A failure here goes back to the router,
+   * which asks home and sends the call again: no retries here, and a refusal
+   * of the API key itself is thrown instead of answered by exchanging it.
+   */
+  derived?: boolean;
   defaultBaseURL: string;
   timeoutMs: number;
   maxRetries: number;
@@ -75,7 +85,13 @@ function deserializeFor<T>(method: MethodDef<unknown, T>): (v: Buffer) => T {
 
 export class Transport implements ITransport {
   readonly #creds: Credentials;
+  /** Whether this endpoint takes the API key itself (`auth.ts`). */
+  readonly #directKey: DirectKey;
+  /** The channel is TLS or to loopback: an API key may go as itself. Set
+   *  when the channel is dialled. */
+  #rawKeyOk = false;
   readonly #explicitBaseURL?: string;
+  readonly #resolveBaseURL?: () => Promise<string>;
   readonly #defaultBaseURL: string;
   readonly #timeout: number;
   readonly #maxRetries: number;
@@ -88,10 +104,19 @@ export class Transport implements ITransport {
 
   constructor(opts: TransportOptions) {
     this.#creds = opts.creds;
+    this.#directKey = new DirectKey(opts.creds, { resend: !opts.derived });
     this.#explicitBaseURL = opts.explicitBaseURL;
+    this.#resolveBaseURL = opts.resolveBaseURL;
     this.#defaultBaseURL = opts.defaultBaseURL;
     this.#timeout = opts.timeoutMs;
-    this.#maxRetries = opts.maxRetries;
+    this.#maxRetries = opts.derived ? 0 : opts.maxRetries;
+  }
+
+  /** A region's endpoint, else an explicit baseURL, else the surrounding
+   *  machine's own cluster, else production. */
+  async #baseURL(): Promise<string> {
+    if (this.#resolveBaseURL) return this.#resolveBaseURL();
+    return this.#explicitBaseURL ?? (await this.#creds.clusterUrl()) ?? this.#defaultBaseURL;
   }
 
   /**
@@ -108,11 +133,7 @@ export class Transport implements ITransport {
   }
 
   async #connect(): Promise<Client> {
-    // An explicit baseURL always wins; otherwise the surrounding machine
-    // names its own cluster; otherwise production.
-    const baseURL =
-      this.#explicitBaseURL ?? (await this.#creds.clusterUrl()) ?? this.#defaultBaseURL;
-    const endpoint = resolveEndpoint(baseURL);
+    const endpoint = resolveEndpoint(await this.#baseURL());
     // Credentials travel per-call in metadata; channel creds only pick
     // plaintext vs TLS.
     const channelCreds: ChannelCredentials = endpoint.useTls
@@ -122,6 +143,7 @@ export class Transport implements ITransport {
       "grpc.max_receive_message_length": MAX_MESSAGE_BYTES,
       "grpc.max_send_message_length": MAX_MESSAGE_BYTES,
     };
+    this.#rawKeyOk = endpoint.useTls || isLoopbackHost(endpoint.host);
     this.#client = new Client(endpoint.host, channelCreds, opts);
     return this.#client;
   }
@@ -131,16 +153,26 @@ export class Transport implements ITransport {
    * Same resolution order as `#connect`, so the two can never disagree.
    */
   async consoleOrigin(): Promise<string> {
-    const baseURL =
-      this.#explicitBaseURL ?? (await this.#creds.clusterUrl()) ?? this.#defaultBaseURL;
-    return consoleBaseUrl(baseURL);
+    return consoleBaseUrl(await this.#baseURL());
   }
 
-  async #metadata(): Promise<Metadata> {
+  #metadataFor(token: string): Metadata {
     const md = new Metadata();
-    md.add("authorization", `Bearer ${await this.#creds.getToken()}`);
+    md.add("authorization", `Bearer ${token}`);
     md.add(VERSION_REQUEST_HEADER, VERSION);
     return md;
+  }
+
+  /**
+   * The metadata of a stream on `client`'s channel. A stream can't be sent
+   * again after a refusal, so whether this endpoint takes the API key itself
+   * is settled first (a `Whoami` when nothing has shown it yet).
+   */
+  async #streamMetadata(client: Client): Promise<Metadata> {
+    await this.#directKey.beforeStream(this.#rawKeyOk, (token) =>
+      this.#unaryWith(client, BoxdApiDefinition.methods.whoami, {}, token),
+    );
+    return this.#metadataFor((await this.#creds.bearer(this.#rawKeyOk)).token);
   }
 
   #callOptions(): CallOptions {
@@ -153,7 +185,18 @@ export class Transport implements ITransport {
 
   async #invokeUnary<Req, Resp>(method: MethodDef<Req, Resp>, req: Req): Promise<Resp> {
     const client = await this.#ensureClient();
-    const md = await this.#metadata();
+    return this.#directKey.unary(this.#rawKeyOk, (token) =>
+      this.#unaryWith(client, method, req, token),
+    );
+  }
+
+  #unaryWith<Req, Resp>(
+    client: Client,
+    method: MethodDef<Req, Resp>,
+    req: Req,
+    token: string,
+  ): Promise<Resp> {
+    const md = this.#metadataFor(token);
     return new Promise<Resp>((resolve, reject) => {
       const call = client.makeUnaryRequest<Req, Resp>(
         methodPath(method),
@@ -197,7 +240,7 @@ export class Transport implements ITransport {
     void (async () => {
       try {
         const client = await this.#ensureClient();
-        const md = await this.#metadata();
+        const md = await this.#streamMetadata(client);
         if (cancelled) return;
         const call = client.makeServerStreamRequest<Req, Resp>(
           methodPath(method),
@@ -236,7 +279,7 @@ export class Transport implements ITransport {
     void (async () => {
       try {
         const client = await this.#ensureClient();
-        const md = await this.#metadata();
+        const md = await this.#streamMetadata(client);
         if (cancelled) return;
         // No deadline: matches the earlier behaviour of the raw
         // `grpc.exec(md)` call this replaces (no `CallOptions` at all) — the
@@ -307,7 +350,7 @@ export class Transport implements ITransport {
     void (async () => {
       try {
         const client = await this.#ensureClient();
-        const md = await this.#metadata();
+        const md = await this.#streamMetadata(client);
         if (cancelled) return;
         // No deadline: matches the earlier `grpc.uploadFileStream(...)`
         // call this replaces (no `CallOptions`) — the only callers

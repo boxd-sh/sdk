@@ -394,7 +394,7 @@ def test_sync_bidi_cancel_reaches_the_underlying_call():
 # --- getting the credential goes through the same retry rule ---
 
 
-class ScriptedCredentials:
+class ScriptedCredentials(FakeCredentials):
     """Raises each scripted error in turn, then hands out a token."""
 
     discovered_base_url = None

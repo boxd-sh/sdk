@@ -41,6 +41,7 @@ handle, and every operation takes the machine id as its first argument.
 ```typescript
 new Boxd();                                        // production
 new Boxd({ apiKey: "bxd_..." });
+new Boxd({ region: "nyc" });                       // machines in another region
 new Boxd({ baseURL: "https://boxd.example.com" }); // any other cluster
 ```
 
@@ -49,6 +50,7 @@ new Boxd({ baseURL: "https://boxd.example.com" }); // any other cluster
 | `apiKey` | `BOXD_API_KEY` | — |
 | `token` | `BOXD_TOKEN` | — |
 | `baseURL` | `BOXD_BASE_URL` (or the deprecated `BOXD_API_URL`) | `https://boxd.sh:9443` |
+| `region` | `BOXD_REGION` | the region `baseURL` serves — see [Regions](#regions) |
 | `timeout` | — | 60000 ms |
 | `maxRetries` | — | 2 |
 
@@ -157,6 +159,74 @@ organization that owns the machine. From a *shared* machine you can manage the
 organization's shared machines, but you cannot read env vars or secrets, and you
 cannot reach machines that are private to another member. Use an API key for
 those.
+
+## Regions
+
+boxd runs in several regions, each with its own API. A machine, snapshot or
+disk lives in one region. Your account, organizations, API keys, environment
+variables and billing live in your home region and work in every region with
+the same credential.
+
+Pick a region for the client, or for one call:
+
+```typescript
+const boxd = new Boxd({ region: "nyc" });            // or set BOXD_REGION=nyc
+await boxd.machines.create({ name: "api" });         // created in nyc
+await boxd.machines.get("api");                      // looked up in nyc
+await boxd.machines.get("web", { region: "fra" });   // this call only
+boxd.region;                                         // "nyc"
+```
+
+With no region, every call goes to `baseURL`, as before. Every method on
+machines (and `files`, `fs`, `ports`, `proxies`, `checkpoints`, `backups`),
+snapshots, disks, custom domains and org domains takes `{ region }`, in its
+options object or as a last argument. Account and organization calls always
+go to `baseURL`.
+
+```typescript
+for (const r of await boxd.regions.list()) {
+  r.id, r.name, r.home, r.orgState;   // "enabled" | "requested" | "available"
+}
+
+const machines = await boxd.machines.list();          // the client's region
+machines.elsewhere;                                   // [{ region: "fra", count: 3 }]
+const everywhere = await boxd.machines.list({ region: "all" });
+everywhere.map((m) => [m.name, m.region]);
+everywhere.unavailable;                               // regions that could not be reached just now
+```
+
+`snapshots.list()` and `disks.list()` take `{ region: "all" }` and carry
+`elsewhere` too. The lists are plain arrays with those two extra fields.
+`machine.region`, `snapshot.region` and `disk.region` say where each one
+lives.
+
+An organization can use its home region and the regions enabled for it.
+Creating or listing machines or snapshots in any other region throws
+`RegionNotEnabledError`. An org admin can ask for one:
+
+```typescript
+await boxd.orgs.regions("acme");                    // where the org stands with each region
+await boxd.orgs.requestRegion("nyc", "acme");       // "requested", or "enabled" if it has it
+await boxd.orgs.setDefaultRegion("nyc", "acme");    // recorded for the org; the SDK
+await boxd.orgs.getDefaultRegion("acme");           // does not route by it
+await boxd.orgs.clearDefaultRegion("acme");
+```
+
+When a machine, snapshot or disk is not in the region a call went to, the SDK
+asks where else your organizations have that name, and the `NotFoundError`
+says so:
+
+```typescript
+try {
+  await boxd.machines.get("web");
+} catch (e) {
+  if (e instanceof NotFoundError) {
+    e.message;     // ...; there is a machine "web" in fra: pass { region: "fra" }
+    e.elsewhere;   // [{ region: "fra", name: "web", orgId: ..., id: ... }]
+    e.close;       // names one or two letters off, in other regions
+  }
+}
+```
 
 ## Machines
 
@@ -634,6 +704,7 @@ interface Machine {
   createdByName: string | null;    // a name to show for createdBy
   requirements: MachineRequirement[]; // the spec's connections and agents, and whether each is met
   packages: MachinePackage[];      // the spec's packages and how each went
+  region: string | null;           // where it lives; null when boxd runs in one region
 }
 
 interface MachineRequirement {
@@ -1043,6 +1114,7 @@ interface Snapshot {
   useCount: number;         // machines restored from it so far
   storage: string;          // "local" | "archiving" | "archived" | "unarchiving"
   archived: boolean;        // true unless storage is "local": machines can't be created from it
+  region: string | null;    // where it lives
 }
 
 interface Disk {
@@ -1057,6 +1129,7 @@ interface Disk {
     mountPath: string;
     mountMode: "ro" | "rw";
   }[];
+  region: string | null;    // where it lives
 }
 ```
 
@@ -1114,7 +1187,9 @@ await boxd.orgs.clearDomain("acme");
 
 `setDomain` starts verification immediately — call it only once NS
 delegation is actually live, for the same reason as per-machine domains
-above. A background check then verifies delegation and issues certs
+above. An org has at most one domain in each region: `{ region }` picks which
+(default: the client's region), and the domain is delegated to that region's
+nameservers. A background check then verifies delegation and issues certs
 automatically, then flips `status` to `"active"`.
 
 An org also has a default machine size: what a `create` that names no size
@@ -1280,7 +1355,8 @@ Everything thrown extends `BoxdError`:
 |---|---|
 | `AuthenticationError` | boxd refused the credential, or none was found; `reason` is `missing_credentials`, `invalid_api_key` or `invalid_token` |
 | `PermissionDeniedError` | authenticated, but not allowed; also an account that may not use the API (e.g. a disabled one) |
-| `NotFoundError` | no such resource |
+| `RegionNotEnabledError` | a `PermissionDeniedError`: the org can't use that region yet; `region`, `orgState` |
+| `NotFoundError` | no such resource; `elsewhere` and `close` list the name in other regions |
 | `ConflictError` | already exists, the resource is in the wrong state, or it changed while the call ran |
 | `AgentOutdatedError` | a `ConflictError`: the machine is too old for `machines.fs`; reboot it |
 | `FilesystemError` | a `machines.fs` call failed inside the machine; `code` is the errno name (`ENOENT`, `EISDIR`, ...). Subclasses: `MachineFileNotFoundError`, `MachinePermissionError`, `MachineFileExistsError`, `MachineIsADirectoryError`, `MachineNotADirectoryError` |

@@ -95,7 +95,39 @@ class PermissionDeniedError(BoxdError):
 
 
 class NotFoundError(BoxdError):
-    """`not_found` — no such machine/snapshot/disk/…"""
+    """`not_found` — no such machine/snapshot/disk/…
+
+    When a machine, snapshot or disk named in the call is not in the region
+    the call went to, the SDK asks where else your orgs have that name:
+    ``elsewhere`` lists the same name in other regions and ``close`` names
+    one or two letters off (both lists of
+    :class:`~boxd.models.ElsewhereItem`, empty when there is none), and the
+    message says which ``region=`` to pass.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.elsewhere: list = []
+        self.close: list = []
+
+
+class RegionNotEnabledError(PermissionDeniedError):
+    """A call named a region its org cannot use yet.
+
+    ``region`` is the region; ``org_state`` is ``"available"`` (an org admin
+    can ask for it with ``orgs.request_region``) or ``"requested"`` (asked
+    for, waiting for boxd to enable it).
+    """
+
+    def __init__(self, message: str, *, region: str, org_state: str):
+        super().__init__(
+            message,
+            code="permission_denied",
+            grpc_code=7,
+            reason="region_not_enabled",
+        )
+        self.region = region
+        self.org_state = org_state
 
 
 class ConflictError(BoxdError):

@@ -36,6 +36,7 @@ from .errors import (
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
+    RegionNotEnabledError,
 )
 from .models import (
     Account,
@@ -57,6 +58,7 @@ from .models import (
     DirListing,
     DiskAttachment,
     DiskStatus,
+    ElsewhereItem,
     EnvVar,
     FsEntry,
     FsEntryType,
@@ -100,6 +102,10 @@ from .models import (
     Proxy,
     ProxyEntry,
     ProxyPortMode,
+    Region,
+    RegionalList,
+    RegionCount,
+    RegionOrgState,
     ResizeResult,
     ResumeResult,
     Secret,
@@ -170,6 +176,7 @@ __all__ = [
     "DirListing",
     "DiskAttachment",
     "DiskStatus",
+    "ElsewhereItem",
     "EnvVar",
     "ExecResult",
     "FsEntry",
@@ -213,6 +220,10 @@ __all__ = [
     "Proxy",
     "ProxyEntry",
     "ProxyPortMode",
+    "Region",
+    "RegionalList",
+    "RegionCount",
+    "RegionOrgState",
     "ResizeResult",
     "ResumeResult",
     "Secret",
@@ -260,6 +271,7 @@ __all__ = [
     "NotFoundError",
     "PermissionDeniedError",
     "RateLimitError",
+    "RegionNotEnabledError",
     # Version
     "__version__",
 ]

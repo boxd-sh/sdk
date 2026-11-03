@@ -118,11 +118,51 @@ export class PermissionDeniedError extends BoxdError {
   }
 }
 
-/** `not_found`. */
+/**
+ * A machine, snapshot or disk of a name, in another region: what a
+ * {@link NotFoundError} found elsewhere.
+ */
+export interface ElsewhereItem {
+  region: string;
+  name: string;
+  /** `null` when it belongs to no org. */
+  orgId: string | null;
+  id: string;
+}
+
+/**
+ * `not_found`.
+ *
+ * When a machine, snapshot or disk named in the call is not in the region
+ * the call went to, the SDK asks where else your orgs have that name:
+ * `elsewhere` lists the same name in other regions and `close` names one or
+ * two letters off (both empty when there is none), and the message says
+ * which `region` to pass.
+ */
 export class NotFoundError extends BoxdError {
+  /** The same name, in other regions. */
+  elsewhere: ElsewhereItem[] = [];
+  /** Names one or two letters off, in other regions. */
+  close: ElsewhereItem[] = [];
   constructor(message: string, grpcCode?: number, opts?: BoxdErrorOptions) {
     super(message, grpcCode, opts);
     this.name = "NotFoundError";
+  }
+}
+
+/**
+ * A call named a region its org can't use yet. `orgState` is `"available"`
+ * (an org admin can ask for it with `orgs.requestRegion`) or `"requested"`
+ * (asked for, waiting for boxd to enable it).
+ */
+export class RegionNotEnabledError extends PermissionDeniedError {
+  readonly region: string;
+  readonly orgState: string;
+  constructor(message: string, region: string, orgState: string) {
+    super(message, GrpcStatus.PERMISSION_DENIED, { reason: "region_not_enabled" });
+    this.name = "RegionNotEnabledError";
+    this.region = region;
+    this.orgState = orgState;
   }
 }
 

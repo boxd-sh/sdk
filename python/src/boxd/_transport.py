@@ -16,8 +16,8 @@ import grpc.aio
 
 from . import _version_check
 from ._credentials import AsyncCredentials, SyncCredentials
-from ._generated import api_pb2_grpc
-from ._urls import DEFAULT_BASE_URL, console_base_url, resolve_endpoint
+from ._generated import api_pb2, api_pb2_grpc
+from ._urls import DEFAULT_BASE_URL, console_base_url, raw_key_allowed, resolve_endpoint
 from .errors import APIConnectionError, BoxdError, from_grpc_error, is_retryable
 
 # First backoff, doubled per attempt. Two retries by default ⇒ 0.5s then 1.0s.
@@ -34,6 +34,30 @@ _CHANNEL_OPTIONS = [
 ]
 
 
+def refuses_raw_key(details: str) -> bool:
+    """Whether an `unauthenticated` answer to a call that carried the API key
+    itself means that server can't take a key that way, so the key is
+    exchanged: a server from before raw keys reads it as a malformed session
+    token ("invalid token: ..."), and one that takes keys refuses one sent
+    without TLS from a peer it doesn't see as loopback ("... accepted over TLS
+    only")."""
+    return details.startswith("invalid token") or "accepted over TLS only" in details
+
+
+def _refuses_raw_key(err: grpc.RpcError) -> bool:
+    """:func:`refuses_raw_key` on a gRPC error."""
+    try:
+        code, details = err.code(), err.details() or ""
+    except Exception:
+        return False
+    return code == grpc.StatusCode.UNAUTHENTICATED and refuses_raw_key(details)
+
+
+def _streamed(request) -> bool:
+    """A client-streaming request: a one-shot iterator, never sent twice."""
+    return not hasattr(request, "DESCRIPTOR")
+
+
 class _TransportBase:
     def __init__(
         self,
@@ -42,13 +66,22 @@ class _TransportBase:
         credentials,
         timeout: float,
         max_retries: int,
+        derived: bool = False,
     ) -> None:
         self._explicit_base_url = base_url
         self._credentials = credentials
         self._timeout = timeout
-        self._max_retries = max_retries
+        # `derived`: the base URL is a region's name derived from home's, not
+        # one home named (`_regions.py`, direct mode). A failure here goes back
+        # to the router, which asks home and sends the call again: no retries
+        # here, and a refusal of the API key itself is raised instead of
+        # answered by exchanging it.
+        self._derived = derived
+        self._max_retries = 0 if derived else max_retries
         self._channel = None
         self._stub: api_pb2_grpc.BoxdApiStub | None = None
+        # This endpoint has taken the API key itself (a call carrying it worked).
+        self._raw_key_confirmed = False
 
     @property
     def base_url(self) -> str:
@@ -82,6 +115,15 @@ class _TransportBase:
 
     def _metadata(self, token: str) -> list[tuple[str, str]]:
         return [("authorization", f"Bearer {token}"), *_version_check.request_metadata()]
+
+    def _raw_key(self) -> str | None:
+        """The API key, when this call carries it itself (TLS or loopback)."""
+        return self._credentials.raw_key(allowed=raw_key_allowed(self.base_url))
+
+    def _needs_probe(self) -> bool:
+        """Before a call that can't be sent twice (a stream, a streamed
+        request): nothing has shown yet that this endpoint takes the key."""
+        return not self._raw_key_confirmed and self._raw_key() is not None
 
     def _backoff(self, attempt: int) -> float:
         return _BACKOFF_BASE_SECS * (2**attempt)
@@ -119,12 +161,15 @@ class SyncTransport(_TransportBase):
 
     def call(self, method: str, request):
         """Unary call with retries. Returns the response message."""
+        if _streamed(request):
+            self._settle_raw_key()
         attempt = 0
         while True:
             # Fetched per attempt so a refresh mid-backoff is picked up; the
             # token itself is cached, so this is free after the first call.
+            raw = self._raw_key()
             try:
-                token = self._credentials.token()
+                token = raw if raw is not None else self._credentials.token()
             except BoxdError as e:
                 if self._should_retry_credential(e, attempt):
                     time.sleep(self._backoff(attempt))
@@ -137,17 +182,41 @@ class SyncTransport(_TransportBase):
                     request, timeout=self._timeout, metadata=self._metadata(token)
                 )
             except grpc.RpcError as e:
+                if raw is not None and _refuses_raw_key(e):
+                    # Refused before any handler ran: nothing happened, so
+                    # the call goes again on the exchanged session.
+                    self._credentials.raw_key_refused()
+                    if not _streamed(request) and not self._derived:
+                        continue
                 if self._should_retry(e, attempt, request):
                     time.sleep(self._backoff(attempt))
                     attempt += 1
                     continue
                 raise from_grpc_error(e) from e
+            if raw is not None:
+                self._raw_key_confirmed = True
             _version_check.note_metadata(call.initial_metadata())
             return response
 
+    def _settle_raw_key(self) -> None:
+        """Ask the endpoint once (`Whoami`) whether it takes the key itself,
+        before a call that can't be sent again after a refusal. Only the
+        bearer depends on the answer; a failure is left for the call."""
+        if not self._needs_probe():
+            return
+        try:
+            self.call("Whoami", api_pb2.WhoamiRequest())
+        except BoxdError:
+            pass
+
+    def _stream_token(self) -> str:
+        self._settle_raw_key()
+        raw = self._raw_key()
+        return raw if raw is not None else self._credentials.token()
+
     def server_stream(self, method: str, request) -> Iterator:
         """Server-streaming call. Never retried — a partial stream can't be replayed."""
-        token = self._credentials.token()
+        token = self._stream_token()
         stub = self._ensure_stub()
         return _StreamCall(getattr(stub, method)(request, metadata=self._metadata(token)))
 
@@ -160,7 +229,7 @@ class SyncTransport(_TransportBase):
         unset by default — an interactive shell is meant to outlive any
         per-request deadline.
         """
-        token = self._credentials.token()
+        token = self._stream_token()
         stub = self._ensure_stub()
         return _StreamCall(
             getattr(stub, method)(
@@ -189,10 +258,13 @@ class AsyncTransport(_TransportBase):
         return self._stub
 
     async def call(self, method: str, request):
+        if _streamed(request):
+            await self._settle_raw_key()
         attempt = 0
         while True:
+            raw = self._raw_key()
             try:
-                token = await self._credentials.token()
+                token = raw if raw is not None else await self._credentials.token()
             except BoxdError as e:
                 if self._should_retry_credential(e, attempt):
                     await asyncio.sleep(self._backoff(attempt))
@@ -206,21 +278,43 @@ class AsyncTransport(_TransportBase):
             try:
                 response = await call
             except grpc.aio.AioRpcError as e:
+                if raw is not None and _refuses_raw_key(e):
+                    # Refused before any handler ran: nothing happened, so
+                    # the call goes again on the exchanged session.
+                    self._credentials.raw_key_refused()
+                    if not _streamed(request) and not self._derived:
+                        continue
                 if self._should_retry(e, attempt, request):
                     await asyncio.sleep(self._backoff(attempt))
                     attempt += 1
                     continue
                 raise from_grpc_error(e) from e
+            if raw is not None:
+                self._raw_key_confirmed = True
             _version_check.note_metadata(await call.initial_metadata())
             return response
 
+    async def _settle_raw_key(self) -> None:
+        """Async twin of :meth:`SyncTransport._settle_raw_key`."""
+        if not self._needs_probe():
+            return
+        try:
+            await self.call("Whoami", api_pb2.WhoamiRequest())
+        except BoxdError:
+            pass
+
+    async def _stream_token(self) -> str:
+        await self._settle_raw_key()
+        raw = self._raw_key()
+        return raw if raw is not None else await self._credentials.token()
+
     async def server_stream(self, method: str, request):
-        token = await self._credentials.token()
+        token = await self._stream_token()
         stub = await self._ensure_stub()
         return _AsyncStreamCall(getattr(stub, method)(request, metadata=self._metadata(token)))
 
     async def bidi(self, method: str, requests, *, timeout: float | None = None):
-        token = await self._credentials.token()
+        token = await self._stream_token()
         stub = await self._ensure_stub()
         return _AsyncStreamCall(
             getattr(stub, method)(

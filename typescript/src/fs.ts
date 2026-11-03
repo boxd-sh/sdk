@@ -7,6 +7,7 @@ import type {
 } from "./_generated/definitions.js";
 import { BoxdError, FilesystemError } from "./errors.js";
 import { decodeFsName, toFsEntry, type FsEntry } from "./models.js";
+import type { RegionOption } from "./regions.js";
 
 /** Bytes per write message: well under gRPC's 4 MiB message cap. */
 const CHUNK_SIZE = 1024 * 1024;
@@ -26,31 +27,31 @@ export type FsWriteData =
   | Iterable<Uint8Array>
   | AsyncIterable<Uint8Array>;
 
-export interface FsReadOptions {
+export interface FsReadOptions extends RegionOption {
   /** First byte to read. Default 0. */
   offset?: number;
   /** Bytes to read from `offset`. Default: to the end of the file. */
   length?: number;
 }
 
-export interface FsWriteOptions {
+export interface FsWriteOptions extends RegionOption {
   /** Permission bits, e.g. `0o600`. Default: an existing file keeps its
    *  mode, a new one gets `0o644`. */
   mode?: number;
 }
 
-export interface FsMkdirOptions {
+export interface FsMkdirOptions extends RegionOption {
   /** Permission bits for the directories it creates. Default `0o755`. */
   mode?: number;
 }
 
-export interface FsRemoveOptions {
+export interface FsRemoveOptions extends RegionOption {
   /** Remove a directory and everything in it. Without it a directory is
    *  refused (`EISDIR`). */
   recursive?: boolean;
 }
 
-export interface FsRenameOptions {
+export interface FsRenameOptions extends RegionOption {
   /** Replace an existing destination. Default `true`; `false` fails with
    *  `EEXIST` instead. */
   overwrite?: boolean;
@@ -98,12 +99,11 @@ export class MachineFs {
     const offset = opts.offset ?? 0;
     checkCount("offset", offset);
     if (opts.length !== undefined) checkCount("length", opts.length);
-    const call = this.transport.serverStream(BoxdApiDefinition.methods.fsRead, {
-      vmId: id,
-      path: toPathBytes(path),
-      offset,
-      length: opts.length,
-    });
+    const call = this.transport.serverStream(
+      BoxdApiDefinition.methods.fsRead,
+      { vmId: id, path: toPathBytes(path), offset, length: opts.length },
+      { region: opts.region },
+    );
     let received = 0;
     let sent: number | undefined;
     try {
@@ -165,11 +165,15 @@ export class MachineFs {
     let settled = false;
     let call!: ReturnType<Transport["clientStream"]>;
     const result = new Promise<FsWriteResponse>((resolve, reject) => {
-      call = this.transport.clientStream(BoxdApiDefinition.methods.fsWrite, (err, resp) => {
-        settled = true;
-        if (err) reject(err);
-        else resolve(resp);
-      });
+      call = this.transport.clientStream(
+        BoxdApiDefinition.methods.fsWrite,
+        (err, resp) => {
+          settled = true;
+          if (err) reject(err);
+          else resolve(resp);
+        },
+        { region: opts.region },
+      );
     });
     // Abandoning the call below must not also leave an unhandled rejection.
     result.catch(() => {});
@@ -214,13 +218,14 @@ export class MachineFs {
 
   /** A path's entry. A symlink is described by what it resolves to
    *  (`isSymlink` says it is one); a dangling one has `targetType: null`. */
-  async stat(id: string, path: FsPath): Promise<FsEntry> {
+  async stat(id: string, path: FsPath, opts: RegionOption = {}): Promise<FsEntry> {
     const display = displayPath(path);
     try {
-      const resp = await this.transport.unary(BoxdApiDefinition.methods.fsStat, {
-        vmId: id,
-        path: toPathBytes(path),
-      });
+      const resp = await this.transport.unary(
+        BoxdApiDefinition.methods.fsStat,
+        { vmId: id, path: toPathBytes(path) },
+        { region: opts.region },
+      );
       if (!resp.entry) throw new BoxdError(`stat ${display}: the machine did not describe the path`);
       return toFsEntry(resp.entry);
     } catch (err) {
@@ -234,9 +239,9 @@ export class MachineFs {
    * look at. A missing machine, a failed connection and the like still
    * throw.
    */
-  async exists(id: string, path: FsPath): Promise<boolean> {
+  async exists(id: string, path: FsPath, opts: RegionOption = {}): Promise<boolean> {
     try {
-      return (await this.stat(id, path)).targetType !== null;
+      return (await this.stat(id, path, opts)).targetType !== null;
     } catch (err) {
       if (err instanceof FilesystemError) return false;
       throw err;
@@ -244,20 +249,25 @@ export class MachineFs {
   }
 
   /** A directory's entries, one level, in no particular order. */
-  async list(id: string, path: FsPath): Promise<FsEntry[]> {
+  async list(id: string, path: FsPath, opts: RegionOption = {}): Promise<FsEntry[]> {
     const out: FsEntry[] = [];
-    for await (const entry of this.listIter(id, path)) out.push(entry);
+    for await (const entry of this.listIter(id, path, opts)) out.push(entry);
     return out;
   }
 
   /** `list`, as entries arrive — for a directory too big to hold at once.
    *  Stopping early (`break`) cancels the listing. */
-  async *listIter(id: string, path: FsPath): AsyncGenerator<FsEntry, void, undefined> {
+  async *listIter(
+    id: string,
+    path: FsPath,
+    opts: RegionOption = {},
+  ): AsyncGenerator<FsEntry, void, undefined> {
     const display = displayPath(path);
-    const call = this.transport.serverStream(BoxdApiDefinition.methods.fsList, {
-      vmId: id,
-      path: toPathBytes(path),
-    });
+    const call = this.transport.serverStream(
+      BoxdApiDefinition.methods.fsList,
+      { vmId: id, path: toPathBytes(path) },
+      { region: opts.region },
+    );
     try {
       for await (const chunk of events(call)) {
         for (const entry of chunk.entries ?? []) yield toFsEntry(entry);
@@ -272,11 +282,11 @@ export class MachineFs {
   async mkdir(id: string, path: FsPath, opts: FsMkdirOptions = {}): Promise<void> {
     checkMode(opts.mode);
     await this.#op(path, () =>
-      this.transport.unary(BoxdApiDefinition.methods.fsMkdir, {
-        vmId: id,
-        path: toPathBytes(path),
-        mode: opts.mode,
-      }),
+      this.transport.unary(
+        BoxdApiDefinition.methods.fsMkdir,
+        { vmId: id, path: toPathBytes(path), mode: opts.mode },
+        { region: opts.region },
+      ),
     );
   }
 
@@ -284,11 +294,11 @@ export class MachineFs {
    *  directory and everything in it. */
   async remove(id: string, path: FsPath, opts: FsRemoveOptions = {}): Promise<void> {
     await this.#op(path, () =>
-      this.transport.unary(BoxdApiDefinition.methods.fsRemove, {
-        vmId: id,
-        path: toPathBytes(path),
-        recursive: opts.recursive ?? false,
-      }),
+      this.transport.unary(
+        BoxdApiDefinition.methods.fsRemove,
+        { vmId: id, path: toPathBytes(path), recursive: opts.recursive ?? false },
+        { region: opts.region },
+      ),
     );
   }
 
@@ -300,12 +310,16 @@ export class MachineFs {
     opts: FsRenameOptions = {},
   ): Promise<void> {
     await this.#op(oldPath, () =>
-      this.transport.unary(BoxdApiDefinition.methods.fsRename, {
-        vmId: id,
-        oldPath: toPathBytes(oldPath),
-        newPath: toPathBytes(newPath),
-        noReplace: opts.overwrite === false,
-      }),
+      this.transport.unary(
+        BoxdApiDefinition.methods.fsRename,
+        {
+          vmId: id,
+          oldPath: toPathBytes(oldPath),
+          newPath: toPathBytes(newPath),
+          noReplace: opts.overwrite === false,
+        },
+        { region: opts.region },
+      ),
     );
   }
 
@@ -315,18 +329,19 @@ export class MachineFs {
    * written. A symlink loop is `ELOOP`. Decoded as UTF-8, like
    * `FsEntry.path`; {@link realpathBytes} has the exact bytes.
    */
-  async realpath(id: string, path: FsPath): Promise<string> {
-    return decodeFsName(await this.realpathBytes(id, path));
+  async realpath(id: string, path: FsPath, opts: RegionOption = {}): Promise<string> {
+    return decodeFsName(await this.realpathBytes(id, path, opts));
   }
 
   /** `realpath`, as the exact bytes — like `FsEntry.pathBytes`, for a path
    *  that may not be valid UTF-8. */
-  async realpathBytes(id: string, path: FsPath): Promise<Uint8Array> {
+  async realpathBytes(id: string, path: FsPath, opts: RegionOption = {}): Promise<Uint8Array> {
     const resp = await this.#op(path, () =>
-      this.transport.unary(BoxdApiDefinition.methods.fsRealpath, {
-        vmId: id,
-        path: toPathBytes(path),
-      }),
+      this.transport.unary(
+        BoxdApiDefinition.methods.fsRealpath,
+        { vmId: id, path: toPathBytes(path) },
+        { region: opts.region },
+      ),
     );
     // A copy: the decoded message's bytes are a view into the whole response.
     return resp.path.slice();

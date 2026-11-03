@@ -19,6 +19,7 @@
  * and a transport, not just documentation of it.
  */
 import type { MessageFns } from "./_generated/definitions.js";
+import type { NotFoundError } from "./errors.js";
 
 export interface MethodDef<Req, Resp> {
   name: string;
@@ -62,12 +63,31 @@ export interface DuplexCall<In, Out> extends ReadableCall<Out> {
   cancel(): void;
 }
 
+/**
+ * What every call can carry besides its request. A single-endpoint transport
+ * (`_transport.ts`, `_transportWeb.ts`) ignores it; the region router
+ * (`_regions.ts`), which is what the namespaces are given, sends the call to
+ * that region's endpoint.
+ */
+export interface CallOptions {
+  /** The region the call goes to. Default: the client's. */
+  region?: string;
+}
+
+/** One answer per region, from {@link Transport.eachRegion}. */
+export interface RegionPages<Resp> {
+  /** `region` is undefined outside a federation (one answer, from home). */
+  pages: Array<{ region: string | undefined; resp: Resp }>;
+  /** Regions that could not be reached just now. */
+  unavailable: string[];
+}
+
 export interface Transport {
   /** Unary call: request in, response out. Every simple RPC (create/get/
    *  list/...) goes through this — it is reachable over grpc-web, so this
    *  one method is what makes the whole non-streaming SDK surface work
    *  unmodified under the web transport. */
-  unary<Req, Resp>(method: MethodDef<Req, Resp>, req: Req): Promise<Resp>;
+  unary<Req, Resp>(method: MethodDef<Req, Resp>, req: Req, opts?: CallOptions): Promise<Resp>;
   /**
    * Server-streaming call: one request, many responses (`DownloadFileStream`,
    * `StreamLogs`). Also grpc-web-reachable.
@@ -80,7 +100,7 @@ export interface Transport {
   serverStream<Req, Resp>(
     method: MethodDef<Req, Resp>,
     req: Req,
-    opts?: { deadline?: boolean },
+    opts?: CallOptions & { deadline?: boolean },
   ): ReadableCall<Resp>;
   /**
    * Bidi call (`Exec`). The web transport carries this over grpc-web as
@@ -91,7 +111,13 @@ export interface Transport {
    * reaction to already-received `"data"` (`streamExec()`) — see
    * `supportsInteractiveExec`, which callers must check first.
    */
-  duplex<Req, Resp>(method: MethodDef<Req, Resp>): DuplexCall<Req, Resp>;
+  duplex<Req, Resp>(
+    method: MethodDef<Req, Resp>,
+    opts?: CallOptions & {
+      /** The machine the stream is about (`Exec`), for a not-found's hint. */
+      machine?: string;
+    },
+  ): DuplexCall<Req, Resp>;
   /** Client-streaming call (`UploadFileStream`). Same half-duplex-over-
    *  grpc-web shape as `duplex` on the web transport — every chunk is
    *  buffered until `end()`, which is also genuinely half-duplex-shaped
@@ -100,6 +126,7 @@ export interface Transport {
   clientStream<Req, Resp>(
     method: MethodDef<Req, Resp>,
     callback: (err: unknown, resp: Resp) => void,
+    opts?: CallOptions,
   ): WritableCall<Req>;
   /**
    * Whether `duplex()` supports genuine interactive use — writes made in
@@ -112,7 +139,28 @@ export interface Transport {
    * up front).
    */
   readonly supportsInteractiveExec: boolean;
-  /** The web console's origin for whichever cluster this client talks to. */
-  consoleOrigin(): Promise<string>;
+  /** The web console's origin for whichever cluster this client talks to
+   *  (for the router: the region's). */
+  consoleOrigin(region?: string): Promise<string>;
+  /**
+   * The region router only (`_regions.ts`): make one call in every region the
+   * org has enabled. A namespace given a plain transport makes the one call
+   * (`eachRegion()` in `_regions.ts` does that).
+   */
+  eachRegion?<Req, Resp>(
+    method: MethodDef<Req, Resp>,
+    req: Req,
+    opts: { org?: string },
+  ): Promise<RegionPages<Resp>>;
+  /**
+   * The region router only: look up elsewhere a not-found the SDK throws
+   * itself (an answer that carries nothing, rather than a not-found status).
+   */
+  findElsewhere?<Req>(
+    err: NotFoundError,
+    method: MethodDef<Req, unknown>,
+    req: Req,
+    opts?: CallOptions,
+  ): Promise<NotFoundError>;
   close(): void;
 }

@@ -3,6 +3,10 @@
 Creating a team requires org admin/owner. Every other write requires
 team-admin authority — inherited by every org admin/owner, or held directly
 via a team-admin membership.
+
+A team is the same in every region. Its default snapshot is per region, like
+snapshots: ``region`` on ``list``, ``get`` and ``set_default_snapshot`` picks
+which region's default is read or set (default: the client's region).
 """
 
 from __future__ import annotations
@@ -24,18 +28,22 @@ class Teams(Namespace):
             )
         )
 
-    def list(self, org: str = "") -> list[Team]:
+    def list(self, org: str = "", *, region: str | None = None) -> list[Team]:
         """Teams in the org: every team for an org admin/owner, else just
-        the teams you're a direct member of."""
+        the teams you're a direct member of. Each team's default snapshot is
+        the region's the call goes to."""
         resp = self._transport.call(
-            "ListTeams", api_pb2.ListTeamsRequest(org_id=org)
+            "ListTeams", api_pb2.ListTeamsRequest(org_id=org), region=region
         )
         return [m.team(t) for t in resp.teams]
 
-    def get(self, team_id: str) -> Team:
-        """A team's roster and default snapshot."""
+    def get(self, team_id: str, *, region: str | None = None) -> Team:
+        """A team's roster and its default snapshot in the region the call
+        goes to."""
         return m.team(
-            self._transport.call("GetTeam", api_pb2.GetTeamRequest(team_id=team_id))
+            self._transport.call(
+                "GetTeam", api_pb2.GetTeamRequest(team_id=team_id), region=region
+            )
         )
 
     def rename(self, team_id: str, name: str) -> None:
@@ -73,19 +81,25 @@ class Teams(Namespace):
             ),
         )
 
-    def set_default_snapshot(self, team_id: str, snapshot_id: str | None) -> None:
+    def set_default_snapshot(
+        self, team_id: str, snapshot_id: str | None, *, region: str | None = None
+    ) -> None:
         """Set or clear (`None`) the team's default snapshot — new team
         machines boot from it unless a size/snapshot is picked explicitly.
 
         Requires team-admin. Must be a snapshot you can access AND shared —
         a private default would silently work only for you and be invisible
         to every other team member.
+
+        Each region has its own default, a snapshot of that region:
+        ``region`` picks it, and must be the snapshot's region.
         """
         self._transport.call(
             "SetTeamDefaultSnapshot",
             api_pb2.SetTeamDefaultSnapshotRequest(
                 team_id=team_id, snapshot_id=snapshot_id or ""
             ),
+            region=region,
         )
 
 
@@ -100,19 +114,21 @@ class AsyncTeams(Namespace):
             )
         )
 
-    async def list(self, org: str = "") -> list[Team]:
+    async def list(self, org: str = "", *, region: str | None = None) -> list[Team]:
         """Teams in the org: every team for an org admin/owner, else just
-        the teams you're a direct member of."""
+        the teams you're a direct member of. Each team's default snapshot is
+        the region's the call goes to."""
         resp = await self._transport.call(
-            "ListTeams", api_pb2.ListTeamsRequest(org_id=org)
+            "ListTeams", api_pb2.ListTeamsRequest(org_id=org), region=region
         )
         return [m.team(t) for t in resp.teams]
 
-    async def get(self, team_id: str) -> Team:
-        """A team's roster and default snapshot."""
+    async def get(self, team_id: str, *, region: str | None = None) -> Team:
+        """A team's roster and its default snapshot in the region the call
+        goes to."""
         return m.team(
             await self._transport.call(
-                "GetTeam", api_pb2.GetTeamRequest(team_id=team_id)
+                "GetTeam", api_pb2.GetTeamRequest(team_id=team_id), region=region
             )
         )
 
@@ -152,7 +168,7 @@ class AsyncTeams(Namespace):
         )
 
     async def set_default_snapshot(
-        self, team_id: str, snapshot_id: str | None
+        self, team_id: str, snapshot_id: str | None, *, region: str | None = None
     ) -> None:
         """Set or clear (`None`) the team's default snapshot — new team
         machines boot from it unless a size/snapshot is picked explicitly.
@@ -160,10 +176,14 @@ class AsyncTeams(Namespace):
         Requires team-admin. Must be a snapshot you can access AND shared —
         a private default would silently work only for you and be invisible
         to every other team member.
+
+        Each region has its own default, a snapshot of that region:
+        ``region`` picks it, and must be the snapshot's region.
         """
         await self._transport.call(
             "SetTeamDefaultSnapshot",
             api_pb2.SetTeamDefaultSnapshotRequest(
                 team_id=team_id, snapshot_id=snapshot_id or ""
             ),
+            region=region,
         )

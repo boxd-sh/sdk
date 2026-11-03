@@ -26,7 +26,7 @@
  */
 import { maybeNotifyUpdate, VERSION_REQUEST_HEADER, VERSION_RESPONSE_HEADER } from "./_versionCheck.js";
 import { VERSION } from "./_version.js";
-import type { Credentials } from "./auth.js";
+import { DirectKey, type Credentials } from "./auth.js";
 import {
   APIConnectionError,
   APIStatusError,
@@ -35,7 +35,7 @@ import {
   fromGrpcError,
 } from "./errors.js";
 import { withRetries } from "./_retry.js";
-import { consoleBaseUrl, resolveEndpoint } from "./utils.js";
+import { consoleBaseUrl, rawKeyAllowed, resolveEndpoint } from "./utils.js";
 import { BoxdApiDefinition } from "./_generated/definitions.js";
 import type {
   DuplexCall,
@@ -48,6 +48,12 @@ import type {
 export interface WebTransportOptions {
   creds: Credentials;
   explicitBaseURL?: string;
+  /** A region's endpoint, looked up when first needed (`_regions.ts`). Wins
+   *  over everything else. */
+  resolveBaseURL?: () => Promise<string>;
+  /** A region's name derived from home's: no retries, no exchange on a
+   *  refusal of the key (see the Node transport's `derived`). */
+  derived?: boolean;
   defaultBaseURL: string;
   timeoutMs: number;
   maxRetries: number;
@@ -196,7 +202,10 @@ async function pumpGrpcWebResponse(
 
 export class WebTransport implements ITransport {
   readonly #creds: Credentials;
+  /** Whether this endpoint takes the API key itself (`auth.ts`). */
+  readonly #directKey: DirectKey;
   readonly #explicitBaseURL?: string;
+  readonly #resolveBaseURL?: () => Promise<string>;
   readonly #defaultBaseURL: string;
   readonly #timeout: number;
   readonly #maxRetries: number;
@@ -209,15 +218,18 @@ export class WebTransport implements ITransport {
 
   constructor(opts: WebTransportOptions) {
     this.#creds = opts.creds;
+    this.#directKey = new DirectKey(opts.creds, { resend: !opts.derived });
     this.#explicitBaseURL = opts.explicitBaseURL;
+    this.#resolveBaseURL = opts.resolveBaseURL;
     this.#defaultBaseURL = opts.defaultBaseURL;
     this.#timeout = opts.timeoutMs;
-    this.#maxRetries = opts.maxRetries;
+    this.#maxRetries = opts.derived ? 0 : opts.maxRetries;
   }
 
-  /** Same resolution order as the Node transport: explicit > the machine's
-   *  own cluster > the compiled-in default. */
+  /** Same resolution order as the Node transport: a region's endpoint >
+   *  explicit > the machine's own cluster > the compiled-in default. */
   async #baseURL(): Promise<string> {
+    if (this.#resolveBaseURL) return this.#resolveBaseURL();
     return (
       this.#explicitBaseURL ?? (await this.#creds.clusterUrl()) ?? this.#defaultBaseURL
     );
@@ -226,6 +238,24 @@ export class WebTransport implements ITransport {
   async #httpOrigin(): Promise<string> {
     const { host, useTls } = resolveEndpoint(await this.#baseURL());
     return `${useTls ? "https" : "http"}://${host}`;
+  }
+
+  /** TLS or loopback: an API key may go as itself. */
+  async #rawKeyOk(): Promise<boolean> {
+    return rawKeyAllowed(await this.#baseURL());
+  }
+
+  /**
+   * The bearer of a stream. A stream can't be sent again after a refusal, so
+   * whether this endpoint takes the API key itself is settled first (a
+   * `Whoami` when nothing has shown it yet).
+   */
+  async #streamToken(): Promise<string> {
+    const rawKeyOk = await this.#rawKeyOk();
+    await this.#directKey.beforeStream(rawKeyOk, (token) =>
+      this.#unaryWith(BoxdApiDefinition.methods.whoami, {}, token),
+    );
+    return (await this.#creds.bearer(rawKeyOk)).token;
   }
 
   async consoleOrigin(): Promise<string> {
@@ -242,8 +272,7 @@ export class WebTransport implements ITransport {
     return withRetries(this.#maxRetries, () => this.#invokeUnary(method, req));
   }
 
-  async #headers(): Promise<Headers> {
-    const token = await this.#creds.getToken();
+  #headers(token: string): Headers {
     const headers = new Headers();
     headers.set("content-type", "application/grpc-web+proto");
     headers.set("x-grpc-web", "1");
@@ -256,12 +285,13 @@ export class WebTransport implements ITransport {
     method: MethodDef<unknown, unknown>,
     req: unknown,
     deadline: boolean,
+    token: string,
     cancel?: AbortSignal,
   ): Promise<Response> {
     const origin = await this.#httpOrigin();
     const url = `${origin}/${BoxdApiDefinition.fullName}/${method.name}`;
     const body = grpcWebFrame(method.requestType.encode(req).finish());
-    const headers = await this.#headers();
+    const headers = this.#headers(token);
     const timeout = deadline ? AbortSignal.timeout(this.#timeout) : undefined;
     try {
       return await fetch(url, {
@@ -289,7 +319,12 @@ export class WebTransport implements ITransport {
   }
 
   async #invokeUnary<Req, Resp>(method: MethodDef<Req, Resp>, req: Req): Promise<Resp> {
-    const resp = await this.#post(method, req, true);
+    const rawKeyOk = await this.#rawKeyOk();
+    return this.#directKey.unary(rawKeyOk, (token) => this.#unaryWith(method, req, token));
+  }
+
+  async #unaryWith<Req, Resp>(method: MethodDef<Req, Resp>, req: Req, token: string): Promise<Resp> {
+    const resp = await this.#post(method, req, true, token);
     maybeNotifyUpdate(resp.headers.get(VERSION_RESPONSE_HEADER) ?? undefined);
 
     // A rejection before any message is written arrives as trailers-only
@@ -341,7 +376,9 @@ export class WebTransport implements ITransport {
     };
     void (async () => {
       try {
-        const resp = await this.#post(method, req, opts?.deadline !== false, abort.signal);
+        const token = await this.#streamToken();
+        if (cancelled) return;
+        const resp = await this.#post(method, req, opts?.deadline !== false, token, abort.signal);
         maybeNotifyUpdate(resp.headers.get(VERSION_RESPONSE_HEADER) ?? undefined);
         const rejected = headerError(resp);
         if (rejected) throw rejected;
@@ -374,7 +411,7 @@ export class WebTransport implements ITransport {
   async #sendFrames(path: string, frames: Uint8Array[], signal?: AbortSignal): Promise<Response> {
     const origin = await this.#httpOrigin();
     const url = `${origin}${path}`;
-    const headers = await this.#headers();
+    const headers = this.#headers(await this.#streamToken());
     const body = concatAll(frames);
     try {
       return await fetch(url, { method: "POST", headers, body, signal });

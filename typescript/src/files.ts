@@ -1,4 +1,5 @@
 import type { Transport } from "./_rpc.js";
+import type { RegionOption } from "./regions.js";
 import { BoxdError } from "./errors.js";
 import { BoxdApiDefinition } from "./_generated/definitions.js";
 import type {
@@ -32,31 +33,38 @@ export class MachineFiles {
   ) {}
 
   /** Write a file into the machine. Returns the byte count the server confirmed. */
-  async upload(id: string, path: string, source: UploadSource): Promise<number> {
+  async upload(
+    id: string,
+    path: string,
+    source: UploadSource,
+    opts: RegionOption = {},
+  ): Promise<number> {
     const data = await toBytes(source, this.platform);
     if (data.length <= SINGLE_MESSAGE_LIMIT) {
-      const resp = await this.transport.unary(BoxdApiDefinition.methods.uploadFile, {
-        vmId: id,
-        path,
-        data,
-      });
+      const resp = await this.transport.unary(
+        BoxdApiDefinition.methods.uploadFile,
+        { vmId: id, path, data },
+        { region: opts.region },
+      );
       // Older servers don't verify and leave this 0 — fall back to what we sent.
       return resp.bytesWritten || data.length;
     }
-    return this.#uploadStream(id, path, data);
+    return this.#uploadStream(id, path, data, opts);
   }
 
   /**
    * Read a file out of the machine. Streams (`DownloadFileStream`), so there is
    * no size cap — the whole file still lands in memory as one `Uint8Array`.
    */
-  async download(id: string, path: string): Promise<Uint8Array> {
+  async download(id: string, path: string, opts: RegionOption = {}): Promise<Uint8Array> {
     const req: DownloadFileRequest = { vmId: id, path };
     return new Promise<Uint8Array>((resolve, reject) => {
       const parts: Uint8Array[] = [];
       let received = 0;
       let total: number | undefined;
-      const call = this.transport.serverStream(BoxdApiDefinition.methods.downloadFileStream, req);
+      const call = this.transport.serverStream(BoxdApiDefinition.methods.downloadFileStream, req, {
+        region: opts.region,
+      });
       call.on("data", (chunk: DownloadFileChunk) => {
         if (chunk.totalSize) total = Number(chunk.totalSize);
         if (chunk.data && chunk.data.length > 0) {
@@ -81,7 +89,12 @@ export class MachineFiles {
    * The first chunk carries vm_id/path/total_size; the rest carry bytes only.
    * The server reads exactly total_size bytes and stats the result.
    */
-  async #uploadStream(id: string, path: string, data: Uint8Array): Promise<number> {
+  async #uploadStream(
+    id: string,
+    path: string,
+    data: Uint8Array,
+    opts: RegionOption,
+  ): Promise<number> {
     return new Promise<number>((resolve, reject) => {
       const call = this.transport.clientStream(
         BoxdApiDefinition.methods.uploadFileStream,
@@ -89,6 +102,7 @@ export class MachineFiles {
           if (err) return reject(err);
           resolve(resp.bytesWritten || data.length);
         },
+        { region: opts.region },
       );
       let offset = 0;
       let first = true;
@@ -111,29 +125,49 @@ export class MachineFiles {
    * `truncated: true` and only the first slice of its entries (in no
    * particular order); use `exec` for an exhaustive listing.
    */
-  async listDir(id: string, path: string): Promise<DirListing> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.listDir, { vmId: id, path });
+  async listDir(id: string, path: string, opts: RegionOption = {}): Promise<DirListing> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.listDir,
+      { vmId: id, path },
+      { region: opts.region },
+    );
     return toDirListing(resp);
   }
 
   /** Create a directory. The parent must already exist. */
-  async mkdir(id: string, path: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.mkdir, { vmId: id, path });
+  async mkdir(id: string, path: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.mkdir,
+      { vmId: id, path },
+      { region: opts.region },
+    );
   }
 
   /** Move/rename a file or directory. */
-  async rename(id: string, oldPath: string, newPath: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.renamePath, { vmId: id, oldPath, newPath });
+  async rename(id: string, oldPath: string, newPath: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.renamePath,
+      { vmId: id, oldPath, newPath },
+      { region: opts.region },
+    );
   }
 
   /** Remove a file, or a directory and everything under it. */
-  async delete(id: string, path: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.deletePath, { vmId: id, path });
+  async delete(id: string, path: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.deletePath,
+      { vmId: id, path },
+      { region: opts.region },
+    );
   }
 
   /** Copy a file, or a directory recursively. */
-  async copy(id: string, oldPath: string, newPath: string): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.copyPath, { vmId: id, oldPath, newPath });
+  async copy(id: string, oldPath: string, newPath: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.copyPath,
+      { vmId: id, oldPath, newPath },
+      { region: opts.region },
+    );
   }
 }
 

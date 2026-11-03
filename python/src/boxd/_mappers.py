@@ -34,6 +34,7 @@ from .models import (
     DirEntry,
     DirListing,
     DiskAttachment,
+    ElsewhereItem,
     EnvVar,
     ExposedPort,
     FsEntry,
@@ -67,6 +68,8 @@ from .models import (
     OrgRef,
     OrgUsage,
     Proxy,
+    Region,
+    RegionCount,
     ResizeResult,
     Secret,
     Snapshot,
@@ -134,7 +137,9 @@ def machine_source(msg) -> MachineSource | None:
     )
 
 
-def machine(msg, console_origin: str = "") -> Machine:
+def machine(msg, console_origin: str = "", region: str | None = None) -> Machine:
+    """`region` is where the machine was listed from, for a server that does
+    not say (one that predates regions)."""
     # `billing_org`/`billing_org_id` name the machine's org whether or not it
     # is shared. `org`/`org_id` are the same org, blanked when it is private —
     # so they answer "is it shared", and nothing else.
@@ -197,6 +202,7 @@ def machine(msg, console_origin: str = "") -> Machine:
         created_by_name=msg.created_by_name or None,
         requirements=[machine_requirement(r) for r in msg.requirements],
         packages=[machine_package(p) for p in msg.packages],
+        region=msg.region or region or None,
     )
 
 
@@ -349,7 +355,7 @@ def backup(msg) -> Backup:
 # ── Snapshots ────────────────────────────────────────────────────────
 
 
-def snapshot(msg) -> Snapshot:
+def snapshot(msg, region: str | None = None) -> Snapshot:
     return Snapshot(
         id=msg.snapshot_id,
         name=msg.name,
@@ -365,6 +371,7 @@ def snapshot(msg) -> Snapshot:
         # A server that predates archiving sends neither: on local disk.
         storage=msg.storage or "local",
         archived=msg.archived,
+        region=msg.region or region or None,
     )
 
 
@@ -390,7 +397,7 @@ def disk_attachment(msg) -> DiskAttachment:
     )
 
 
-def disk(msg) -> Disk:
+def disk(msg, region: str | None = None) -> Disk:
     return Disk(
         id=msg.disk_id,
         name=msg.name,
@@ -398,6 +405,7 @@ def disk(msg) -> Disk:
         status=msg.status,
         created_at=_epoch_ms(msg.created_at),
         attachments=[disk_attachment(a) for a in msg.attachments],
+        region=msg.region or region or None,
     )
 
 
@@ -512,6 +520,7 @@ def org_domain(msg) -> OrgDomain:
         domain=msg.domain,
         status=msg.status,
         last_error=msg.last_error,
+        region=_text(msg.region),
     )
 
 
@@ -549,6 +558,7 @@ def org_machine_defaults(msg) -> OrgMachineDefaults:
         memory_bytes=msg.memory_bytes,
         ceiling_vcpu=msg.ceiling_vcpu,
         ceiling_memory_bytes=msg.ceiling_memory_bytes,
+        region=_text(msg.region),
     )
 
 
@@ -736,6 +746,33 @@ def account(msg) -> Account:
 
 def cluster_config(msg) -> ClusterConfig:
     return ClusterConfig(default_image=msg.default_image, zone=msg.zone)
+
+
+# ── Regions ──────────────────────────────────────────────────────────
+
+
+def region(msg) -> Region:
+    return Region(
+        id=msg.id,
+        name=msg.name,
+        zone=msg.zone,
+        api_endpoint=msg.api_endpoint,
+        console_endpoint=msg.console_endpoint,
+        latitude=msg.latitude,
+        longitude=msg.longitude,
+        home=msg.home,
+        org_state=msg.org_state,
+    )
+
+
+def region_counts(msgs) -> list[RegionCount]:
+    return [RegionCount(region=c.region, count=c.count) for c in msgs]
+
+
+def elsewhere_item(msg) -> ElsewhereItem:
+    return ElsewhereItem(
+        region=msg.region, name=msg.name, org_id=_text(msg.org_id), id=msg.id
+    )
 
 
 # ── Usage & cost ─────────────────────────────────────────────────────

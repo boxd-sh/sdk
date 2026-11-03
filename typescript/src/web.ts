@@ -10,7 +10,7 @@
 // future import can't reintroduce either silently.
 import type { Platform } from "./_platform.js";
 import { WebTransport } from "./_transportWeb.js";
-import { BoxdCore, resolveOptions, type BoxdOptions } from "./client.js";
+import { BoxdCore, directRouting, resolveOptions, type BoxdOptions } from "./client.js";
 
 /** Nothing Node-only here: no local files, no automatic in-machine auth. */
 const webPlatform: Platform = {};
@@ -32,7 +32,13 @@ const webPlatform: Platform = {};
  */
 export class Boxd extends BoxdCore {
   constructor(opts: BoxdOptions = {}) {
-    super(new WebTransport(resolveOptions(opts, webPlatform)), webPlatform);
+    const resolved = resolveOptions(opts, webPlatform);
+    super(new WebTransport(resolved), webPlatform, {
+      region: resolved.region,
+      // Another region's endpoint, sharing the credential.
+      connect: (resolveBaseURL, opts) => new WebTransport({ ...resolved, resolveBaseURL, ...opts }),
+      direct: directRouting(resolved),
+    });
   }
 }
 export type { BoxdOptions };
@@ -118,6 +124,8 @@ export { ApiKeys } from "./apiKeys.js";
 export type { ApiKeyCreateParams } from "./apiKeys.js";
 export { AccountNamespace } from "./account.js";
 export type { LinkSshKeyParams } from "./account.js";
+export { Regions } from "./regions.js";
+export type { RegionOption } from "./regions.js";
 
 // Streaming
 export { AsyncByteQueue, ExecStream } from "./exec.js";
@@ -186,6 +194,10 @@ export type {
   PortProtocol,
   Proxy,
   ProxyPortMode,
+  Region,
+  RegionalList,
+  RegionCount,
+  RegionOrgState,
   ResizeResult,
   SelfDeleteResult,
   Secret,
@@ -214,10 +226,12 @@ export {
   NotFoundError,
   PermissionDeniedError,
   RateLimitError,
+  RegionNotEnabledError,
 } from "./errors.js";
 export type {
   AuthenticationErrorReason,
   BoxdErrorOptions,
+  ElsewhereItem,
   FilesystemErrorReason,
 } from "./errors.js";
 

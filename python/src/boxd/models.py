@@ -364,6 +364,10 @@ class Machine(BaseModel):
     """How each of the spec's ``packages`` went, in order: shell commands run
     once after the first boot. Empty without any. The whole output is in
     ``/var/log/boxd/packages.log`` in the machine."""
+    region: str | None = None
+    """The region the machine lives in (``"fra"``, ``"nyc"``, ...). Pass it as
+    ``region=`` to reach the machine from a client set to another region.
+    None when boxd runs in one place."""
 
 
 class _SpecEntry:
@@ -634,6 +638,8 @@ class Snapshot(BaseModel):
     archived: bool = False
     """True unless ``storage`` is "local": machines can't be created from it,
     nor can it be saved again, until an operator unarchives it."""
+    region: str | None = None
+    """The region the snapshot lives in. None when boxd runs in one place."""
 
 
 class CreatedSnapshot(BaseModel):
@@ -671,6 +677,8 @@ class Disk(BaseModel):
     created_at: datetime | None
     """None on disks created before the platform recorded a creation time."""
     attachments: list[DiskAttachment]
+    region: str | None = None
+    """The region the disk lives in. None when boxd runs in one place."""
 
 
 class CreatedDisk(BaseModel):
@@ -700,6 +708,9 @@ class OrgDomain(BaseModel):
     """"pending" | "active"."""
     last_error: str
     """Empty when active / healthy."""
+    region: str | None = None
+    """The region the domain is bound in: an org has at most one domain in
+    each. None when boxd runs in one place."""
 
 
 
@@ -758,6 +769,9 @@ class OrgMachineDefaults(BaseModel):
     ceiling_vcpu: int
     """The org quota. A create or resize above it is refused, never clamped."""
     ceiling_memory_bytes: int
+    region: str | None = None
+    """The org's default region for new machines and disks. None = not set.
+    Set it with :meth:`Orgs.set_default_region`."""
 
 
 class MachineLimitRequest(BaseModel):
@@ -908,7 +922,8 @@ class Team(BaseModel):
     admin/owner, or a direct team-admin membership."""
     members: list[TeamMember]
     default_snapshot_id: str | None
-    """None when no default is set."""
+    """The default snapshot in the region the call went to (each region has
+    its own); None when none is set there."""
 
 
 class ApiKey(BaseModel):
@@ -1077,6 +1092,78 @@ class ClusterConfig(BaseModel):
     zone: str
 
 
+# ── Regions ──────────────────────────────────────────────────────────
+
+RegionOrgState = Literal["enabled", "requested", "available"]
+""""enabled": the org can use the region (its home region always is).
+"requested": an org admin asked for it and boxd has yet to enable it.
+"available": the org can ask for it with :meth:`Orgs.request_region`."""
+
+
+class Region(BaseModel):
+    """A region boxd runs in. Each has its own API endpoint, and a machine,
+    snapshot or disk lives in exactly one of them."""
+
+    id: str
+    """A short code, e.g. ``"fra"``: what ``region=`` takes."""
+    name: str
+    """E.g. ``"Frankfurt"``."""
+    zone: str
+    """Machines here are reached at ``<name>.<zone>``."""
+    api_endpoint: str
+    console_endpoint: str
+    latitude: float
+    longitude: float
+    home: bool
+    """Accounts, orgs, keys and billing live in the home region."""
+    org_state: RegionOrgState | str
+    """Where the org asked about stands with this region."""
+
+
+class RegionCount(BaseModel):
+    """How many of something the org has in one other region."""
+
+    region: str
+    count: int
+
+
+class ElsewhereItem(BaseModel):
+    """A machine, snapshot or disk of a name, in another region."""
+
+    region: str
+    name: str
+    org_id: str | None
+    id: str
+
+
+_T = TypeVar("_T")
+
+
+class RegionalList(list, Generic[_T]):
+    """A plain ``list`` of what a ``list()`` call found, plus where else there
+    is more.
+
+    ``elsewhere`` counts what the org has in each OTHER region, for a list of
+    one region (``list()`` with no ``region="all"``). ``unavailable`` names
+    the regions a ``region="all"`` list could not reach just now; their
+    items are missing.
+    """
+
+    elsewhere: list[RegionCount]
+    unavailable: list[str]
+
+    def __init__(
+        self,
+        items=(),
+        *,
+        elsewhere: list[RegionCount] | None = None,
+        unavailable: list[str] | None = None,
+    ) -> None:
+        super().__init__(items)
+        self.elsewhere = list(elsewhere or [])
+        self.unavailable = list(unavailable or [])
+
+
 __all__ = [
     "Account",
     "ApiKey",
@@ -1092,6 +1179,7 @@ __all__ = [
     "Disk",
     "DiskAttachment",
     "DiskStatus",
+    "ElsewhereItem",
     "EnvVar",
     "ExecResult",
     "SelfDeleteResult",
@@ -1112,6 +1200,10 @@ __all__ = [
     "Proxy",
     "ProxyEntry",
     "ProxyPortMode",
+    "Region",
+    "RegionCount",
+    "RegionOrgState",
+    "RegionalList",
     "ResumeResult",
     "Secret",
     "Snapshot",

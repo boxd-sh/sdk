@@ -1,12 +1,16 @@
+import { ALL_REGIONS, eachRegion, normalizeRegion, notFoundElsewhere } from "./_regions.js";
 import type { Transport } from "./_rpc.js";
 import { BoxdApiDefinition } from "./_generated/definitions.js";
 import { NotFoundError } from "./errors.js";
 import {
   toCreatedSnapshot,
+  toRegionalList,
   toSnapshot,
   type CreatedSnapshot,
+  type RegionalList,
   type Snapshot,
 } from "./models.js";
+import type { RegionOption } from "./regions.js";
 import type {
   CreateSnapshotRequest,
   CreateSnapshotResponse,
@@ -33,11 +37,11 @@ export class Snapshots {
    * are captured too, and every machine created from the snapshot starts
    * them paused (`pausedAutomations` says how many).
    */
-  async create(machine: string, name: string): Promise<CreatedSnapshot> {
+  async create(machine: string, name: string, opts: RegionOption = {}): Promise<CreatedSnapshot> {
     const req: CreateSnapshotRequest = { vm: machine, name };
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.createSnapshot,
-      req,
-    );
+    const resp = await this.transport.unary(BoxdApiDefinition.methods.createSnapshot, req, {
+      region: opts.region,
+    });
     const created = toCreatedSnapshot(resp);
     const n = created.pausedAutomations;
     if (n > 0) {
@@ -50,25 +54,60 @@ export class Snapshots {
     return created;
   }
 
-  async get(name: string, params: { org?: string } = {}): Promise<Snapshot> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.getSnapshot,
-      { name, org: params.org ?? "" },
-    );
-    if (!resp.snapshot) throw new NotFoundError(`snapshot not found: ${name}`);
+  async get(name: string, params: { org?: string } & RegionOption = {}): Promise<Snapshot> {
+    const req = { name, org: params.org ?? "" };
+    const region = { region: params.region };
+    const resp = await this.transport.unary(BoxdApiDefinition.methods.getSnapshot, req, region);
+    if (!resp.snapshot) {
+      throw await notFoundElsewhere(
+        this.transport,
+        new NotFoundError(`snapshot not found: ${name}`),
+        BoxdApiDefinition.methods.getSnapshot,
+        req,
+        region,
+      );
+    }
     return toSnapshot(resp.snapshot);
   }
 
-  /** Snapshots never cross an org boundary; key-fenced callers are pinned. */
-  async list(params: { org?: string } = {}): Promise<Snapshot[]> {
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.listSnapshots,
-      { org: params.org ?? "" },
+  /**
+   * Snapshots never cross an org boundary; key-fenced callers are pinned.
+   *
+   * The list is of one region (`region`, default the client's); its
+   * `elsewhere` counts the org's snapshots in each other region.
+   * `{ region: "all" }` lists every region the org has.
+   */
+  async list(params: { org?: string } & RegionOption = {}): Promise<RegionalList<Snapshot>> {
+    const region = normalizeRegion(params.region);
+    const req = { org: params.org ?? "", withElsewhere: false };
+    if (region === ALL_REGIONS) {
+      const { pages, unavailable } = await eachRegion(
+        this.transport,
+        BoxdApiDefinition.methods.listSnapshots,
+        req,
+        params.org,
+      );
+      const all = pages.flatMap((p) =>
+        (p.resp.snapshots ?? []).map((s) => toSnapshot(s, p.region)),
+      );
+      return toRegionalList(all, [], unavailable);
+    }
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.listSnapshots,
+      { ...req, withElsewhere: true },
+      { region },
     );
-    return (resp.snapshots ?? []).map(toSnapshot);
+    return toRegionalList(
+      (resp.snapshots ?? []).map((s) => toSnapshot(s, region)),
+      resp.elsewhere,
+    );
   }
 
-  async delete(name: string, params: { org?: string } = {}): Promise<void> {
-    await this.transport.unary(BoxdApiDefinition.methods.deleteSnapshot,
+  async delete(name: string, params: { org?: string } & RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.deleteSnapshot,
       { name, org: params.org ?? "" },
+      { region: params.region },
     );
   }
 }
