@@ -19,9 +19,12 @@ import { WebTransport } from "../src/_transportWeb.js";
 import { Machines } from "../src/machines.js";
 import { MachineFiles } from "../src/files.js";
 import { MachineFs } from "../src/fs.js";
+import { MachineComputer } from "../src/computer.js";
 import { Credentials } from "../src/auth.js";
 import {
   BoxdApiDefinition,
+  ComputerActionRequest,
+  ComputerActionResponse,
   CreateVmRequest,
   CreateVmResponse,
   DestroyVmResponse,
@@ -43,6 +46,8 @@ import {
   UploadFileResponse,
 } from "../src/_generated/definitions.js";
 import {
+  APIConnectionError,
+  APIStatusError,
   AgentOutdatedError,
   AuthenticationError,
   BoxdError,
@@ -136,6 +141,7 @@ async function readGrpcWebRequest(req: Request): Promise<Uint8Array[]> {
 function startMockProxy() {
   let getVmCalls = 0;
   let execCalls = 0;
+  let computerCalls = 0;
   const server = Bun.serve({
     port: 0,
     async fetch(req) {
@@ -301,6 +307,29 @@ function startMockProxy() {
             { headers: { "content-type": "application/grpc-web+proto" } },
           );
         }
+        case "ComputerAction": {
+          computerCalls++;
+          const r = ComputerActionRequest.decode(frames[0]!);
+          if (r.vmId === "desktop-down") return trailersOnlyRejection(14, "the desktop service did not start");
+          if (r.click?.at && r.click.at.x >= 1600) {
+            return trailersOnlyRejection(3, `coordinate (${r.click.at.x}, ${r.click.at.y}) is off the screen`);
+          }
+          // A wait answers after it, like the machine.
+          if (r.wait) await new Promise((done) => setTimeout(done, r.wait!.ms));
+          const resp = ComputerActionResponse.fromPartial({
+            screenWidth: 1600,
+            screenHeight: 900,
+            cursor: r.click?.at ?? { x: 0, y: 0 },
+            screenshot:
+              r.screenshot || r.returnScreenshot
+                ? { data: new Uint8Array([1, 2, 3]), mimeType: "image/png", width: 1280, height: 720 }
+                : undefined,
+          });
+          return new Response(
+            concat(messageFrame(ComputerActionResponse.encode(resp).finish()), trailerFrame(0)),
+            { headers: { "content-type": "application/grpc-web+proto" } },
+          );
+        }
         default:
           return trailersOnlyRejection(12, `unimplemented: ${method}`);
       }
@@ -315,16 +344,23 @@ function startMockProxy() {
     get execCalls() {
       return execCalls;
     },
+    get computerCalls() {
+      return computerCalls;
+    },
   };
 }
 
-function transportAgainst(origin: { httpOrigin: string }, token = "test-token") {
+function transportAgainst(
+  origin: { httpOrigin: string },
+  token = "test-token",
+  opts: { timeoutMs?: number; maxRetries?: number } = {},
+) {
   return new WebTransport({
     creds: new Credentials({ token, exchangeUrl: "https://example.invalid" }),
     explicitBaseURL: origin.httpOrigin,
     defaultBaseURL: origin.httpOrigin,
-    timeoutMs: 5_000,
-    maxRetries: 0,
+    timeoutMs: opts.timeoutMs ?? 5_000,
+    maxRetries: opts.maxRetries ?? 0,
   });
 }
 
@@ -577,5 +613,39 @@ describe("WebTransport end to end, through the real namespace classes (not the t
     const data = new Uint8Array(5 * 1024 * 1024).fill(9);
     const written = await files.upload("alpha", "/tmp/big", data);
     expect(written).toBe(data.length);
+  });
+});
+
+describe("WebTransport: ComputerAction through MachineComputer", () => {
+  it("a click with a screenshot round-trips", async () => {
+    proxy = startMockProxy();
+    const r = await new MachineComputer(transportAgainst(proxy)).click("alpha", { x: 5, y: 6, screenshot: true });
+    expect(r.cursor).toEqual({ x: 5, y: 6 });
+    expect([r.screenWidth, r.screenHeight]).toEqual([1600, 900]);
+    expect(r.screenshot?.data).toEqual(new Uint8Array([1, 2, 3]));
+    expect([r.screenshot?.mimeType, r.screenshot?.width, r.screenshot?.height]).toEqual(["image/png", 1280, 720]);
+  });
+
+  it("a refused action carries the server's message", async () => {
+    proxy = startMockProxy();
+    const err = await new MachineComputer(transportAgainst(proxy)).click("alpha", { x: 2000, y: 1 }).catch((e) => e);
+    expect(err).toBeInstanceOf(APIStatusError);
+    expect(err.message).toBe("coordinate (2000, 1) is off the screen");
+  });
+
+  it("repeats a screenshot after a connection failure, never a click", async () => {
+    proxy = startMockProxy();
+    const computer = new MachineComputer(transportAgainst(proxy, "test-token", { maxRetries: 2 }));
+    await expect(computer.click("desktop-down")).rejects.toBeInstanceOf(APIConnectionError);
+    expect(proxy.computerCalls).toBe(1);
+    await expect(computer.screenshot("desktop-down")).rejects.toBeInstanceOf(APIConnectionError);
+    expect(proxy.computerCalls).toBe(4);
+  });
+
+  it("a wait longer than the client's timeout still gets its answer", async () => {
+    proxy = startMockProxy();
+    const computer = new MachineComputer(transportAgainst(proxy, "test-token", { timeoutMs: 200 }));
+    const r = await computer.wait("alpha", 400);
+    expect(r.screenWidth).toBe(1600);
   });
 });

@@ -116,6 +116,11 @@ class _TransportBase:
     def _metadata(self, token: str) -> list[tuple[str, str]]:
         return [("authorization", f"Bearer {token}"), *_version_check.request_metadata()]
 
+    def _call_timeout(self, extra: float) -> float | None:
+        if self._timeout is None:
+            return None
+        return self._timeout + max(0.0, extra)
+
     def _raw_key(self) -> str | None:
         """The API key, when this call carries it itself (TLS or loopback)."""
         return self._credentials.raw_key(allowed=raw_key_allowed(self.base_url))
@@ -159,8 +164,17 @@ class SyncTransport(_TransportBase):
             self._stub = api_pb2_grpc.BoxdApiStub(self._channel)
         return self._stub
 
-    def call(self, method: str, request):
-        """Unary call with retries. Returns the response message."""
+    def call(
+        self, method: str, request, *, extra_timeout: float = 0.0, retry: bool = True
+    ):
+        """Unary call with retries. Returns the response message.
+
+        `extra_timeout` adds seconds to the client's timeout, for a call that
+        is asked to take that long (a computer-use wait). `retry=False` sends
+        it once: for a request the server may have partly carried out before
+        failing with `unavailable`, where sending it again would repeat it.
+        """
+        timeout = self._call_timeout(extra_timeout)
         if _streamed(request):
             self._settle_raw_key()
         attempt = 0
@@ -179,7 +193,7 @@ class SyncTransport(_TransportBase):
             stub = self._ensure_stub()
             try:
                 response, call = getattr(stub, method).with_call(
-                    request, timeout=self._timeout, metadata=self._metadata(token)
+                    request, timeout=timeout, metadata=self._metadata(token)
                 )
             except grpc.RpcError as e:
                 if raw is not None and _refuses_raw_key(e):
@@ -188,7 +202,7 @@ class SyncTransport(_TransportBase):
                     self._credentials.raw_key_refused()
                     if not _streamed(request) and not self._derived:
                         continue
-                if self._should_retry(e, attempt, request):
+                if retry and self._should_retry(e, attempt, request):
                     time.sleep(self._backoff(attempt))
                     attempt += 1
                     continue
@@ -257,7 +271,10 @@ class AsyncTransport(_TransportBase):
             self._stub = api_pb2_grpc.BoxdApiStub(self._channel)
         return self._stub
 
-    async def call(self, method: str, request):
+    async def call(
+        self, method: str, request, *, extra_timeout: float = 0.0, retry: bool = True
+    ):
+        timeout = self._call_timeout(extra_timeout)
         if _streamed(request):
             await self._settle_raw_key()
         attempt = 0
@@ -273,7 +290,7 @@ class AsyncTransport(_TransportBase):
                 raise
             stub = await self._ensure_stub()
             call = getattr(stub, method)(
-                request, timeout=self._timeout, metadata=self._metadata(token)
+                request, timeout=timeout, metadata=self._metadata(token)
             )
             try:
                 response = await call
@@ -284,7 +301,7 @@ class AsyncTransport(_TransportBase):
                     self._credentials.raw_key_refused()
                     if not _streamed(request) and not self._derived:
                         continue
-                if self._should_retry(e, attempt, request):
+                if retry and self._should_retry(e, attempt, request):
                     await asyncio.sleep(self._backoff(attempt))
                     attempt += 1
                     continue

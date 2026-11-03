@@ -39,6 +39,9 @@ class FakeTransport:
     def __init__(self, responses=None):
         self.calls: list[tuple[str, object]] = []
         self.regions: list[str | None] = []
+        # The other keywords each unary `call` got (`extra_timeout`, `retry`),
+        # in step with `calls`; {} for the stream calls.
+        self.call_options: list[dict] = []
         self._responses = list(responses or [])
 
     @property
@@ -53,9 +56,10 @@ class FakeTransport:
     def find_elsewhere(self, err, method, request, *, region=None):
         return err
 
-    def _next(self, method, request, region=None):
+    def _next(self, method, request, region=None, options=None):
         self.calls.append((method, request))
         self.regions.append(region)
+        self.call_options.append(dict(options or {}))
         if not self._responses:
             return None
         item = self._responses.pop(0)
@@ -63,8 +67,8 @@ class FakeTransport:
             raise item
         return item
 
-    def call(self, method, request, *, region=None):
-        return self._next(method, request, region)
+    def call(self, method, request, *, region=None, **options):
+        return self._next(method, request, region, options)
 
     def server_stream(self, method, request, *, region=None):
         return iter(self._next(method, request, region) or [])
@@ -83,8 +87,8 @@ class FakeAsyncTransport(FakeTransport):
     async def find_elsewhere(self, err, method, request, *, region=None):
         return err
 
-    async def call(self, method, request, *, region=None):
-        return self._next(method, request, region)
+    async def call(self, method, request, *, region=None, **options):
+        return self._next(method, request, region, options)
 
     async def server_stream(self, method, request, *, region=None):
         items = self._next(method, request, region) or []

@@ -400,6 +400,17 @@ function reasonFromMetadata(metadata: RpcError["metadata"]): string | undefined 
   }
 }
 
+/**
+ * @internal
+ * The server's message when it couldn't reach the machine's agent: nothing
+ * was sent to the machine, so a command (or a computer action) never started
+ * and sending it again is safe. Any other failure may come after it started.
+ */
+export function agentUnreachable(err: unknown): boolean {
+  return (
+    err instanceof APIConnectionError && err.message.startsWith("cannot connect to VM agent")
+  );
+}
 
 /**
  * Retry policy: connection failures only.

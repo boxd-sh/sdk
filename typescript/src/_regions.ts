@@ -49,6 +49,7 @@ import {
 } from "./_generated/definitions.js";
 import type {
   CallOptions,
+  UnaryOptions,
   DuplexCall,
   MethodDef,
   ReadableCall,
@@ -165,6 +166,7 @@ const LOOKUP: ReadonlyMap<string, [Kind, string[]]> = new Map<string, [Kind, str
     "SetSsh",
     "SetDeleteAfter",
     "StreamLogs",
+    "ComputerAction",
     "ExposePort",
     "ListExposedPorts",
     "ListProxies",
@@ -529,12 +531,12 @@ export class RegionRouter implements Transport {
   async unary<Req, Resp>(
     method: MethodDef<Req, Resp>,
     req: Req,
-    opts?: CallOptions,
+    opts?: UnaryOptions,
   ): Promise<Resp> {
     const direct = await this.#directRoute(method.name, req, opts?.region);
     if (direct) {
       try {
-        const resp = await this.#send(direct.transport, method, req, req);
+        const resp = await this.#send(direct.transport, method, req, req, opts);
         if (this.#directState.get(direct.region) !== "off") {
           this.#directState.set(direct.region, "confirmed");
         }
@@ -547,7 +549,7 @@ export class RegionRouter implements Transport {
       }
     }
     const [transport, sent] = await this.#route(method.name, req, opts?.region);
-    return this.#send(transport, method, sent, req);
+    return this.#send(transport, method, sent, req, opts);
   }
 
   /** One unary call on `transport`: `sent` is what it is sent, `req` what
@@ -557,10 +559,11 @@ export class RegionRouter implements Transport {
     method: MethodDef<Req, Resp>,
     sent: Req,
     req: Req,
+    opts?: UnaryOptions,
   ): Promise<Resp> {
     let resp: Resp;
     try {
-      resp = await transport.unary(method, sent);
+      resp = await transport.unary(method, sent, opts);
     } catch (err) {
       if (err instanceof NotFoundError) {
         await this.#lookElsewhere(err, transport, lookupOf(method.name, req), orgOf(req));

@@ -1190,6 +1190,182 @@ export interface DesktopChunk {
   data: Uint8Array;
 }
 
+export interface ComputerActionRequest {
+  /** machine name or id */
+  vmId: string;
+  screenshot?: ComputerScreenshot | undefined;
+  cursorPosition?: ComputerCursorPosition | undefined;
+  mouseMove?: ComputerMouseMove | undefined;
+  click?: ComputerClick | undefined;
+  mouseDown?: ComputerMouseButton | undefined;
+  mouseUp?: ComputerMouseButton | undefined;
+  drag?: ComputerDrag | undefined;
+  scroll?: ComputerScroll | undefined;
+  type?: ComputerType | undefined;
+  key?: ComputerKey | undefined;
+  wait?: ComputerWait | undefined;
+  setScreenSize?:
+    | ComputerSetScreenSize
+    | undefined;
+  /**
+   * Take a screenshot after the action and return it. Always on for the
+   * `screenshot` action.
+   */
+  returnScreenshot: boolean;
+  screenshotOptions?: ComputerScreenshotOptions | undefined;
+}
+
+/** A point on the screen, in pixels from the top left. */
+export interface ComputerPoint {
+  x: number;
+  y: number;
+}
+
+/** A rectangle on the screen. */
+export interface ComputerRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ComputerScreenshot {
+}
+
+export interface ComputerCursorPosition {
+}
+
+export interface ComputerMouseMove {
+  to?: ComputerPoint | undefined;
+}
+
+export interface ComputerClick {
+  at?: ComputerPoint | undefined;
+  button: string;
+  /** 1 (the default when 0), 2 for a double click, 3 for a triple click */
+  count: number;
+  modifiers: string;
+}
+
+/**
+ * Press (`mouse_down`) or release (`mouse_up`) a button, for drags an agent
+ * does step by step.
+ */
+export interface ComputerMouseButton {
+  at?: ComputerPoint | undefined;
+  button: string;
+}
+
+/** Press at the first point, move through the rest, release at the last. */
+export interface ComputerDrag {
+  /** 2 to 100 points */
+  path: ComputerPoint[];
+  button: string;
+  modifiers: string;
+}
+
+/** Wheel clicks; positive scrolls right (`delta_x`) and down (`delta_y`). */
+export interface ComputerScroll {
+  at?: ComputerPoint | undefined;
+  deltaX: number;
+  deltaY: number;
+  modifiers: string;
+}
+
+/** Types text where the keyboard focus is, as a person would on a US layout. */
+export interface ComputerType {
+  text: string;
+}
+
+/**
+ * Presses keys. `keys` is a key or a "+"-joined combination ("Return",
+ * "ctrl+s", "alt+Tab"), or several separated by spaces, pressed in turn.
+ * Names are X keysyms as xdotool takes them, plus common aliases ("enter",
+ * "esc", "cmd", "arrowleft", "pageup"), case-insensitive.
+ */
+export interface ComputerKey {
+  keys: string;
+  /**
+   * Press the keys this many times; 0 means once. Up to 100, and up to 1000
+   * presses in all (the keys times `repeat`).
+   */
+  repeat: number;
+  /**
+   * Hold one key or combination down this long, then release it, instead of
+   * pressing it. Up to 300000 (5 minutes).
+   */
+  holdMs: number;
+}
+
+export interface ComputerWait {
+  /** up to 300000 (5 minutes) */
+  ms: number;
+}
+
+/**
+ * Hold the screen at this size until it is let go or the desktop restarts.
+ * While it is held, someone watching in the console sees it scaled to fit
+ * instead of resizing it, so an agent's coordinates stay put. Both 0 lets go,
+ * and the screen follows the viewer again. From 320x200 to 5120x2880.
+ */
+export interface ComputerSetScreenSize {
+  width: number;
+  height: number;
+}
+
+export interface ComputerScreenshotOptions {
+  /** "png" (the default when empty), "jpeg" or "webp" */
+  format: string;
+  /** jpeg and webp, 1-100; 0 means 80 */
+  quality: number;
+  /**
+   * Scale the image down to fit within this size, keeping its shape; 0 means
+   * no limit. Never scaled up.
+   */
+  maxWidth: number;
+  maxHeight: number;
+  /**
+   * Only this part of the screen, at full resolution (then scaled to fit
+   * `max_width`/`max_height`), for zooming in. Unset means the whole screen.
+   */
+  region?:
+    | ComputerRegion
+    | undefined;
+  /**
+   * Wait this long after the action before taking the screenshot, so the
+   * screen can catch up. Up to 60000.
+   */
+  delayMs: number;
+}
+
+export interface ComputerActionResponse {
+  screenWidth: number;
+  screenHeight: number;
+  /** where the pointer is after the action */
+  cursor?:
+    | ComputerPoint
+    | undefined;
+  /**
+   * Set when one was asked for. A full-size PNG of a large screen can pass
+   * 30 MB: a client on gRPC's default 4 MB receive limit should raise it, or
+   * ask for less with `max_width`/`max_height` or JPEG.
+   */
+  screenshot?:
+    | ComputerImage
+    | undefined;
+  /** set_screen_size is holding the screen at this size */
+  screenHeld: boolean;
+}
+
+export interface ComputerImage {
+  data: Uint8Array;
+  /** "image/png", "image/jpeg" or "image/webp" */
+  mimeType: string;
+  /** the image's size, after any scaling */
+  width: number;
+  height: number;
+}
+
 /** Networks */
 export interface CreateNetworkRequest {
   name: string;
@@ -11013,6 +11189,1776 @@ export const DesktopChunk: MessageFns<DesktopChunk> = {
     const message = createBaseDesktopChunk();
     message.vmId = object.vmId ?? "";
     message.data = object.data ?? new Uint8Array(0);
+    return message;
+  },
+};
+
+function createBaseComputerActionRequest(): ComputerActionRequest {
+  return {
+    vmId: "",
+    screenshot: undefined,
+    cursorPosition: undefined,
+    mouseMove: undefined,
+    click: undefined,
+    mouseDown: undefined,
+    mouseUp: undefined,
+    drag: undefined,
+    scroll: undefined,
+    type: undefined,
+    key: undefined,
+    wait: undefined,
+    setScreenSize: undefined,
+    returnScreenshot: false,
+    screenshotOptions: undefined,
+  };
+}
+
+export const ComputerActionRequest: MessageFns<ComputerActionRequest> = {
+  encode(message: ComputerActionRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    if (message.screenshot !== undefined) {
+      ComputerScreenshot.encode(message.screenshot, writer.uint32(18).fork()).join();
+    }
+    if (message.cursorPosition !== undefined) {
+      ComputerCursorPosition.encode(message.cursorPosition, writer.uint32(26).fork()).join();
+    }
+    if (message.mouseMove !== undefined) {
+      ComputerMouseMove.encode(message.mouseMove, writer.uint32(34).fork()).join();
+    }
+    if (message.click !== undefined) {
+      ComputerClick.encode(message.click, writer.uint32(42).fork()).join();
+    }
+    if (message.mouseDown !== undefined) {
+      ComputerMouseButton.encode(message.mouseDown, writer.uint32(50).fork()).join();
+    }
+    if (message.mouseUp !== undefined) {
+      ComputerMouseButton.encode(message.mouseUp, writer.uint32(58).fork()).join();
+    }
+    if (message.drag !== undefined) {
+      ComputerDrag.encode(message.drag, writer.uint32(66).fork()).join();
+    }
+    if (message.scroll !== undefined) {
+      ComputerScroll.encode(message.scroll, writer.uint32(74).fork()).join();
+    }
+    if (message.type !== undefined) {
+      ComputerType.encode(message.type, writer.uint32(82).fork()).join();
+    }
+    if (message.key !== undefined) {
+      ComputerKey.encode(message.key, writer.uint32(90).fork()).join();
+    }
+    if (message.wait !== undefined) {
+      ComputerWait.encode(message.wait, writer.uint32(98).fork()).join();
+    }
+    if (message.setScreenSize !== undefined) {
+      ComputerSetScreenSize.encode(message.setScreenSize, writer.uint32(122).fork()).join();
+    }
+    if (message.returnScreenshot !== false) {
+      writer.uint32(104).bool(message.returnScreenshot);
+    }
+    if (message.screenshotOptions !== undefined) {
+      ComputerScreenshotOptions.encode(message.screenshotOptions, writer.uint32(114).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerActionRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerActionRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.screenshot = ComputerScreenshot.decode(reader, reader.uint32());
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.cursorPosition = ComputerCursorPosition.decode(reader, reader.uint32());
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.mouseMove = ComputerMouseMove.decode(reader, reader.uint32());
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.click = ComputerClick.decode(reader, reader.uint32());
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.mouseDown = ComputerMouseButton.decode(reader, reader.uint32());
+          continue;
+        }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.mouseUp = ComputerMouseButton.decode(reader, reader.uint32());
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.drag = ComputerDrag.decode(reader, reader.uint32());
+          continue;
+        }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.scroll = ComputerScroll.decode(reader, reader.uint32());
+          continue;
+        }
+        case 10: {
+          if (tag !== 82) {
+            break;
+          }
+
+          message.type = ComputerType.decode(reader, reader.uint32());
+          continue;
+        }
+        case 11: {
+          if (tag !== 90) {
+            break;
+          }
+
+          message.key = ComputerKey.decode(reader, reader.uint32());
+          continue;
+        }
+        case 12: {
+          if (tag !== 98) {
+            break;
+          }
+
+          message.wait = ComputerWait.decode(reader, reader.uint32());
+          continue;
+        }
+        case 15: {
+          if (tag !== 122) {
+            break;
+          }
+
+          message.setScreenSize = ComputerSetScreenSize.decode(reader, reader.uint32());
+          continue;
+        }
+        case 13: {
+          if (tag !== 104) {
+            break;
+          }
+
+          message.returnScreenshot = reader.bool();
+          continue;
+        }
+        case 14: {
+          if (tag !== 114) {
+            break;
+          }
+
+          message.screenshotOptions = ComputerScreenshotOptions.decode(reader, reader.uint32());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ComputerActionRequest {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      screenshot: isSet(object.screenshot) ? ComputerScreenshot.fromJSON(object.screenshot) : undefined,
+      cursorPosition: isSet(object.cursorPosition)
+        ? ComputerCursorPosition.fromJSON(object.cursorPosition)
+        : isSet(object.cursor_position)
+        ? ComputerCursorPosition.fromJSON(object.cursor_position)
+        : undefined,
+      mouseMove: isSet(object.mouseMove)
+        ? ComputerMouseMove.fromJSON(object.mouseMove)
+        : isSet(object.mouse_move)
+        ? ComputerMouseMove.fromJSON(object.mouse_move)
+        : undefined,
+      click: isSet(object.click) ? ComputerClick.fromJSON(object.click) : undefined,
+      mouseDown: isSet(object.mouseDown)
+        ? ComputerMouseButton.fromJSON(object.mouseDown)
+        : isSet(object.mouse_down)
+        ? ComputerMouseButton.fromJSON(object.mouse_down)
+        : undefined,
+      mouseUp: isSet(object.mouseUp)
+        ? ComputerMouseButton.fromJSON(object.mouseUp)
+        : isSet(object.mouse_up)
+        ? ComputerMouseButton.fromJSON(object.mouse_up)
+        : undefined,
+      drag: isSet(object.drag) ? ComputerDrag.fromJSON(object.drag) : undefined,
+      scroll: isSet(object.scroll) ? ComputerScroll.fromJSON(object.scroll) : undefined,
+      type: isSet(object.type) ? ComputerType.fromJSON(object.type) : undefined,
+      key: isSet(object.key) ? ComputerKey.fromJSON(object.key) : undefined,
+      wait: isSet(object.wait) ? ComputerWait.fromJSON(object.wait) : undefined,
+      setScreenSize: isSet(object.setScreenSize)
+        ? ComputerSetScreenSize.fromJSON(object.setScreenSize)
+        : isSet(object.set_screen_size)
+        ? ComputerSetScreenSize.fromJSON(object.set_screen_size)
+        : undefined,
+      returnScreenshot: isSet(object.returnScreenshot)
+        ? globalThis.Boolean(object.returnScreenshot)
+        : isSet(object.return_screenshot)
+        ? globalThis.Boolean(object.return_screenshot)
+        : false,
+      screenshotOptions: isSet(object.screenshotOptions)
+        ? ComputerScreenshotOptions.fromJSON(object.screenshotOptions)
+        : isSet(object.screenshot_options)
+        ? ComputerScreenshotOptions.fromJSON(object.screenshot_options)
+        : undefined,
+    };
+  },
+
+  toJSON(message: ComputerActionRequest): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.screenshot !== undefined) {
+      obj.screenshot = ComputerScreenshot.toJSON(message.screenshot);
+    }
+    if (message.cursorPosition !== undefined) {
+      obj.cursorPosition = ComputerCursorPosition.toJSON(message.cursorPosition);
+    }
+    if (message.mouseMove !== undefined) {
+      obj.mouseMove = ComputerMouseMove.toJSON(message.mouseMove);
+    }
+    if (message.click !== undefined) {
+      obj.click = ComputerClick.toJSON(message.click);
+    }
+    if (message.mouseDown !== undefined) {
+      obj.mouseDown = ComputerMouseButton.toJSON(message.mouseDown);
+    }
+    if (message.mouseUp !== undefined) {
+      obj.mouseUp = ComputerMouseButton.toJSON(message.mouseUp);
+    }
+    if (message.drag !== undefined) {
+      obj.drag = ComputerDrag.toJSON(message.drag);
+    }
+    if (message.scroll !== undefined) {
+      obj.scroll = ComputerScroll.toJSON(message.scroll);
+    }
+    if (message.type !== undefined) {
+      obj.type = ComputerType.toJSON(message.type);
+    }
+    if (message.key !== undefined) {
+      obj.key = ComputerKey.toJSON(message.key);
+    }
+    if (message.wait !== undefined) {
+      obj.wait = ComputerWait.toJSON(message.wait);
+    }
+    if (message.setScreenSize !== undefined) {
+      obj.setScreenSize = ComputerSetScreenSize.toJSON(message.setScreenSize);
+    }
+    if (message.returnScreenshot !== false) {
+      obj.returnScreenshot = message.returnScreenshot;
+    }
+    if (message.screenshotOptions !== undefined) {
+      obj.screenshotOptions = ComputerScreenshotOptions.toJSON(message.screenshotOptions);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerActionRequest>): ComputerActionRequest {
+    return ComputerActionRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ComputerActionRequest>): ComputerActionRequest {
+    const message = createBaseComputerActionRequest();
+    message.vmId = object.vmId ?? "";
+    message.screenshot = (object.screenshot !== undefined && object.screenshot !== null)
+      ? ComputerScreenshot.fromPartial(object.screenshot)
+      : undefined;
+    message.cursorPosition = (object.cursorPosition !== undefined && object.cursorPosition !== null)
+      ? ComputerCursorPosition.fromPartial(object.cursorPosition)
+      : undefined;
+    message.mouseMove = (object.mouseMove !== undefined && object.mouseMove !== null)
+      ? ComputerMouseMove.fromPartial(object.mouseMove)
+      : undefined;
+    message.click = (object.click !== undefined && object.click !== null)
+      ? ComputerClick.fromPartial(object.click)
+      : undefined;
+    message.mouseDown = (object.mouseDown !== undefined && object.mouseDown !== null)
+      ? ComputerMouseButton.fromPartial(object.mouseDown)
+      : undefined;
+    message.mouseUp = (object.mouseUp !== undefined && object.mouseUp !== null)
+      ? ComputerMouseButton.fromPartial(object.mouseUp)
+      : undefined;
+    message.drag = (object.drag !== undefined && object.drag !== null)
+      ? ComputerDrag.fromPartial(object.drag)
+      : undefined;
+    message.scroll = (object.scroll !== undefined && object.scroll !== null)
+      ? ComputerScroll.fromPartial(object.scroll)
+      : undefined;
+    message.type = (object.type !== undefined && object.type !== null)
+      ? ComputerType.fromPartial(object.type)
+      : undefined;
+    message.key = (object.key !== undefined && object.key !== null) ? ComputerKey.fromPartial(object.key) : undefined;
+    message.wait = (object.wait !== undefined && object.wait !== null)
+      ? ComputerWait.fromPartial(object.wait)
+      : undefined;
+    message.setScreenSize = (object.setScreenSize !== undefined && object.setScreenSize !== null)
+      ? ComputerSetScreenSize.fromPartial(object.setScreenSize)
+      : undefined;
+    message.returnScreenshot = object.returnScreenshot ?? false;
+    message.screenshotOptions = (object.screenshotOptions !== undefined && object.screenshotOptions !== null)
+      ? ComputerScreenshotOptions.fromPartial(object.screenshotOptions)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseComputerPoint(): ComputerPoint {
+  return { x: 0, y: 0 };
+}
+
+export const ComputerPoint: MessageFns<ComputerPoint> = {
+  encode(message: ComputerPoint, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.x !== 0) {
+      writer.uint32(8).int32(message.x);
+    }
+    if (message.y !== 0) {
+      writer.uint32(16).int32(message.y);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerPoint {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerPoint();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.x = reader.int32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.y = reader.int32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ComputerPoint {
+    return {
+      x: isSet(object.x) ? globalThis.Number(object.x) : 0,
+      y: isSet(object.y) ? globalThis.Number(object.y) : 0,
+    };
+  },
+
+  toJSON(message: ComputerPoint): unknown {
+    const obj: any = {};
+    if (message.x !== 0) {
+      obj.x = Math.round(message.x);
+    }
+    if (message.y !== 0) {
+      obj.y = Math.round(message.y);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerPoint>): ComputerPoint {
+    return ComputerPoint.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ComputerPoint>): ComputerPoint {
+    const message = createBaseComputerPoint();
+    message.x = object.x ?? 0;
+    message.y = object.y ?? 0;
+    return message;
+  },
+};
+
+function createBaseComputerRegion(): ComputerRegion {
+  return { x: 0, y: 0, width: 0, height: 0 };
+}
+
+export const ComputerRegion: MessageFns<ComputerRegion> = {
+  encode(message: ComputerRegion, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.x !== 0) {
+      writer.uint32(8).int32(message.x);
+    }
+    if (message.y !== 0) {
+      writer.uint32(16).int32(message.y);
+    }
+    if (message.width !== 0) {
+      writer.uint32(24).int32(message.width);
+    }
+    if (message.height !== 0) {
+      writer.uint32(32).int32(message.height);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerRegion {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerRegion();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.x = reader.int32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.y = reader.int32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.width = reader.int32();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.height = reader.int32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ComputerRegion {
+    return {
+      x: isSet(object.x) ? globalThis.Number(object.x) : 0,
+      y: isSet(object.y) ? globalThis.Number(object.y) : 0,
+      width: isSet(object.width) ? globalThis.Number(object.width) : 0,
+      height: isSet(object.height) ? globalThis.Number(object.height) : 0,
+    };
+  },
+
+  toJSON(message: ComputerRegion): unknown {
+    const obj: any = {};
+    if (message.x !== 0) {
+      obj.x = Math.round(message.x);
+    }
+    if (message.y !== 0) {
+      obj.y = Math.round(message.y);
+    }
+    if (message.width !== 0) {
+      obj.width = Math.round(message.width);
+    }
+    if (message.height !== 0) {
+      obj.height = Math.round(message.height);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerRegion>): ComputerRegion {
+    return ComputerRegion.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ComputerRegion>): ComputerRegion {
+    const message = createBaseComputerRegion();
+    message.x = object.x ?? 0;
+    message.y = object.y ?? 0;
+    message.width = object.width ?? 0;
+    message.height = object.height ?? 0;
+    return message;
+  },
+};
+
+function createBaseComputerScreenshot(): ComputerScreenshot {
+  return {};
+}
+
+export const ComputerScreenshot: MessageFns<ComputerScreenshot> = {
+  encode(_: ComputerScreenshot, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerScreenshot {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerScreenshot();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(_: any): ComputerScreenshot {
+    return {};
+  },
+
+  toJSON(_: ComputerScreenshot): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerScreenshot>): ComputerScreenshot {
+    return ComputerScreenshot.fromPartial(base ?? {});
+  },
+  fromPartial(_: DeepPartial<ComputerScreenshot>): ComputerScreenshot {
+    const message = createBaseComputerScreenshot();
+    return message;
+  },
+};
+
+function createBaseComputerCursorPosition(): ComputerCursorPosition {
+  return {};
+}
+
+export const ComputerCursorPosition: MessageFns<ComputerCursorPosition> = {
+  encode(_: ComputerCursorPosition, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerCursorPosition {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerCursorPosition();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(_: any): ComputerCursorPosition {
+    return {};
+  },
+
+  toJSON(_: ComputerCursorPosition): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerCursorPosition>): ComputerCursorPosition {
+    return ComputerCursorPosition.fromPartial(base ?? {});
+  },
+  fromPartial(_: DeepPartial<ComputerCursorPosition>): ComputerCursorPosition {
+    const message = createBaseComputerCursorPosition();
+    return message;
+  },
+};
+
+function createBaseComputerMouseMove(): ComputerMouseMove {
+  return { to: undefined };
+}
+
+export const ComputerMouseMove: MessageFns<ComputerMouseMove> = {
+  encode(message: ComputerMouseMove, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.to !== undefined) {
+      ComputerPoint.encode(message.to, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerMouseMove {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerMouseMove();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.to = ComputerPoint.decode(reader, reader.uint32());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ComputerMouseMove {
+    return { to: isSet(object.to) ? ComputerPoint.fromJSON(object.to) : undefined };
+  },
+
+  toJSON(message: ComputerMouseMove): unknown {
+    const obj: any = {};
+    if (message.to !== undefined) {
+      obj.to = ComputerPoint.toJSON(message.to);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerMouseMove>): ComputerMouseMove {
+    return ComputerMouseMove.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ComputerMouseMove>): ComputerMouseMove {
+    const message = createBaseComputerMouseMove();
+    message.to = (object.to !== undefined && object.to !== null) ? ComputerPoint.fromPartial(object.to) : undefined;
+    return message;
+  },
+};
+
+function createBaseComputerClick(): ComputerClick {
+  return { at: undefined, button: "", count: 0, modifiers: "" };
+}
+
+export const ComputerClick: MessageFns<ComputerClick> = {
+  encode(message: ComputerClick, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.at !== undefined) {
+      ComputerPoint.encode(message.at, writer.uint32(10).fork()).join();
+    }
+    if (message.button !== "") {
+      writer.uint32(18).string(message.button);
+    }
+    if (message.count !== 0) {
+      writer.uint32(24).uint32(message.count);
+    }
+    if (message.modifiers !== "") {
+      writer.uint32(34).string(message.modifiers);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerClick {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerClick();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.at = ComputerPoint.decode(reader, reader.uint32());
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.button = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.count = reader.uint32();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.modifiers = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ComputerClick {
+    return {
+      at: isSet(object.at) ? ComputerPoint.fromJSON(object.at) : undefined,
+      button: isSet(object.button) ? globalThis.String(object.button) : "",
+      count: isSet(object.count) ? globalThis.Number(object.count) : 0,
+      modifiers: isSet(object.modifiers) ? globalThis.String(object.modifiers) : "",
+    };
+  },
+
+  toJSON(message: ComputerClick): unknown {
+    const obj: any = {};
+    if (message.at !== undefined) {
+      obj.at = ComputerPoint.toJSON(message.at);
+    }
+    if (message.button !== "") {
+      obj.button = message.button;
+    }
+    if (message.count !== 0) {
+      obj.count = Math.round(message.count);
+    }
+    if (message.modifiers !== "") {
+      obj.modifiers = message.modifiers;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerClick>): ComputerClick {
+    return ComputerClick.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ComputerClick>): ComputerClick {
+    const message = createBaseComputerClick();
+    message.at = (object.at !== undefined && object.at !== null) ? ComputerPoint.fromPartial(object.at) : undefined;
+    message.button = object.button ?? "";
+    message.count = object.count ?? 0;
+    message.modifiers = object.modifiers ?? "";
+    return message;
+  },
+};
+
+function createBaseComputerMouseButton(): ComputerMouseButton {
+  return { at: undefined, button: "" };
+}
+
+export const ComputerMouseButton: MessageFns<ComputerMouseButton> = {
+  encode(message: ComputerMouseButton, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.at !== undefined) {
+      ComputerPoint.encode(message.at, writer.uint32(10).fork()).join();
+    }
+    if (message.button !== "") {
+      writer.uint32(18).string(message.button);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerMouseButton {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerMouseButton();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.at = ComputerPoint.decode(reader, reader.uint32());
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.button = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ComputerMouseButton {
+    return {
+      at: isSet(object.at) ? ComputerPoint.fromJSON(object.at) : undefined,
+      button: isSet(object.button) ? globalThis.String(object.button) : "",
+    };
+  },
+
+  toJSON(message: ComputerMouseButton): unknown {
+    const obj: any = {};
+    if (message.at !== undefined) {
+      obj.at = ComputerPoint.toJSON(message.at);
+    }
+    if (message.button !== "") {
+      obj.button = message.button;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerMouseButton>): ComputerMouseButton {
+    return ComputerMouseButton.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ComputerMouseButton>): ComputerMouseButton {
+    const message = createBaseComputerMouseButton();
+    message.at = (object.at !== undefined && object.at !== null) ? ComputerPoint.fromPartial(object.at) : undefined;
+    message.button = object.button ?? "";
+    return message;
+  },
+};
+
+function createBaseComputerDrag(): ComputerDrag {
+  return { path: [], button: "", modifiers: "" };
+}
+
+export const ComputerDrag: MessageFns<ComputerDrag> = {
+  encode(message: ComputerDrag, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    for (const v of message.path) {
+      ComputerPoint.encode(v!, writer.uint32(10).fork()).join();
+    }
+    if (message.button !== "") {
+      writer.uint32(18).string(message.button);
+    }
+    if (message.modifiers !== "") {
+      writer.uint32(26).string(message.modifiers);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerDrag {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerDrag();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.path.push(ComputerPoint.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.button = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.modifiers = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ComputerDrag {
+    return {
+      path: globalThis.Array.isArray(object?.path) ? object.path.map((e: any) => ComputerPoint.fromJSON(e)) : [],
+      button: isSet(object.button) ? globalThis.String(object.button) : "",
+      modifiers: isSet(object.modifiers) ? globalThis.String(object.modifiers) : "",
+    };
+  },
+
+  toJSON(message: ComputerDrag): unknown {
+    const obj: any = {};
+    if (message.path?.length) {
+      obj.path = message.path.map((e) => ComputerPoint.toJSON(e));
+    }
+    if (message.button !== "") {
+      obj.button = message.button;
+    }
+    if (message.modifiers !== "") {
+      obj.modifiers = message.modifiers;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerDrag>): ComputerDrag {
+    return ComputerDrag.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ComputerDrag>): ComputerDrag {
+    const message = createBaseComputerDrag();
+    message.path = object.path?.map((e) => ComputerPoint.fromPartial(e)) || [];
+    message.button = object.button ?? "";
+    message.modifiers = object.modifiers ?? "";
+    return message;
+  },
+};
+
+function createBaseComputerScroll(): ComputerScroll {
+  return { at: undefined, deltaX: 0, deltaY: 0, modifiers: "" };
+}
+
+export const ComputerScroll: MessageFns<ComputerScroll> = {
+  encode(message: ComputerScroll, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.at !== undefined) {
+      ComputerPoint.encode(message.at, writer.uint32(10).fork()).join();
+    }
+    if (message.deltaX !== 0) {
+      writer.uint32(16).int32(message.deltaX);
+    }
+    if (message.deltaY !== 0) {
+      writer.uint32(24).int32(message.deltaY);
+    }
+    if (message.modifiers !== "") {
+      writer.uint32(34).string(message.modifiers);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerScroll {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerScroll();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.at = ComputerPoint.decode(reader, reader.uint32());
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.deltaX = reader.int32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.deltaY = reader.int32();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.modifiers = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ComputerScroll {
+    return {
+      at: isSet(object.at) ? ComputerPoint.fromJSON(object.at) : undefined,
+      deltaX: isSet(object.deltaX)
+        ? globalThis.Number(object.deltaX)
+        : isSet(object.delta_x)
+        ? globalThis.Number(object.delta_x)
+        : 0,
+      deltaY: isSet(object.deltaY)
+        ? globalThis.Number(object.deltaY)
+        : isSet(object.delta_y)
+        ? globalThis.Number(object.delta_y)
+        : 0,
+      modifiers: isSet(object.modifiers) ? globalThis.String(object.modifiers) : "",
+    };
+  },
+
+  toJSON(message: ComputerScroll): unknown {
+    const obj: any = {};
+    if (message.at !== undefined) {
+      obj.at = ComputerPoint.toJSON(message.at);
+    }
+    if (message.deltaX !== 0) {
+      obj.deltaX = Math.round(message.deltaX);
+    }
+    if (message.deltaY !== 0) {
+      obj.deltaY = Math.round(message.deltaY);
+    }
+    if (message.modifiers !== "") {
+      obj.modifiers = message.modifiers;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerScroll>): ComputerScroll {
+    return ComputerScroll.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ComputerScroll>): ComputerScroll {
+    const message = createBaseComputerScroll();
+    message.at = (object.at !== undefined && object.at !== null) ? ComputerPoint.fromPartial(object.at) : undefined;
+    message.deltaX = object.deltaX ?? 0;
+    message.deltaY = object.deltaY ?? 0;
+    message.modifiers = object.modifiers ?? "";
+    return message;
+  },
+};
+
+function createBaseComputerType(): ComputerType {
+  return { text: "" };
+}
+
+export const ComputerType: MessageFns<ComputerType> = {
+  encode(message: ComputerType, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.text !== "") {
+      writer.uint32(10).string(message.text);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerType {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerType();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.text = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ComputerType {
+    return { text: isSet(object.text) ? globalThis.String(object.text) : "" };
+  },
+
+  toJSON(message: ComputerType): unknown {
+    const obj: any = {};
+    if (message.text !== "") {
+      obj.text = message.text;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerType>): ComputerType {
+    return ComputerType.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ComputerType>): ComputerType {
+    const message = createBaseComputerType();
+    message.text = object.text ?? "";
+    return message;
+  },
+};
+
+function createBaseComputerKey(): ComputerKey {
+  return { keys: "", repeat: 0, holdMs: 0 };
+}
+
+export const ComputerKey: MessageFns<ComputerKey> = {
+  encode(message: ComputerKey, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.keys !== "") {
+      writer.uint32(10).string(message.keys);
+    }
+    if (message.repeat !== 0) {
+      writer.uint32(16).uint32(message.repeat);
+    }
+    if (message.holdMs !== 0) {
+      writer.uint32(24).uint32(message.holdMs);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerKey {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerKey();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.keys = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.repeat = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.holdMs = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ComputerKey {
+    return {
+      keys: isSet(object.keys) ? globalThis.String(object.keys) : "",
+      repeat: isSet(object.repeat) ? globalThis.Number(object.repeat) : 0,
+      holdMs: isSet(object.holdMs)
+        ? globalThis.Number(object.holdMs)
+        : isSet(object.hold_ms)
+        ? globalThis.Number(object.hold_ms)
+        : 0,
+    };
+  },
+
+  toJSON(message: ComputerKey): unknown {
+    const obj: any = {};
+    if (message.keys !== "") {
+      obj.keys = message.keys;
+    }
+    if (message.repeat !== 0) {
+      obj.repeat = Math.round(message.repeat);
+    }
+    if (message.holdMs !== 0) {
+      obj.holdMs = Math.round(message.holdMs);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerKey>): ComputerKey {
+    return ComputerKey.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ComputerKey>): ComputerKey {
+    const message = createBaseComputerKey();
+    message.keys = object.keys ?? "";
+    message.repeat = object.repeat ?? 0;
+    message.holdMs = object.holdMs ?? 0;
+    return message;
+  },
+};
+
+function createBaseComputerWait(): ComputerWait {
+  return { ms: 0 };
+}
+
+export const ComputerWait: MessageFns<ComputerWait> = {
+  encode(message: ComputerWait, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.ms !== 0) {
+      writer.uint32(8).uint32(message.ms);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerWait {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerWait();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.ms = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ComputerWait {
+    return { ms: isSet(object.ms) ? globalThis.Number(object.ms) : 0 };
+  },
+
+  toJSON(message: ComputerWait): unknown {
+    const obj: any = {};
+    if (message.ms !== 0) {
+      obj.ms = Math.round(message.ms);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerWait>): ComputerWait {
+    return ComputerWait.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ComputerWait>): ComputerWait {
+    const message = createBaseComputerWait();
+    message.ms = object.ms ?? 0;
+    return message;
+  },
+};
+
+function createBaseComputerSetScreenSize(): ComputerSetScreenSize {
+  return { width: 0, height: 0 };
+}
+
+export const ComputerSetScreenSize: MessageFns<ComputerSetScreenSize> = {
+  encode(message: ComputerSetScreenSize, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.width !== 0) {
+      writer.uint32(8).uint32(message.width);
+    }
+    if (message.height !== 0) {
+      writer.uint32(16).uint32(message.height);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerSetScreenSize {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerSetScreenSize();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.width = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.height = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ComputerSetScreenSize {
+    return {
+      width: isSet(object.width) ? globalThis.Number(object.width) : 0,
+      height: isSet(object.height) ? globalThis.Number(object.height) : 0,
+    };
+  },
+
+  toJSON(message: ComputerSetScreenSize): unknown {
+    const obj: any = {};
+    if (message.width !== 0) {
+      obj.width = Math.round(message.width);
+    }
+    if (message.height !== 0) {
+      obj.height = Math.round(message.height);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerSetScreenSize>): ComputerSetScreenSize {
+    return ComputerSetScreenSize.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ComputerSetScreenSize>): ComputerSetScreenSize {
+    const message = createBaseComputerSetScreenSize();
+    message.width = object.width ?? 0;
+    message.height = object.height ?? 0;
+    return message;
+  },
+};
+
+function createBaseComputerScreenshotOptions(): ComputerScreenshotOptions {
+  return { format: "", quality: 0, maxWidth: 0, maxHeight: 0, region: undefined, delayMs: 0 };
+}
+
+export const ComputerScreenshotOptions: MessageFns<ComputerScreenshotOptions> = {
+  encode(message: ComputerScreenshotOptions, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.format !== "") {
+      writer.uint32(10).string(message.format);
+    }
+    if (message.quality !== 0) {
+      writer.uint32(16).uint32(message.quality);
+    }
+    if (message.maxWidth !== 0) {
+      writer.uint32(24).uint32(message.maxWidth);
+    }
+    if (message.maxHeight !== 0) {
+      writer.uint32(32).uint32(message.maxHeight);
+    }
+    if (message.region !== undefined) {
+      ComputerRegion.encode(message.region, writer.uint32(42).fork()).join();
+    }
+    if (message.delayMs !== 0) {
+      writer.uint32(48).uint32(message.delayMs);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerScreenshotOptions {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerScreenshotOptions();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.format = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.quality = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.maxWidth = reader.uint32();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.maxHeight = reader.uint32();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.region = ComputerRegion.decode(reader, reader.uint32());
+          continue;
+        }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.delayMs = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ComputerScreenshotOptions {
+    return {
+      format: isSet(object.format) ? globalThis.String(object.format) : "",
+      quality: isSet(object.quality) ? globalThis.Number(object.quality) : 0,
+      maxWidth: isSet(object.maxWidth)
+        ? globalThis.Number(object.maxWidth)
+        : isSet(object.max_width)
+        ? globalThis.Number(object.max_width)
+        : 0,
+      maxHeight: isSet(object.maxHeight)
+        ? globalThis.Number(object.maxHeight)
+        : isSet(object.max_height)
+        ? globalThis.Number(object.max_height)
+        : 0,
+      region: isSet(object.region) ? ComputerRegion.fromJSON(object.region) : undefined,
+      delayMs: isSet(object.delayMs)
+        ? globalThis.Number(object.delayMs)
+        : isSet(object.delay_ms)
+        ? globalThis.Number(object.delay_ms)
+        : 0,
+    };
+  },
+
+  toJSON(message: ComputerScreenshotOptions): unknown {
+    const obj: any = {};
+    if (message.format !== "") {
+      obj.format = message.format;
+    }
+    if (message.quality !== 0) {
+      obj.quality = Math.round(message.quality);
+    }
+    if (message.maxWidth !== 0) {
+      obj.maxWidth = Math.round(message.maxWidth);
+    }
+    if (message.maxHeight !== 0) {
+      obj.maxHeight = Math.round(message.maxHeight);
+    }
+    if (message.region !== undefined) {
+      obj.region = ComputerRegion.toJSON(message.region);
+    }
+    if (message.delayMs !== 0) {
+      obj.delayMs = Math.round(message.delayMs);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerScreenshotOptions>): ComputerScreenshotOptions {
+    return ComputerScreenshotOptions.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ComputerScreenshotOptions>): ComputerScreenshotOptions {
+    const message = createBaseComputerScreenshotOptions();
+    message.format = object.format ?? "";
+    message.quality = object.quality ?? 0;
+    message.maxWidth = object.maxWidth ?? 0;
+    message.maxHeight = object.maxHeight ?? 0;
+    message.region = (object.region !== undefined && object.region !== null)
+      ? ComputerRegion.fromPartial(object.region)
+      : undefined;
+    message.delayMs = object.delayMs ?? 0;
+    return message;
+  },
+};
+
+function createBaseComputerActionResponse(): ComputerActionResponse {
+  return { screenWidth: 0, screenHeight: 0, cursor: undefined, screenshot: undefined, screenHeld: false };
+}
+
+export const ComputerActionResponse: MessageFns<ComputerActionResponse> = {
+  encode(message: ComputerActionResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.screenWidth !== 0) {
+      writer.uint32(8).int32(message.screenWidth);
+    }
+    if (message.screenHeight !== 0) {
+      writer.uint32(16).int32(message.screenHeight);
+    }
+    if (message.cursor !== undefined) {
+      ComputerPoint.encode(message.cursor, writer.uint32(26).fork()).join();
+    }
+    if (message.screenshot !== undefined) {
+      ComputerImage.encode(message.screenshot, writer.uint32(34).fork()).join();
+    }
+    if (message.screenHeld !== false) {
+      writer.uint32(40).bool(message.screenHeld);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerActionResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerActionResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.screenWidth = reader.int32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.screenHeight = reader.int32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.cursor = ComputerPoint.decode(reader, reader.uint32());
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.screenshot = ComputerImage.decode(reader, reader.uint32());
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.screenHeld = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ComputerActionResponse {
+    return {
+      screenWidth: isSet(object.screenWidth)
+        ? globalThis.Number(object.screenWidth)
+        : isSet(object.screen_width)
+        ? globalThis.Number(object.screen_width)
+        : 0,
+      screenHeight: isSet(object.screenHeight)
+        ? globalThis.Number(object.screenHeight)
+        : isSet(object.screen_height)
+        ? globalThis.Number(object.screen_height)
+        : 0,
+      cursor: isSet(object.cursor) ? ComputerPoint.fromJSON(object.cursor) : undefined,
+      screenshot: isSet(object.screenshot) ? ComputerImage.fromJSON(object.screenshot) : undefined,
+      screenHeld: isSet(object.screenHeld)
+        ? globalThis.Boolean(object.screenHeld)
+        : isSet(object.screen_held)
+        ? globalThis.Boolean(object.screen_held)
+        : false,
+    };
+  },
+
+  toJSON(message: ComputerActionResponse): unknown {
+    const obj: any = {};
+    if (message.screenWidth !== 0) {
+      obj.screenWidth = Math.round(message.screenWidth);
+    }
+    if (message.screenHeight !== 0) {
+      obj.screenHeight = Math.round(message.screenHeight);
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = ComputerPoint.toJSON(message.cursor);
+    }
+    if (message.screenshot !== undefined) {
+      obj.screenshot = ComputerImage.toJSON(message.screenshot);
+    }
+    if (message.screenHeld !== false) {
+      obj.screenHeld = message.screenHeld;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerActionResponse>): ComputerActionResponse {
+    return ComputerActionResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ComputerActionResponse>): ComputerActionResponse {
+    const message = createBaseComputerActionResponse();
+    message.screenWidth = object.screenWidth ?? 0;
+    message.screenHeight = object.screenHeight ?? 0;
+    message.cursor = (object.cursor !== undefined && object.cursor !== null)
+      ? ComputerPoint.fromPartial(object.cursor)
+      : undefined;
+    message.screenshot = (object.screenshot !== undefined && object.screenshot !== null)
+      ? ComputerImage.fromPartial(object.screenshot)
+      : undefined;
+    message.screenHeld = object.screenHeld ?? false;
+    return message;
+  },
+};
+
+function createBaseComputerImage(): ComputerImage {
+  return { data: new Uint8Array(0), mimeType: "", width: 0, height: 0 };
+}
+
+export const ComputerImage: MessageFns<ComputerImage> = {
+  encode(message: ComputerImage, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.data.length !== 0) {
+      writer.uint32(10).bytes(message.data);
+    }
+    if (message.mimeType !== "") {
+      writer.uint32(18).string(message.mimeType);
+    }
+    if (message.width !== 0) {
+      writer.uint32(24).int32(message.width);
+    }
+    if (message.height !== 0) {
+      writer.uint32(32).int32(message.height);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ComputerImage {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseComputerImage();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.data = reader.bytes();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.mimeType = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.width = reader.int32();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.height = reader.int32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ComputerImage {
+    return {
+      data: isSet(object.data) ? bytesFromBase64(object.data) : new Uint8Array(0),
+      mimeType: isSet(object.mimeType)
+        ? globalThis.String(object.mimeType)
+        : isSet(object.mime_type)
+        ? globalThis.String(object.mime_type)
+        : "",
+      width: isSet(object.width) ? globalThis.Number(object.width) : 0,
+      height: isSet(object.height) ? globalThis.Number(object.height) : 0,
+    };
+  },
+
+  toJSON(message: ComputerImage): unknown {
+    const obj: any = {};
+    if (message.data.length !== 0) {
+      obj.data = base64FromBytes(message.data);
+    }
+    if (message.mimeType !== "") {
+      obj.mimeType = message.mimeType;
+    }
+    if (message.width !== 0) {
+      obj.width = Math.round(message.width);
+    }
+    if (message.height !== 0) {
+      obj.height = Math.round(message.height);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ComputerImage>): ComputerImage {
+    return ComputerImage.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ComputerImage>): ComputerImage {
+    const message = createBaseComputerImage();
+    message.data = object.data ?? new Uint8Array(0);
+    message.mimeType = object.mimeType ?? "";
+    message.width = object.width ?? 0;
+    message.height = object.height ?? 0;
     return message;
   },
 };
@@ -32714,6 +34660,28 @@ export const BoxdApiService = {
     responseSerialize: (value: DesktopChunk): Buffer => Buffer.from(DesktopChunk.encode(value).finish()),
     responseDeserialize: (value: Buffer): DesktopChunk => DesktopChunk.decode(value),
   },
+  /**
+   * Computer use: screenshots, the mouse and the keyboard on the machine's
+   * desktop (the one the console's Desktop view shows), for agents such as
+   * Claude computer use and OpenAI's computer-use model. Each call does one
+   * action and can return a screenshot taken after it, so one step of an
+   * agent loop is one round trip. The desktop is started on demand, as for
+   * DesktopTunnel. Coordinates are screen pixels from the top left; the
+   * response carries the screen's size. A screenshot scaled down with
+   * `ComputerScreenshotOptions.max_width`/`max_height` is smaller than the
+   * screen, and the caller scales the coordinates it gets back up.
+   */
+  computerAction: {
+    path: "/boxd.api.v1.BoxdApi/ComputerAction" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: ComputerActionRequest): Buffer =>
+      Buffer.from(ComputerActionRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): ComputerActionRequest => ComputerActionRequest.decode(value),
+    responseSerialize: (value: ComputerActionResponse): Buffer =>
+      Buffer.from(ComputerActionResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): ComputerActionResponse => ComputerActionResponse.decode(value),
+  },
   createNetwork: {
     path: "/boxd.api.v1.BoxdApi/CreateNetwork" as const,
     requestStream: false as const,
@@ -34194,6 +36162,18 @@ export interface BoxdApiServer extends UntypedServiceImplementation {
    * /desktop view via boxd-console's WebSocket bridge.
    */
   desktopTunnel: handleBidiStreamingCall<DesktopChunk, DesktopChunk>;
+  /**
+   * Computer use: screenshots, the mouse and the keyboard on the machine's
+   * desktop (the one the console's Desktop view shows), for agents such as
+   * Claude computer use and OpenAI's computer-use model. Each call does one
+   * action and can return a screenshot taken after it, so one step of an
+   * agent loop is one round trip. The desktop is started on demand, as for
+   * DesktopTunnel. Coordinates are screen pixels from the top left; the
+   * response carries the screen's size. A screenshot scaled down with
+   * `ComputerScreenshotOptions.max_width`/`max_height` is smaller than the
+   * screen, and the caller scales the coordinates it gets back up.
+   */
+  computerAction: handleUnaryCall<ComputerActionRequest, ComputerActionResponse>;
   createNetwork: handleUnaryCall<CreateNetworkRequest, CreateNetworkResponse>;
   listNetworks: handleUnaryCall<ListNetworksRequest, ListNetworksResponse>;
   /**
@@ -34936,6 +36916,32 @@ export interface BoxdApiClient extends Client {
   desktopTunnel(): ClientDuplexStream<DesktopChunk, DesktopChunk>;
   desktopTunnel(options: Partial<CallOptions>): ClientDuplexStream<DesktopChunk, DesktopChunk>;
   desktopTunnel(metadata: Metadata, options?: Partial<CallOptions>): ClientDuplexStream<DesktopChunk, DesktopChunk>;
+  /**
+   * Computer use: screenshots, the mouse and the keyboard on the machine's
+   * desktop (the one the console's Desktop view shows), for agents such as
+   * Claude computer use and OpenAI's computer-use model. Each call does one
+   * action and can return a screenshot taken after it, so one step of an
+   * agent loop is one round trip. The desktop is started on demand, as for
+   * DesktopTunnel. Coordinates are screen pixels from the top left; the
+   * response carries the screen's size. A screenshot scaled down with
+   * `ComputerScreenshotOptions.max_width`/`max_height` is smaller than the
+   * screen, and the caller scales the coordinates it gets back up.
+   */
+  computerAction(
+    request: ComputerActionRequest,
+    callback: (error: ServiceError | null, response: ComputerActionResponse) => void,
+  ): ClientUnaryCall;
+  computerAction(
+    request: ComputerActionRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: ComputerActionResponse) => void,
+  ): ClientUnaryCall;
+  computerAction(
+    request: ComputerActionRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: ComputerActionResponse) => void,
+  ): ClientUnaryCall;
   createNetwork(
     request: CreateNetworkRequest,
     callback: (error: ServiceError | null, response: CreateNetworkResponse) => void,

@@ -856,6 +856,110 @@ that aren't valid UTF-8 round-trip. Errors are
 `NotADirectoryError`, with `errno` and `filename` set. A machine started before
 `machines.fs` existed raises `MachineAgentOutdatedError` until it is rebooted.
 
+### Computer use
+
+`machines.computer` works a machine's desktop (the one the console's Desktop
+view shows) for computer-use agents: screenshots, the mouse and the keyboard.
+The desktop starts on demand. Each call does one action and returns a
+`ComputerActionResult` with the screen's size, where the pointer is, and a
+screenshot taken after the action when you ask for one.
+
+```python
+c = boxd.machines.computer
+
+r = c.screenshot(id)
+r.screen_width, r.screen_height, r.cursor          # cursor.x, cursor.y
+r.screenshot.data                                  # PNG bytes; .mime_type, .width, .height
+c.screenshot(id, max_width=1280, max_height=800)   # scaled down to fit
+c.screenshot(id, format="jpeg", quality=80)        # "png" | "jpeg" | "webp"
+c.screenshot(id, region=(0, 0, 640, 400))          # part of the screen: x, y, width, height
+
+c.click(id, 640, 400)                              # button="right" | "middle" | "back" | "forward"
+c.click(id, 640, 400, count=2, modifiers="ctrl")   # a double click, ctrl held
+c.move(id, 100, 100)
+c.drag(id, [(100, 100), (300, 200)])
+c.mouse_down(id, 100, 100)
+c.mouse_up(id, 300, 200)
+c.scroll(id, 640, 400, dy=3)                       # wheel clicks: dy down, dx right
+c.type(id, "hello")
+c.key(id, "ctrl+s")                                # "Return", "alt+Tab"; repeat=, hold_ms=
+c.wait(id, 1000)                                   # milliseconds
+c.cursor_position(id)
+
+c.click(id, 640, 400, screenshot=True)             # and a screenshot after it, same call
+c.key(id, "Return", screenshot={"max_width": 1280, "delay_ms": 300})
+
+c.set_screen_size(id, 1280, 800)                   # hold the screen at this size
+c.release_screen_size(id)                          # it follows the viewer again
+```
+
+Coordinates are screen pixels from the top left; leave out `x` and `y` to act
+where the pointer is. A screenshot scaled down with `max_width`/`max_height`
+is smaller than the screen, so scale coordinates read off it back up. Key
+names are X key names, as `xdotool` takes them, plus common aliases (`enter`,
+`esc`, `cmd`, `pageup`). `screenshot=` takes `True`, a `ScreenshotOptions` or a
+dict of its fields (`format`, `quality`, `max_width`, `max_height`, `region`,
+`delay_ms`). An action that doesn't fit the screen, or a key name it doesn't
+know, raises `APIStatusError` with `code == "invalid_argument"`.
+
+By default the screen follows whoever is watching it in the console, so it can
+change size under an agent. `set_screen_size` holds it (320x200 to 5120x2880)
+until `release_screen_size` or the desktop restarts: viewers see it scaled to
+fit, can still click and type, and can release it from the Desktop view. Every
+result says whether it is held (`result.screen_held`).
+
+A machine in another region takes `region=` on these calls, as elsewhere in the
+SDK, and `ClaudeComputer(boxd, "my-machine", region="nyc")` on the adapters. On
+`screenshot`, `region` is the part of the screen to capture, so use
+`c.in_region("nyc").screenshot(id)` there.
+
+#### Claude and OpenAI agents
+
+`boxd.computer_use` carries out a model's computer-use tool calls on a
+machine. It needs neither the `anthropic` nor the `openai` package: it reads
+their responses (SDK objects or plain dicts) and returns plain dicts to send
+back.
+
+```python
+import anthropic
+from boxd.computer_use import ClaudeComputer
+
+claude = anthropic.Anthropic()
+computer = ClaudeComputer(boxd, "my-machine")
+messages = [{"role": "user", "content": "Open example.com and read me its heading"}]
+for _ in range(30):
+    response = claude.messages.create(
+        model="claude-opus-5-5",
+        max_tokens=16000,
+        tools=[computer.tool],
+        messages=messages,
+    )
+    messages.append({"role": "assistant", "content": response.content})
+    results = computer.run(response.content)
+    if not results:
+        break
+    messages.append({"role": "user", "content": results})
+```
+
+`computer.tool` is Claude's computer toolset (`{"type":
+"computer_toolset_20260801"}`), and `run` carries out the turn's computer
+actions in order, returning one `tool_result` for each; the first failure ends
+the turn and is reported to Claude. Screenshots are scaled down to fit 1280x800
+(`max_width` and `max_height` change it), and Claude's coordinates are scaled
+back up to the screen for you. The first action holds the screen at 1280x800, so
+that someone opening the Desktop view doesn't resize it mid-run: `screen_size=`
+picks another size, `screen_size=None` leaves the screen alone, and
+`computer.release()` lets go when the agent is done.
+
+`OpenAIComputer` does the same for OpenAI's computer tool: `computer.tool` is
+`{"type": "computer"}`, and `run(response.output)` returns the
+`computer_call_output` items for your next request. `AsyncClaudeComputer` and
+`AsyncOpenAIComputer` take an `AsyncBoxd`.
+
+The model does whatever it decides to on the machine, as the machine's user:
+give it a machine of its own. A complete Claude agent:
+[`examples/claude_computer_use.py`](https://github.com/boxd-sh/sdk/blob/main/python/examples/claude_computer_use.py).
+
 ### Ports and proxies
 
 ```python

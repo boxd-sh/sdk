@@ -47,6 +47,7 @@ from ..models import (
 )
 from ..spec import MachineSpec, MachineSpecBuilder, MachineSpecPatch
 from . import Namespace
+from .computer import AsyncComputer, Computer
 from .fs import AsyncFs, Fs
 
 # ── delete_self ────────────────────────────────────────────
@@ -460,6 +461,7 @@ class Machines(Namespace):
         super().__init__(transport)
         self.files = Files(transport)
         self.fs = Fs(transport)
+        self.computer = Computer(transport)
         self.ports = Ports(transport)
         self.proxies = Proxies(transport)
         self.checkpoints = Checkpoints(transport)
@@ -1719,6 +1721,7 @@ class AsyncMachines(Namespace):
         super().__init__(transport)
         self.files = AsyncFiles(transport)
         self.fs = AsyncFs(transport)
+        self.computer = AsyncComputer(transport)
         self.ports = AsyncPorts(transport)
         self.proxies = AsyncProxies(transport)
         self.checkpoints = AsyncCheckpoints(transport)

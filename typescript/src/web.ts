@@ -101,6 +101,46 @@ export type {
   FsWriteData,
   FsWriteOptions,
 } from "./fs.js";
+// Computer use: `boxd.machines.computer`, and the adapters that run
+// Claude's and OpenAI's computer-use tool calls on it.
+export { MachineComputer } from "./computer.js";
+export type {
+  ComputerActionOptions,
+  ComputerActionResult,
+  ComputerButton,
+  ComputerClickOptions,
+  ComputerDragOptions,
+  ComputerImageFormat,
+  ComputerKeyOptions,
+  ComputerMouseButtonOptions,
+  ComputerPoint,
+  ComputerRegion,
+  ComputerScreenshot,
+  ComputerScreenshotOptions,
+  ComputerScreenshotResult,
+  ComputerScrollOptions,
+} from "./computer.js";
+export type { ComputerClient, ComputerScreenSize } from "./_computerScale.js";
+export { CLAUDE_COMPUTER_TOOLSET, ClaudeComputer } from "./computerClaude.js";
+export type {
+  ClaudeComputerOptions,
+  ClaudeComputerToolResult,
+  ClaudeComputerToolset,
+  ClaudeContentBlock,
+  ClaudeImageContent,
+  ClaudeTextContent,
+} from "./computerClaude.js";
+export { OpenAIComputer, PendingSafetyCheckError } from "./computerOpenAI.js";
+export type {
+  OpenAIComputerCall,
+  OpenAIComputerCallOutput,
+  OpenAIComputerOptions,
+  OpenAIComputerTool,
+  OpenAIComputerUsePreviewTool,
+  OpenAIOutputItem,
+  OpenAIRunOptions,
+  OpenAISafetyCheck,
+} from "./computerOpenAI.js";
 export { MachinePorts } from "./ports.js";
 export { MachineProxies } from "./proxies.js";
 export { MachineCheckpoints } from "./checkpoints.js";

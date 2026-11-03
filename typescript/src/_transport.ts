@@ -41,6 +41,7 @@ import type {
   MethodDef,
   ReadableCall,
   Transport as ITransport,
+  UnaryOptions,
   WritableCall,
 } from "./_rpc.js";
 
@@ -175,18 +176,27 @@ export class Transport implements ITransport {
     return this.#metadataFor((await this.#creds.bearer(this.#rawKeyOk)).token);
   }
 
-  #callOptions(): CallOptions {
-    return { deadline: new Date(Date.now() + this.#timeout) };
+  #callOptions(extraMs = 0): CallOptions {
+    return { deadline: new Date(Date.now() + this.#timeout + extraMs) };
   }
 
-  async unary<Req, Resp>(method: MethodDef<Req, Resp>, req: Req): Promise<Resp> {
-    return withRetries(this.#maxRetries, () => this.#invokeUnary(method, req));
+  async unary<Req, Resp>(
+    method: MethodDef<Req, Resp>,
+    req: Req,
+    opts?: UnaryOptions,
+  ): Promise<Resp> {
+    const retries = opts?.retry === false ? 0 : this.#maxRetries;
+    return withRetries(retries, () => this.#invokeUnary(method, req, opts?.extraTimeoutMs));
   }
 
-  async #invokeUnary<Req, Resp>(method: MethodDef<Req, Resp>, req: Req): Promise<Resp> {
+  async #invokeUnary<Req, Resp>(
+    method: MethodDef<Req, Resp>,
+    req: Req,
+    extraMs?: number,
+  ): Promise<Resp> {
     const client = await this.#ensureClient();
     return this.#directKey.unary(this.#rawKeyOk, (token) =>
-      this.#unaryWith(client, method, req, token),
+      this.#unaryWith(client, method, req, token, extraMs),
     );
   }
 
@@ -195,6 +205,7 @@ export class Transport implements ITransport {
     method: MethodDef<Req, Resp>,
     req: Req,
     token: string,
+    extraMs?: number,
   ): Promise<Resp> {
     const md = this.#metadataFor(token);
     return new Promise<Resp>((resolve, reject) => {
@@ -204,7 +215,7 @@ export class Transport implements ITransport {
         deserializeFor(method),
         req,
         md,
-        this.#callOptions(),
+        this.#callOptions(extraMs),
         (err, resp) => {
           if (err) return reject(fromGrpcError(err));
           resolve(resp as Resp);

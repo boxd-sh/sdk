@@ -907,6 +907,97 @@ try {
 A machine started before this API existed throws `AgentOutdatedError`;
 rebooting the machine updates it.
 
+### Computer use
+
+`machines.computer` drives a machine's desktop, the one the console's Desktop
+view shows: screenshots, the mouse and the keyboard, for computer-use agents.
+The desktop starts on the first call. Coordinates are screen pixels from the
+top left, and any action can take a screenshot after itself in the same call.
+
+```typescript
+const computer = boxd.machines.computer;
+
+const { screenshot } = await computer.screenshot(id);  // PNG bytes, mimeType, width, height
+await computer.screenshot(id, { format: "jpeg", maxWidth: 1280, maxHeight: 800 });  // scaled to fit
+await computer.screenshot(id, { region: { x: 0, y: 0, width: 400, height: 300 } }); // part of the screen
+await computer.click(id, { x: 640, y: 360 });           // also button, count (2: double), modifiers
+await computer.type(id, "hello", { screenshot: true }); // result.screenshot shows the screen after
+await computer.key(id, "ctrl+s");                       // X key names; "+" joins a combination
+await computer.scroll(id, { x: 640, y: 360, dy: 3 });   // wheel clicks; positive scrolls down
+await computer.drag(id, [{ x: 10, y: 10 }, { x: 200, y: 10 }]);
+await computer.move(id, 100, 100);
+await computer.wait(id, 1000);
+const { screenWidth, screenHeight, cursor } = await computer.cursorPosition(id);
+
+await computer.setScreenSize(id, 1280, 800);  // hold the screen at this size
+await computer.releaseScreenSize(id);         // it follows the viewer again
+```
+
+A mouse or keyboard action is sent again only when it can't have reached the
+machine. After any other failure, take a screenshot to see whether it ran.
+
+By default the screen follows whoever is watching it in the console, so it can
+change size under an agent. `setScreenSize` holds it (320×200 to 5120×2880)
+until `releaseScreenSize` or the desktop restarts: viewers see it scaled to fit,
+can still click and type, and can release it from the Desktop view. Every result
+says whether it is held (`screenHeld`).
+
+A machine in another region takes `{ region: "nyc" }` on these calls, as
+elsewhere in the SDK, and on the adapters' options. On `screenshot`, `region` is
+the part of the screen to capture, so use `computer.inRegion("nyc").screenshot(id)`
+there.
+
+`ClaudeComputer` runs Claude's computer use tool calls (the
+`computer_toolset_20260801` toolset) on a machine, and `OpenAIComputer` runs
+those of OpenAI's computer tool. They take and return plain objects, so they
+work with the official SDKs without depending on them. The model sees
+screenshots scaled down to fit (1280×800 for Claude, 1600×900 for OpenAI, both
+configurable), and its coordinates are scaled back to the screen. The first
+action holds the screen at 1280×800, so that someone opening the Desktop view
+doesn't resize it mid-run: `screenSize` picks another size, `screenSize: null`
+leaves the screen alone, and `computer.release()` lets go when the agent is done.
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+import { Boxd, ClaudeComputer } from "@boxd-sh/sdk";
+
+const boxd = new Boxd();
+const anthropic = new Anthropic();
+const computer = new ClaudeComputer(boxd, "my-machine");
+
+const messages: Anthropic.MessageParam[] = [
+  { role: "user", content: "Read the title of the page open in the browser." },
+];
+for (let turn = 0; turn < 20; turn++) {
+  const response = await anthropic.messages.create({
+    model: "claude-opus-5-5",
+    max_tokens: 16000,
+    tools: [computer.tool],
+    messages,
+  });
+  messages.push({ role: "assistant", content: response.content });
+  if (response.stop_reason === "refusal") break;
+  const results = await computer.run(response.content); // one tool_result per action
+  if (results.length === 0) break;                       // no actions: Claude is done
+  messages.push({ role: "user", content: results });
+}
+```
+
+`run()` runs the actions in order and stops at the first one that fails: its
+result carries the error, and the actions after it are reported as not run.
+
+```typescript
+import { OpenAIComputer } from "@boxd-sh/sdk";
+
+const computer = new OpenAIComputer(boxd, "my-machine");
+// tools: [computer.tool]; then, after each response:
+const outputs = await computer.run(response.output); // a computer_call_output per computer_call
+```
+
+A `computer_call` with pending safety checks throws `PendingSafetyCheckError`
+without running anything, unless `run(output, { acknowledgeSafetyChecks })`
+accepts them.
+
 ### Files, ports, proxies, checkpoints
 
 ```typescript

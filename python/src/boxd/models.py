@@ -7,10 +7,11 @@ they are built from live in `_mappers.py`.
 
 from __future__ import annotations
 
+import base64 as _base64
 from datetime import datetime, timedelta, timezone
 from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .spec import MachineSpec
 from .spec import spec as _spec_builder
@@ -608,6 +609,71 @@ class FsEntry(BaseModel):
     def mtime(self) -> datetime:
         """`mtime_ns` as an aware UTC datetime (microsecond precision)."""
         return _EPOCH + timedelta(microseconds=self.mtime_ns // 1000)
+
+
+# ── Computer use ─────────────────────────────────────────────────────
+
+ScreenshotFormat = Literal["png", "jpeg", "webp"]
+
+
+class ScreenshotOptions(BaseModel):
+    """How `machines.computer` takes a screenshot. Every field is optional."""
+
+    format: ScreenshotFormat | str = "png"
+    quality: int | None = None
+    """For "jpeg" and "webp", 1 to 100; None means 80."""
+    max_width: int | None = None
+    """Scale the image down to fit within `max_width` x `max_height`, keeping
+    its shape. Never scaled up. None means no limit."""
+    max_height: int | None = None
+    region: tuple[int, int, int, int] | None = None
+    """Only this part of the screen, as (x, y, width, height) in screen
+    pixels, at full resolution before any scaling: for zooming in."""
+    delay_ms: int = 0
+    """Wait this long after the action before taking it, so the screen can
+    catch up (up to 60000)."""
+
+
+class ComputerPoint(BaseModel):
+    """A point on the screen, in pixels from the top left."""
+
+    x: int
+    y: int
+
+
+class Screenshot(BaseModel):
+    """An image of the machine's screen (or of a region of it)."""
+
+    data: bytes = Field(repr=False)
+    """The encoded image."""
+    mime_type: str
+    """"image/png", "image/jpeg" or "image/webp"."""
+    width: int
+    """The image's size, after any scaling."""
+    height: int
+
+    def to_base64(self) -> str:
+        return _base64.b64encode(self.data).decode("ascii")
+
+    def to_data_url(self) -> str:
+        """`data:<mime>;base64,...`, as image inputs of model APIs take it."""
+        return f"data:{self.mime_type};base64,{self.to_base64()}"
+
+
+class ComputerActionResult(BaseModel):
+    """What every `machines.computer` call answers: the screen after the
+    action, and the screenshot when one was asked for."""
+
+    screen_width: int
+    """The screen's size in pixels. Coordinates are in this space; a
+    screenshot scaled down is smaller."""
+    screen_height: int
+    screen_held: bool = False
+    """`set_screen_size` is holding the screen at this size: someone watching
+    in the console sees it scaled to fit instead of resizing it."""
+    cursor: ComputerPoint
+    """Where the pointer is after the action."""
+    screenshot: Screenshot | None = None
 
 
 # ── Snapshots ────────────────────────────────────────────────────────

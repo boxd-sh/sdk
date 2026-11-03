@@ -154,6 +154,7 @@ _LOOKUP: dict[str, tuple[str, tuple[str, ...]]] = {
             "SetSsh",
             "SetDeleteAfter",
             "StreamLogs",
+            "ComputerAction",
             "ExposePort",
             "ListExposedPorts",
             "ListProxies",
@@ -535,15 +536,15 @@ class SyncRouter(_RouterBase):
         )
         return err
 
-    def call(self, method: str, request, *, region: str | None = None):
+    def call(self, method: str, request, *, region: str | None = None, **options):
         if _one_shot(request):
             transport, sent = self._stream_route(method, request, region)
-            return self._send(transport, method, sent, request)
+            return self._send(transport, method, sent, request, **options)
         direct = self._direct_route(method, request, region)
         if direct is not None:
             target, transport = direct
             try:
-                response = self._send(transport, method, request, request)
+                response = self._send(transport, method, request, request, **options)
             except BoxdError as err:
                 if not _missed_region(err):
                     raise
@@ -554,13 +555,13 @@ class SyncRouter(_RouterBase):
                 self._confirm(target, transport)
                 return response
         transport, sent = self._route(method, request, region)
-        return self._send(transport, method, sent, request)
+        return self._send(transport, method, sent, request, **options)
 
-    def _send(self, transport, method: str, sent, request):
+    def _send(self, transport, method: str, sent, request, **options):
         """One call on `transport`: `sent` is what it is sent, `request` what
         the caller asked for."""
         try:
-            response = transport.call(method, sent)
+            response = transport.call(method, sent, **options)
         except NotFoundError as err:
             self._find_elsewhere(
                 err, transport, _lookup_of(method, request), _org_of(request)
@@ -698,15 +699,15 @@ class AsyncRouter(_RouterBase):
         )
         return err
 
-    async def call(self, method: str, request, *, region: str | None = None):
+    async def call(self, method: str, request, *, region: str | None = None, **options):
         if _one_shot(request):
             transport, sent = await self._stream_route(method, request, region)
-            return await self._send(transport, method, sent, request)
+            return await self._send(transport, method, sent, request, **options)
         direct = self._direct_route(method, request, region)
         if direct is not None:
             target, transport = direct
             try:
-                response = await self._send(transport, method, request, request)
+                response = await self._send(transport, method, request, request, **options)
             except BoxdError as err:
                 if not _missed_region(err):
                     raise
@@ -717,12 +718,12 @@ class AsyncRouter(_RouterBase):
                 self._confirm(target, transport)
                 return response
         transport, sent = await self._route(method, request, region)
-        return await self._send(transport, method, sent, request)
+        return await self._send(transport, method, sent, request, **options)
 
-    async def _send(self, transport, method: str, sent, request):
+    async def _send(self, transport, method: str, sent, request, **options):
         """Async twin of :meth:`SyncRouter._send`."""
         try:
-            response = await transport.call(method, sent)
+            response = await transport.call(method, sent, **options)
         except NotFoundError as err:
             await self._find_elsewhere(
                 err, transport, _lookup_of(method, request), _org_of(request)

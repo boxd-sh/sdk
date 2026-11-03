@@ -13,10 +13,10 @@ import os
 import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Union
 
 from ._generated import api_pb2
-from .models import ProxyEntry, VolumeMount
+from .models import ProxyEntry, ScreenshotOptions, VolumeMount
 
 _SIZE_RE = re.compile(r"^(\d+)\s*([KMGT]?)i?[Bb]?$", re.IGNORECASE)
 _MULTIPLIERS = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
@@ -607,3 +607,110 @@ def set_delete_after(machine_id: str, seconds: int, cron: str | None):
     return api_pb2.SetDeleteAfterRequest(
         vm_id=machine_id, delete_after_secs=seconds or 0, delete_after_cron=cron or ""
     )
+
+
+# ── Computer use ─────────────────────────────────────────────────────
+
+ScreenshotArg = Union[bool, ScreenshotOptions, Mapping[str, Any], None]
+"""What an action's `screenshot=` takes: True for the defaults, options (or
+a dict of them), or False/None for none."""
+
+
+def computer_point(point: Any, what: str = "point") -> api_pb2.ComputerPoint:
+    """An `(x, y)` pair, or anything with `.x` and `.y`."""
+    if hasattr(point, "x") and hasattr(point, "y"):
+        x, y = point.x, point.y
+    else:
+        try:
+            x, y = point
+        except (TypeError, ValueError):
+            raise TypeError(f"{what} must be an (x, y) pair, not {point!r}") from None
+    return api_pb2.ComputerPoint(x=int(x), y=int(y))
+
+
+def computer_at(x: int | None, y: int | None) -> api_pb2.ComputerPoint | None:
+    """Where a mouse action happens; None (both omitted) is where the pointer is."""
+    if x is None and y is None:
+        return None
+    if x is None or y is None:
+        raise ValueError("pass both x and y, or neither to act where the pointer is")
+    return api_pb2.ComputerPoint(x=int(x), y=int(y))
+
+
+def computer_modifiers(modifiers: str | Sequence[str]) -> str:
+    """Keys held during a mouse action: "ctrl+shift", or ["ctrl", "shift"]."""
+    if isinstance(modifiers, str):
+        return modifiers
+    return "+".join(modifiers)
+
+
+def screenshot_options(value: ScreenshotArg) -> ScreenshotOptions | None:
+    if value is None or value is False:
+        return None
+    if value is True:
+        return ScreenshotOptions()
+    if isinstance(value, ScreenshotOptions):
+        return value
+    if isinstance(value, Mapping):
+        return ScreenshotOptions(**value)
+    raise TypeError(
+        "screenshot must be True, ScreenshotOptions or a dict of its fields, "
+        f"not {type(value).__name__}"
+    )
+
+
+def _screenshot_options_pb(o: ScreenshotOptions) -> api_pb2.ComputerScreenshotOptions:
+    pb = api_pb2.ComputerScreenshotOptions(
+        format=o.format or "",
+        quality=o.quality or 0,
+        max_width=o.max_width or 0,
+        max_height=o.max_height or 0,
+        delay_ms=o.delay_ms or 0,
+    )
+    if o.region is not None:
+        x, y, width, height = o.region
+        pb.region.CopyFrom(
+            api_pb2.ComputerRegion(x=x, y=y, width=width, height=height)
+        )
+    return pb
+
+
+def computer_action(
+    machine_id: str, shot: ScreenshotArg, /, **action: Any
+) -> api_pb2.ComputerActionRequest:
+    """`ComputerAction` for one action, given as its oneof field
+    (`click=api_pb2.ComputerClick(...)`), with the screenshot to take after
+    it (`shot`). The `screenshot` action always takes one."""
+    ((name, message),) = action.items()
+    request = api_pb2.ComputerActionRequest(vm_id=machine_id, **{name: message})
+    options = screenshot_options(shot)
+    if name == "screenshot" and options is None:
+        options = ScreenshotOptions()
+    if options is not None:
+        request.return_screenshot = True
+        request.screenshot_options.CopyFrom(_screenshot_options_pb(options))
+    return request
+
+
+def computer_action_seconds(request: api_pb2.ComputerActionRequest) -> float:
+    """How long the action is asked to take on top of an ordinary call (a
+    wait, a held key, the screenshot delay, typing a long text): the client
+    stretches its deadline by this much rather than giving up on an action
+    that is still running as asked."""
+    which = request.WhichOneof("action")
+    ms = 0
+    if which == "wait":
+        ms += request.wait.ms
+    elif which == "key":
+        presses = len(request.key.keys.split()) * max(1, request.key.repeat)
+        ms += request.key.hold_ms + 40 * presses
+    elif which == "type":
+        ms += 30 * len(request.type.text)
+    elif which == "scroll":
+        ms += 30 * (abs(request.scroll.delta_x) + abs(request.scroll.delta_y))
+    elif which == "drag":
+        # Each segment between two points is up to 20 small moves.
+        ms += 500 * max(0, len(request.drag.path) - 1)
+    if request.return_screenshot:
+        ms += request.screenshot_options.delay_ms
+    return ms / 1000

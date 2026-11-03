@@ -64,6 +64,16 @@ service BoxdApi {
   // boxd-desktop unit on demand before splicing. Consumed by the console's
   // /desktop view via boxd-console's WebSocket bridge.
   rpc DesktopTunnel(stream DesktopChunk)    returns (stream DesktopChunk);
+  // Computer use: screenshots, the mouse and the keyboard on the machine's
+  // desktop (the one the console's Desktop view shows), for agents such as
+  // Claude computer use and OpenAI's computer-use model. Each call does one
+  // action and can return a screenshot taken after it, so one step of an
+  // agent loop is one round trip. The desktop is started on demand, as for
+  // DesktopTunnel. Coordinates are screen pixels from the top left; the
+  // response carries the screen's size. A screenshot scaled down with
+  // `ComputerScreenshotOptions.max_width`/`max_height` is smaller than the
+  // screen, and the caller scales the coordinates it gets back up.
+  rpc ComputerAction(ComputerActionRequest) returns (ComputerActionResponse);
   rpc CreateNetwork(CreateNetworkRequest)   returns (CreateNetworkResponse);
   rpc ListNetworks(ListNetworksRequest)     returns (ListNetworksResponse);
   // Per-VM custom domains (one domain -> one VM). AddCustomDomain creates a
@@ -1172,6 +1182,152 @@ message DesktopChunk {
   string vm_id = 1;
   // Opaque xpra-protocol bytes (both directions).
   bytes  data  = 2;
+}
+
+message ComputerActionRequest {
+  string vm_id = 1;  // machine name or id
+  // Exactly one.
+  oneof action {
+    ComputerScreenshot     screenshot      = 2;
+    ComputerCursorPosition cursor_position = 3;
+    ComputerMouseMove      mouse_move      = 4;
+    ComputerClick          click           = 5;
+    ComputerMouseButton    mouse_down      = 6;
+    ComputerMouseButton    mouse_up        = 7;
+    ComputerDrag           drag            = 8;
+    ComputerScroll         scroll          = 9;
+    ComputerType           type            = 10;
+    ComputerKey            key             = 11;
+    ComputerWait           wait            = 12;
+    ComputerSetScreenSize  set_screen_size = 15;
+  }
+  // Take a screenshot after the action and return it. Always on for the
+  // `screenshot` action.
+  bool                      return_screenshot = 13;
+  ComputerScreenshotOptions screenshot_options = 14;
+}
+
+// A point on the screen, in pixels from the top left.
+message ComputerPoint {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+// A rectangle on the screen.
+message ComputerRegion {
+  int32 x      = 1;
+  int32 y      = 2;
+  int32 width  = 3;
+  int32 height = 4;
+}
+
+// Fields shared by the mouse actions:
+// - `at`: where; unset means where the pointer is now.
+// - `button`: "left" (the default when empty), "right", "middle", "back" or
+//   "forward".
+// - `modifiers`: keys held down during the action: "shift", "ctrl", "alt",
+//   "super", or several joined with "+" ("ctrl+shift").
+
+message ComputerScreenshot {}
+
+message ComputerCursorPosition {}
+
+message ComputerMouseMove {
+  ComputerPoint to = 1;
+}
+
+message ComputerClick {
+  ComputerPoint at        = 1;
+  string        button    = 2;
+  uint32        count     = 3;  // 1 (the default when 0), 2 for a double click, 3 for a triple click
+  string        modifiers = 4;
+}
+
+// Press (`mouse_down`) or release (`mouse_up`) a button, for drags an agent
+// does step by step.
+message ComputerMouseButton {
+  ComputerPoint at     = 1;
+  string        button = 2;
+}
+
+// Press at the first point, move through the rest, release at the last.
+message ComputerDrag {
+  repeated ComputerPoint path      = 1;  // 2 to 100 points
+  string                 button    = 2;
+  string                 modifiers = 3;
+}
+
+// Wheel clicks; positive scrolls right (`delta_x`) and down (`delta_y`).
+message ComputerScroll {
+  ComputerPoint at        = 1;
+  int32         delta_x   = 2;
+  int32         delta_y   = 3;
+  string        modifiers = 4;
+}
+
+// Types text where the keyboard focus is, as a person would on a US layout.
+message ComputerType {
+  string text = 1;
+}
+
+// Presses keys. `keys` is a key or a "+"-joined combination ("Return",
+// "ctrl+s", "alt+Tab"), or several separated by spaces, pressed in turn.
+// Names are X keysyms as xdotool takes them, plus common aliases ("enter",
+// "esc", "cmd", "arrowleft", "pageup"), case-insensitive.
+message ComputerKey {
+  string keys    = 1;
+  // Press the keys this many times; 0 means once. Up to 100, and up to 1000
+  // presses in all (the keys times `repeat`).
+  uint32 repeat  = 2;
+  // Hold one key or combination down this long, then release it, instead of
+  // pressing it. Up to 300000 (5 minutes).
+  uint32 hold_ms = 3;
+}
+
+message ComputerWait {
+  uint32 ms = 1;  // up to 300000 (5 minutes)
+}
+
+// Hold the screen at this size until it is let go or the desktop restarts.
+// While it is held, someone watching in the console sees it scaled to fit
+// instead of resizing it, so an agent's coordinates stay put. Both 0 lets go,
+// and the screen follows the viewer again. From 320x200 to 5120x2880.
+message ComputerSetScreenSize {
+  uint32 width  = 1;
+  uint32 height = 2;
+}
+
+message ComputerScreenshotOptions {
+  string format  = 1;  // "png" (the default when empty), "jpeg" or "webp"
+  uint32 quality = 2;  // jpeg and webp, 1-100; 0 means 80
+  // Scale the image down to fit within this size, keeping its shape; 0 means
+  // no limit. Never scaled up.
+  uint32 max_width  = 3;
+  uint32 max_height = 4;
+  // Only this part of the screen, at full resolution (then scaled to fit
+  // `max_width`/`max_height`), for zooming in. Unset means the whole screen.
+  ComputerRegion region = 5;
+  // Wait this long after the action before taking the screenshot, so the
+  // screen can catch up. Up to 60000.
+  uint32 delay_ms = 6;
+}
+
+message ComputerActionResponse {
+  int32         screen_width  = 1;
+  int32         screen_height = 2;
+  ComputerPoint cursor        = 3;  // where the pointer is after the action
+  // Set when one was asked for. A full-size PNG of a large screen can pass
+  // 30 MB: a client on gRPC's default 4 MB receive limit should raise it, or
+  // ask for less with `max_width`/`max_height` or JPEG.
+  ComputerImage screenshot    = 4;
+  bool          screen_held   = 5;  // set_screen_size is holding the screen at this size
+}
+
+message ComputerImage {
+  bytes  data      = 1;
+  string mime_type = 2;  // "image/png", "image/jpeg" or "image/webp"
+  int32  width     = 3;  // the image's size, after any scaling
+  int32  height    = 4;
 }
 
 // Networks

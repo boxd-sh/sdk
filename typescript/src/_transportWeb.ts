@@ -42,6 +42,7 @@ import type {
   MethodDef,
   ReadableCall,
   Transport as ITransport,
+  UnaryOptions,
   WritableCall,
 } from "./_rpc.js";
 
@@ -268,8 +269,13 @@ export class WebTransport implements ITransport {
 
   // ── unary / server-streaming: grpc-web over fetch ──────────────────────
 
-  async unary<Req, Resp>(method: MethodDef<Req, Resp>, req: Req): Promise<Resp> {
-    return withRetries(this.#maxRetries, () => this.#invokeUnary(method, req));
+  async unary<Req, Resp>(
+    method: MethodDef<Req, Resp>,
+    req: Req,
+    opts?: UnaryOptions,
+  ): Promise<Resp> {
+    const retries = opts?.retry === false ? 0 : this.#maxRetries;
+    return withRetries(retries, () => this.#invokeUnary(method, req, opts?.extraTimeoutMs));
   }
 
   #headers(token: string): Headers {
@@ -287,12 +293,14 @@ export class WebTransport implements ITransport {
     deadline: boolean,
     token: string,
     cancel?: AbortSignal,
+    extraMs = 0,
   ): Promise<Response> {
     const origin = await this.#httpOrigin();
     const url = `${origin}/${BoxdApiDefinition.fullName}/${method.name}`;
     const body = grpcWebFrame(method.requestType.encode(req).finish());
     const headers = this.#headers(token);
-    const timeout = deadline ? AbortSignal.timeout(this.#timeout) : undefined;
+    const timeoutMs = this.#timeout + extraMs;
+    const timeout = deadline ? AbortSignal.timeout(timeoutMs) : undefined;
     try {
       return await fetch(url, {
         method: "POST",
@@ -312,19 +320,28 @@ export class WebTransport implements ITransport {
         // `"TimeoutError"` for exactly this case (spec-defined, verified
         // against Node/undici and workerd) — a real network drop or DNS
         // failure surfaces a different `err.name` and still falls through.
-        throw statusError(GrpcStatus.DEADLINE_EXCEEDED, `deadline exceeded after ${this.#timeout}ms`);
+        throw statusError(GrpcStatus.DEADLINE_EXCEEDED, `deadline exceeded after ${timeoutMs}ms`);
       }
       throw new APIConnectionError(err instanceof Error ? err.message : String(err));
     }
   }
 
-  async #invokeUnary<Req, Resp>(method: MethodDef<Req, Resp>, req: Req): Promise<Resp> {
+  async #invokeUnary<Req, Resp>(
+    method: MethodDef<Req, Resp>,
+    req: Req,
+    extraMs?: number,
+  ): Promise<Resp> {
     const rawKeyOk = await this.#rawKeyOk();
-    return this.#directKey.unary(rawKeyOk, (token) => this.#unaryWith(method, req, token));
+    return this.#directKey.unary(rawKeyOk, (token) => this.#unaryWith(method, req, token, extraMs));
   }
 
-  async #unaryWith<Req, Resp>(method: MethodDef<Req, Resp>, req: Req, token: string): Promise<Resp> {
-    const resp = await this.#post(method, req, true, token);
+  async #unaryWith<Req, Resp>(
+    method: MethodDef<Req, Resp>,
+    req: Req,
+    token: string,
+    extraMs?: number,
+  ): Promise<Resp> {
+    const resp = await this.#post(method, req, true, token, undefined, extraMs);
     maybeNotifyUpdate(resp.headers.get(VERSION_RESPONSE_HEADER) ?? undefined);
 
     // A rejection before any message is written arrives as trailers-only

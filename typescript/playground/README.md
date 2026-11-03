@@ -31,11 +31,16 @@ bun run playground/scratch.ts      # start here — edit freely
 bun run playground/tour.ts         # read-only: whoami, list machines/snapshots/disks/env
 bun run playground/lifecycle.ts    # CREATES A REAL MACHINE, then destroys it
 bun run playground/exec.ts         # exec, streaming exec, file upload/download
+bun run playground/claude-computer-use.ts <machine> "<task>"  # Claude drives a machine's desktop
 ```
 
 `tour.ts` only reads. `lifecycle.ts` and `exec.ts` create a real machine on a
 real cluster and bill a real org — they print what they are about to do and wait
 for confirmation. Pass `--yes` to skip the prompt.
+
+`claude-computer-use.ts` acts on a machine you already have, through its
+desktop, and calls the Claude API: it needs `ANTHROPIC_API_KEY` (or an
+`ant auth login` profile), and `MAX_TURNS` caps its requests (default 15).
 
 ## Notes
 

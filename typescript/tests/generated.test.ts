@@ -121,6 +121,7 @@ describe("generated stubs are current", () => {
       "whoami",
       "linkSshKey",
       "getConfig",
+      "computerAction",
     ]) {
       expect(typeof clientProto[m]).toBe("function");
     }

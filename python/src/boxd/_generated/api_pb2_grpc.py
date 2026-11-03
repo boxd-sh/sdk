@@ -144,6 +144,11 @@ class BoxdApiStub(object):
                 request_serializer=api__pb2.DesktopChunk.SerializeToString,
                 response_deserializer=api__pb2.DesktopChunk.FromString,
                 _registered_method=True)
+        self.ComputerAction = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/ComputerAction',
+                request_serializer=api__pb2.ComputerActionRequest.SerializeToString,
+                response_deserializer=api__pb2.ComputerActionResponse.FromString,
+                _registered_method=True)
         self.CreateNetwork = channel.unary_unary(
                 '/boxd.api.v1.BoxdApi/CreateNetwork',
                 request_serializer=api__pb2.CreateNetworkRequest.SerializeToString,
@@ -881,6 +886,21 @@ class BoxdApiServicer(object):
         xpra-protocol bytes, both directions. The proxy starts the in-VM
         boxd-desktop unit on demand before splicing. Consumed by the console's
         /desktop view via boxd-console's WebSocket bridge.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ComputerAction(self, request, context):
+        """Computer use: screenshots, the mouse and the keyboard on the machine's
+        desktop (the one the console's Desktop view shows), for agents such as
+        Claude computer use and OpenAI's computer-use model. Each call does one
+        action and can return a screenshot taken after it, so one step of an
+        agent loop is one round trip. The desktop is started on demand, as for
+        DesktopTunnel. Coordinates are screen pixels from the top left; the
+        response carries the screen's size. A screenshot scaled down with
+        `ComputerScreenshotOptions.max_width`/`max_height` is smaller than the
+        screen, and the caller scales the coordinates it gets back up.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -1868,6 +1888,11 @@ def add_BoxdApiServicer_to_server(servicer, server):
                     servicer.DesktopTunnel,
                     request_deserializer=api__pb2.DesktopChunk.FromString,
                     response_serializer=api__pb2.DesktopChunk.SerializeToString,
+            ),
+            'ComputerAction': grpc.unary_unary_rpc_method_handler(
+                    servicer.ComputerAction,
+                    request_deserializer=api__pb2.ComputerActionRequest.FromString,
+                    response_serializer=api__pb2.ComputerActionResponse.SerializeToString,
             ),
             'CreateNetwork': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateNetwork,
@@ -3029,6 +3054,33 @@ class BoxdApi(object):
             '/boxd.api.v1.BoxdApi/DesktopTunnel',
             api__pb2.DesktopChunk.SerializeToString,
             api__pb2.DesktopChunk.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ComputerAction(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/ComputerAction',
+            api__pb2.ComputerActionRequest.SerializeToString,
+            api__pb2.ComputerActionResponse.FromString,
             options,
             channel_credentials,
             insecure,

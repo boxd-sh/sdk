@@ -23,6 +23,8 @@ from .models import (
     Billing,
     Checkpoint,
     ClusterConfig,
+    ComputerActionResult,
+    ComputerPoint,
     CreatedApiKey,
     CreatedCheckpoint,
     CreatedDisk,
@@ -71,6 +73,7 @@ from .models import (
     Region,
     RegionCount,
     ResizeResult,
+    Screenshot,
     Secret,
     Snapshot,
     StateSeconds,
@@ -511,6 +514,25 @@ def fs_entry(msg) -> FsEntry:
         uid=msg.uid,
         gid=msg.gid,
         symlink_target=fs_text(msg.symlink_target) if msg.symlink_target else None,
+    )
+
+
+def computer_action_result(msg) -> ComputerActionResult:
+    # `screenshot` is a message field, so "not asked for" is truly unset.
+    shot = msg.screenshot if msg.HasField("screenshot") else None
+    return ComputerActionResult(
+        screen_width=msg.screen_width,
+        screen_height=msg.screen_height,
+        screen_held=msg.screen_held,
+        cursor=ComputerPoint(x=msg.cursor.x, y=msg.cursor.y),
+        screenshot=Screenshot(
+            data=shot.data,
+            mime_type=shot.mime_type,
+            width=shot.width,
+            height=shot.height,
+        )
+        if shot is not None
+        else None,
     )
 
 

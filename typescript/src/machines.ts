@@ -9,6 +9,7 @@ import {
   BoxdError,
   ConflictError,
   GrpcStatus,
+  agentUnreachable,
 } from "./errors.js";
 import { metadataBase } from "./auth.js";
 import { parseSize, toUnixSeconds, type TimeBound } from "./utils.js";
@@ -41,6 +42,7 @@ import {
 } from "./models.js";
 import { MachineBackups } from "./backups.js";
 import { MachineCheckpoints } from "./checkpoints.js";
+import { MachineComputer } from "./computer.js";
 import { MachineFiles } from "./files.js";
 import { MachineFs } from "./fs.js";
 import { MachinePorts } from "./ports.js";
@@ -572,21 +574,14 @@ function deleteAfterApplied(m: GetVmResponse, params: DeleteAfterParams): boolea
 /** Waits before each retry of an exec whose machine agent didn't answer. */
 const EXEC_RETRY_BACKOFF_MS = [1_000, 3_000];
 
-/**
- * The server's message when it couldn't reach the machine's agent: nothing
- * was sent to the machine, so the command never started and running it
- * again is safe. Any other failure may come after the command started.
- */
-function agentUnreachable(err: unknown): boolean {
-  return (
-    err instanceof APIConnectionError && err.message.startsWith("cannot connect to VM agent")
-  );
-}
 
 export class Machines {
   readonly files: MachineFiles;
   /** Read, write, list and manage files inside a machine. */
   readonly fs: MachineFs;
+  /** Screenshots, the mouse and the keyboard on a machine's desktop, for
+   *  computer-use agents. */
+  readonly computer: MachineComputer;
   readonly ports: MachinePorts;
   readonly proxies: MachineProxies;
   readonly checkpoints: MachineCheckpoints;
@@ -601,6 +596,7 @@ export class Machines {
     this.#platform = platform;
     this.files = new MachineFiles(transport, platform);
     this.fs = new MachineFs(transport);
+    this.computer = new MachineComputer(transport);
     this.ports = new MachinePorts(transport);
     this.proxies = new MachineProxies(transport);
     this.checkpoints = new MachineCheckpoints(transport);

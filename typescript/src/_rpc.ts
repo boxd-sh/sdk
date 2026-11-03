@@ -74,6 +74,16 @@ export interface CallOptions {
   region?: string;
 }
 
+/** Per-call adjustments to a {@link Transport.unary} call. */
+export interface UnaryOptions extends CallOptions {
+  /** Added to the client's per-call deadline, for a call that takes longer
+   *  by design (a computer action that waits, holds a key or types a lot). */
+  extraTimeoutMs?: number;
+  /** `false` never repeats the call, not even after a connection failure:
+   *  for a call that must not run twice (a click, typing). Default `true`. */
+  retry?: boolean;
+}
+
 /** One answer per region, from {@link Transport.eachRegion}. */
 export interface RegionPages<Resp> {
   /** `region` is undefined outside a federation (one answer, from home). */
@@ -87,7 +97,7 @@ export interface Transport {
    *  list/...) goes through this — it is reachable over grpc-web, so this
    *  one method is what makes the whole non-streaming SDK surface work
    *  unmodified under the web transport. */
-  unary<Req, Resp>(method: MethodDef<Req, Resp>, req: Req, opts?: CallOptions): Promise<Resp>;
+  unary<Req, Resp>(method: MethodDef<Req, Resp>, req: Req, opts?: UnaryOptions): Promise<Resp>;
   /**
    * Server-streaming call: one request, many responses (`DownloadFileStream`,
    * `StreamLogs`). Also grpc-web-reachable.
