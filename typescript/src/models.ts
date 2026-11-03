@@ -1919,6 +1919,12 @@ export interface BillingActivityPage {
   currency: string;
   /** The org's balance now, micro-units of `currency`. */
   balanceMicro: number;
+  /**
+   * The org is on a custom plan managed by boxd and is never charged, so
+   * `balanceMicro` means nothing (it can be negative): don't show it.
+   * `false` from servers that predate the field.
+   */
+  comped: boolean;
   entries: BillingActivityEntry[];
   /** Pass as `pageToken` for the next (older) page. `null` = this was the last. */
   nextPageToken: string | null;
@@ -1999,6 +2005,7 @@ export function toBillingActivityPage(r: ListBillingActivityResponse): BillingAc
   return {
     currency: r.currency,
     balanceMicro: r.balanceMicro,
+    comped: r.comped ?? false,
     entries: (r.entries ?? []).map(toBillingActivityEntry),
     nextPageToken: emptyToNull(r.nextPageToken),
   };

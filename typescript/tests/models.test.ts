@@ -6,6 +6,7 @@ import {
   toBackup,
   toBackupSchedule,
   toBilling,
+  toBillingActivityPage,
   toCheckpoint,
   toInvitedOrgMember,
   toOrgInvite,
@@ -816,5 +817,13 @@ describe("invites", () => {
     const base = { token: "a", email: "a@example.com", acceptUrl: "", createdAt: 1, expiresAt: 2, role: "member" };
     expect(toOrgInvite({ ...base, emailStatus: "bounced" }).emailStatus).toBe("bounced");
     expect(toOrgInvite({ ...base, emailStatus: "" }).emailStatus).toBe("");
+  });
+});
+
+describe("billing activity", () => {
+  it("says when the org is comped, and not from an older server", () => {
+    const page = { currency: "eur", balanceMicro: -1_250_000, entries: [], nextPageToken: "" };
+    expect(toBillingActivityPage({ ...page, comped: true }).comped).toBe(true);
+    expect(toBillingActivityPage({ ...page, comped: false }).comped).toBe(false);
   });
 });

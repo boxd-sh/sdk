@@ -2223,6 +2223,11 @@ message GetOrgBillingResponse {
   // servers that predate the field — fall back to vcpu/memory_bytes.
   uint32 ceiling_vcpu         = 13;
   uint64 ceiling_memory_bytes = 14;
+  // The org is on a custom plan managed by boxd and is never charged, so its
+  // balance means nothing to its members and can run negative. Render no
+  // balance for it, as the console does. False from servers that predate
+  // the field.
+  bool comped = 15;
 }
 
 message OrgBilledVm {
@@ -2374,6 +2379,9 @@ message ListBillingActivityResponse {
   repeated BillingActivityEntry entries = 3;  // newest first
   // Pass as page_token for the next (older) page; "" = this was the last.
   string next_page_token = 4;
+  // The org is on a custom plan managed by boxd and is never charged, so
+  // render no balance (as GetOrgBillingResponse.comped).
+  bool comped = 5;
 }
 
 message UnshareVmRequest {

@@ -1074,6 +1074,10 @@ class BillingActivityPage(BaseModel):
     currency: str
     balance_micro: int
     """The org's balance now, micro-units of ``currency``."""
+    comped: bool = False
+    """The org is on a custom plan managed by boxd and is never charged, so
+    ``balance_micro`` means nothing (it can be negative): don't show it.
+    False from servers that predate the field."""
     entries: list[BillingActivityEntry]
     next_page_token: str | None
     """Pass as ``page_token`` for the next (older) page. None = this was the last."""

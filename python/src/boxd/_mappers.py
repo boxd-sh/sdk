@@ -841,6 +841,7 @@ def billing_activity_page(msg) -> BillingActivityPage:
     return BillingActivityPage(
         currency=msg.currency,
         balance_micro=msg.balance_micro,
+        comped=msg.comped,
         entries=[
             BillingActivityEntry(
                 id=e.entry_id,

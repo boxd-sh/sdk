@@ -1948,6 +1948,17 @@ def test_orgs_billing_activity_walks_every_page():
     assert transport.calls[0][1].page_size == 2
 
 
+def test_orgs_billing_activity_page_says_comped():
+    from boxd.resources.orgs import Orgs
+
+    comped = _billing_activity_page(["a"])
+    comped.comped = True
+    transport = FakeTransport([comped, _billing_activity_page(["b"])])
+    assert Orgs(transport).billing_activity_page().comped is True
+    # A server that predates the field: not comped.
+    assert Orgs(transport).billing_activity_page().comped is False
+
+
 async def test_async_orgs_billing_activity_walks_every_page():
     from boxd.resources.orgs import AsyncOrgs
 

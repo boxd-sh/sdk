@@ -2494,6 +2494,13 @@ export interface GetOrgBillingResponse {
    */
   ceilingVcpu: number;
   ceilingMemoryBytes: number;
+  /**
+   * The org is on a custom plan managed by boxd and is never charged, so its
+   * balance means nothing to its members and can run negative. Render no
+   * balance for it, as the console does. False from servers that predate
+   * the field.
+   */
+  comped: boolean;
 }
 
 export interface OrgBilledVm {
@@ -2683,6 +2690,11 @@ export interface ListBillingActivityResponse {
   entries: BillingActivityEntry[];
   /** Pass as page_token for the next (older) page; "" = this was the last. */
   nextPageToken: string;
+  /**
+   * The org is on a custom plan managed by boxd and is never charged, so
+   * render no balance (as GetOrgBillingResponse.comped).
+   */
+  comped: boolean;
 }
 
 export interface UnshareVmRequest {
@@ -23441,6 +23453,7 @@ function createBaseGetOrgBillingResponse(): GetOrgBillingResponse {
     currency: "",
     ceilingVcpu: 0,
     ceilingMemoryBytes: 0,
+    comped: false,
   };
 }
 
@@ -23487,6 +23500,9 @@ export const GetOrgBillingResponse: MessageFns<GetOrgBillingResponse> = {
     }
     if (message.ceilingMemoryBytes !== 0) {
       writer.uint32(112).uint64(message.ceilingMemoryBytes);
+    }
+    if (message.comped !== false) {
+      writer.uint32(120).bool(message.comped);
     }
     return writer;
   },
@@ -23610,6 +23626,14 @@ export const GetOrgBillingResponse: MessageFns<GetOrgBillingResponse> = {
           message.ceilingMemoryBytes = longToNumber(reader.uint64());
           continue;
         }
+        case 15: {
+          if (tag !== 120) {
+            break;
+          }
+
+          message.comped = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -23673,6 +23697,7 @@ export const GetOrgBillingResponse: MessageFns<GetOrgBillingResponse> = {
         : isSet(object.ceiling_memory_bytes)
         ? globalThis.Number(object.ceiling_memory_bytes)
         : 0,
+      comped: isSet(object.comped) ? globalThis.Boolean(object.comped) : false,
     };
   },
 
@@ -23720,6 +23745,9 @@ export const GetOrgBillingResponse: MessageFns<GetOrgBillingResponse> = {
     if (message.ceilingMemoryBytes !== 0) {
       obj.ceilingMemoryBytes = Math.round(message.ceilingMemoryBytes);
     }
+    if (message.comped !== false) {
+      obj.comped = message.comped;
+    }
     return obj;
   },
 
@@ -23742,6 +23770,7 @@ export const GetOrgBillingResponse: MessageFns<GetOrgBillingResponse> = {
     message.currency = object.currency ?? "";
     message.ceilingVcpu = object.ceilingVcpu ?? 0;
     message.ceilingMemoryBytes = object.ceilingMemoryBytes ?? 0;
+    message.comped = object.comped ?? false;
     return message;
   },
 };
@@ -25231,7 +25260,7 @@ export const BillingActivityEntry: MessageFns<BillingActivityEntry> = {
 };
 
 function createBaseListBillingActivityResponse(): ListBillingActivityResponse {
-  return { currency: "", balanceMicro: 0, entries: [], nextPageToken: "" };
+  return { currency: "", balanceMicro: 0, entries: [], nextPageToken: "", comped: false };
 }
 
 export const ListBillingActivityResponse: MessageFns<ListBillingActivityResponse> = {
@@ -25247,6 +25276,9 @@ export const ListBillingActivityResponse: MessageFns<ListBillingActivityResponse
     }
     if (message.nextPageToken !== "") {
       writer.uint32(34).string(message.nextPageToken);
+    }
+    if (message.comped !== false) {
+      writer.uint32(40).bool(message.comped);
     }
     return writer;
   },
@@ -25290,6 +25322,14 @@ export const ListBillingActivityResponse: MessageFns<ListBillingActivityResponse
           message.nextPageToken = reader.string();
           continue;
         }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.comped = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -25315,6 +25355,7 @@ export const ListBillingActivityResponse: MessageFns<ListBillingActivityResponse
         : isSet(object.next_page_token)
         ? globalThis.String(object.next_page_token)
         : "",
+      comped: isSet(object.comped) ? globalThis.Boolean(object.comped) : false,
     };
   },
 
@@ -25332,6 +25373,9 @@ export const ListBillingActivityResponse: MessageFns<ListBillingActivityResponse
     if (message.nextPageToken !== "") {
       obj.nextPageToken = message.nextPageToken;
     }
+    if (message.comped !== false) {
+      obj.comped = message.comped;
+    }
     return obj;
   },
 
@@ -25344,6 +25388,7 @@ export const ListBillingActivityResponse: MessageFns<ListBillingActivityResponse
     message.balanceMicro = object.balanceMicro ?? 0;
     message.entries = object.entries?.map((e) => BillingActivityEntry.fromPartial(e)) || [];
     message.nextPageToken = object.nextPageToken ?? "";
+    message.comped = object.comped ?? false;
     return message;
   },
 };
