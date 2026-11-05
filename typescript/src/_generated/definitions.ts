@@ -35526,9 +35526,10 @@ export const BoxdApiDefinition = {
     /**
      * The org's default bot protection mode: what a NEW machine in
      * the org starts with. An org without one follows the cluster's setting
-     * for new machines. Every machine keeps the mode it has, so changing this
-     * only affects machines created afterwards; a fork or a restore keeps its
-     * source's mode either way.
+     * for new machines. Setting it also sets the mode on the existing machines
+     * and snapshots the caller may manage, except "off" machines, unless the Set
+     * asks for `new_machines_only`; a fork or a restore keeps its source's mode
+     * either way.
      * Set/Clear require org admin; Get is readable by any member.
      */
     setOrgBotProtectionDefault: {
