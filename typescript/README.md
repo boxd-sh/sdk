@@ -1228,13 +1228,12 @@ interface Disk {
 
 ```typescript
 const machine = await boxd.machines.get(id);
-console.log(boxd.domains.dnsInstructions("app.example.com", {
-  machineName: machine.name, machineIp: "<machine's public IP>",
-  zone: (await boxd.account.config()).zone,
-}));
+const { zone } = await boxd.account.config();
 // Point an A record at the machine's public IP, and a wildcard CNAME
 // (*.app.example.com) at <machine>.<zone> — only once those are actually
 // in place:
+//   A      app.example.com     <machine's public IP>
+//   CNAME  *.app.example.com   `${machine.name}.${zone}`
 const domain = await boxd.domains.create({ domain: "app.example.com", machine: id });
 domain.status;      // "pending" | "active"
 domain.lastError;   // empty once active
@@ -1245,8 +1244,8 @@ await boxd.domains.delete("app.example.com");
 `create` binds the domain and starts verification immediately — call it only
 once DNS is actually set. Checking before the records exist risks a public
 DNS resolver caching the "no records" answer, which would delay verification
-after you do set them. `dnsInstructions` is a local helper (no network call)
-for rendering the records to show a user first — it doesn't touch the API. A
+after you do set them. The records to set are the A record and wildcard
+CNAME shown above; nothing is sent to the API until you call `create`. A
 background check then verifies DNS and issues certs automatically, then
 flips `status` to `"active"`.
 
