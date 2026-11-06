@@ -469,11 +469,6 @@ class BoxdApiStub(object):
                 request_serializer=api__pb2.DeleteApiKeyRequest.SerializeToString,
                 response_deserializer=api__pb2.DeleteApiKeyResponse.FromString,
                 _registered_method=True)
-        self.ListPlans = channel.unary_unary(
-                '/boxd.api.v1.BoxdApi/ListPlans',
-                request_serializer=api__pb2.ListPlansRequest.SerializeToString,
-                response_deserializer=api__pb2.ListPlansResponse.FromString,
-                _registered_method=True)
         self.GetBilling = channel.unary_unary(
                 '/boxd.api.v1.BoxdApi/GetBilling',
                 request_serializer=api__pb2.GetBillingRequest.SerializeToString,
@@ -1378,18 +1373,15 @@ class BoxdApiServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def ListPlans(self, request, context):
-        """Billing — individual subscriptions. ListPlans is unauth-friendly
-        (returns the single self-serve plan), the rest require JWT.
+    def GetBilling(self, request, context):
+        """Billing — individual subscriptions. All require JWT.
         RPC ChangeShape removed (shape retired, rc/0.2) — it only ever returned
         UNIMPLEMENTED in prod. Do not reuse the method name with new semantics.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
+        RPC ListPlans removed — it listed the retired monthly subscription plan.
+        Usage is billed on credits at the rates on https://boxd.sh/pricing. Do
+        not reuse the method name with new semantics.
 
-    def GetBilling(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -2214,11 +2206,6 @@ def add_BoxdApiServicer_to_server(servicer, server):
                     servicer.DeleteApiKey,
                     request_deserializer=api__pb2.DeleteApiKeyRequest.FromString,
                     response_serializer=api__pb2.DeleteApiKeyResponse.SerializeToString,
-            ),
-            'ListPlans': grpc.unary_unary_rpc_method_handler(
-                    servicer.ListPlans,
-                    request_deserializer=api__pb2.ListPlansRequest.FromString,
-                    response_serializer=api__pb2.ListPlansResponse.SerializeToString,
             ),
             'GetBilling': grpc.unary_unary_rpc_method_handler(
                     servicer.GetBilling,
@@ -4810,33 +4797,6 @@ class BoxdApi(object):
             '/boxd.api.v1.BoxdApi/DeleteApiKey',
             api__pb2.DeleteApiKeyRequest.SerializeToString,
             api__pb2.DeleteApiKeyResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def ListPlans(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/boxd.api.v1.BoxdApi/ListPlans',
-            api__pb2.ListPlansRequest.SerializeToString,
-            api__pb2.ListPlansResponse.FromString,
             options,
             channel_credentials,
             insecure,

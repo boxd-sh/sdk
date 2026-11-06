@@ -24,7 +24,7 @@ await boxd.machines.waitUntilReady(machine.id);
 const result = await boxd.machines.exec(machine.id, { command: ["echo", "hello"] });
 console.log(result.stdout);
 
-// What it cost (metered every few minutes; still answers after delete):
+// What it cost (metered every second, settled every 15 minutes; still answers after delete):
 const usage = await boxd.machines.usage(machine.id);
 console.log(usage.costMicro / 1e6, usage.currency);
 

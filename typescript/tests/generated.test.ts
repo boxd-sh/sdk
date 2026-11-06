@@ -114,7 +114,6 @@ describe("generated stubs are current", () => {
       "createToken",
       "listTokens",
       "revokeToken",
-      "listPlans",
       "getBilling",
       "createCheckoutSession",
       "createBillingPortalSession",
@@ -158,7 +157,6 @@ describe("generated stubs are current", () => {
   it("message defaults carry no removed fields", () => {
     for (const obj of [
       gen.BillingInfo.fromPartial({}),
-      gen.PlanInfo.fromPartial({}),
       gen.OrgBilledVm.fromPartial({}),
       gen.CreateCheckoutSessionRequest.fromPartial({}),
     ]) {

@@ -79,7 +79,6 @@ HOME_METHODS = frozenset(
         "CreateApiKey",
         "ListApiKeys",
         "DeleteApiKey",
-        "ListPlans",
         "GetBilling",
         "CreateCheckoutSession",
         "CreateBillingPortalSession",

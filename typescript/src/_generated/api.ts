@@ -1554,29 +1554,6 @@ export interface BillingInfo {
 }
 
 /**
- * Catalog of plans the website + console render — the single self-serve
- * plan (lookup_key 'boxd-monthly'). The server is the authority on the
- * catalog so the public site and the API never drift on prices.
- */
-export interface ListPlansRequest {
-}
-
-export interface ListPlansResponse {
-  plans: PlanInfo[];
-}
-
-export interface PlanInfo {
-  /** price in EUR cents, e.g. 2000 for €20 */
-  monthlyEur: number;
-  /** 'boxd-monthly' */
-  lookupKey: string;
-  /** human-readable */
-  description: string;
-  vcpu: number;
-  memoryBytes: number;
-}
-
-/**
  * Detailed billing view (same as Whoami.billing today; kept as its own
  * RPC because Phase 3 will extend it with invoice history / next-renewal).
  */
@@ -14850,243 +14827,6 @@ export const BillingInfo: MessageFns<BillingInfo> = {
     message.currency = object.currency ?? "";
     message.ceilingVcpu = object.ceilingVcpu ?? 0;
     message.ceilingMemoryBytes = object.ceilingMemoryBytes ?? 0;
-    return message;
-  },
-};
-
-function createBaseListPlansRequest(): ListPlansRequest {
-  return {};
-}
-
-export const ListPlansRequest: MessageFns<ListPlansRequest> = {
-  encode(_: ListPlansRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): ListPlansRequest {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseListPlansRequest();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-      }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
-      }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
-
-  fromJSON(_: any): ListPlansRequest {
-    return {};
-  },
-
-  toJSON(_: ListPlansRequest): unknown {
-    const obj: any = {};
-    return obj;
-  },
-
-  create(base?: DeepPartial<ListPlansRequest>): ListPlansRequest {
-    return ListPlansRequest.fromPartial(base ?? {});
-  },
-  fromPartial(_: DeepPartial<ListPlansRequest>): ListPlansRequest {
-    const message = createBaseListPlansRequest();
-    return message;
-  },
-};
-
-function createBaseListPlansResponse(): ListPlansResponse {
-  return { plans: [] };
-}
-
-export const ListPlansResponse: MessageFns<ListPlansResponse> = {
-  encode(message: ListPlansResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    for (const v of message.plans) {
-      PlanInfo.encode(v!, writer.uint32(10).fork()).join();
-    }
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): ListPlansResponse {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseListPlansResponse();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.plans.push(PlanInfo.decode(reader, reader.uint32()));
-          continue;
-        }
-      }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
-      }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
-
-  fromJSON(object: any): ListPlansResponse {
-    return { plans: globalThis.Array.isArray(object?.plans) ? object.plans.map((e: any) => PlanInfo.fromJSON(e)) : [] };
-  },
-
-  toJSON(message: ListPlansResponse): unknown {
-    const obj: any = {};
-    if (message.plans?.length) {
-      obj.plans = message.plans.map((e) => PlanInfo.toJSON(e));
-    }
-    return obj;
-  },
-
-  create(base?: DeepPartial<ListPlansResponse>): ListPlansResponse {
-    return ListPlansResponse.fromPartial(base ?? {});
-  },
-  fromPartial(object: DeepPartial<ListPlansResponse>): ListPlansResponse {
-    const message = createBaseListPlansResponse();
-    message.plans = object.plans?.map((e) => PlanInfo.fromPartial(e)) || [];
-    return message;
-  },
-};
-
-function createBasePlanInfo(): PlanInfo {
-  return { monthlyEur: 0, lookupKey: "", description: "", vcpu: 0, memoryBytes: 0 };
-}
-
-export const PlanInfo: MessageFns<PlanInfo> = {
-  encode(message: PlanInfo, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.monthlyEur !== 0) {
-      writer.uint32(24).uint32(message.monthlyEur);
-    }
-    if (message.lookupKey !== "") {
-      writer.uint32(34).string(message.lookupKey);
-    }
-    if (message.description !== "") {
-      writer.uint32(42).string(message.description);
-    }
-    if (message.vcpu !== 0) {
-      writer.uint32(48).uint32(message.vcpu);
-    }
-    if (message.memoryBytes !== 0) {
-      writer.uint32(56).uint64(message.memoryBytes);
-    }
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): PlanInfo {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBasePlanInfo();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 3: {
-          if (tag !== 24) {
-            break;
-          }
-
-          message.monthlyEur = reader.uint32();
-          continue;
-        }
-        case 4: {
-          if (tag !== 34) {
-            break;
-          }
-
-          message.lookupKey = reader.string();
-          continue;
-        }
-        case 5: {
-          if (tag !== 42) {
-            break;
-          }
-
-          message.description = reader.string();
-          continue;
-        }
-        case 6: {
-          if (tag !== 48) {
-            break;
-          }
-
-          message.vcpu = reader.uint32();
-          continue;
-        }
-        case 7: {
-          if (tag !== 56) {
-            break;
-          }
-
-          message.memoryBytes = longToNumber(reader.uint64());
-          continue;
-        }
-      }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
-      }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
-
-  fromJSON(object: any): PlanInfo {
-    return {
-      monthlyEur: isSet(object.monthlyEur)
-        ? globalThis.Number(object.monthlyEur)
-        : isSet(object.monthly_eur)
-        ? globalThis.Number(object.monthly_eur)
-        : 0,
-      lookupKey: isSet(object.lookupKey)
-        ? globalThis.String(object.lookupKey)
-        : isSet(object.lookup_key)
-        ? globalThis.String(object.lookup_key)
-        : "",
-      description: isSet(object.description) ? globalThis.String(object.description) : "",
-      vcpu: isSet(object.vcpu) ? globalThis.Number(object.vcpu) : 0,
-      memoryBytes: isSet(object.memoryBytes)
-        ? globalThis.Number(object.memoryBytes)
-        : isSet(object.memory_bytes)
-        ? globalThis.Number(object.memory_bytes)
-        : 0,
-    };
-  },
-
-  toJSON(message: PlanInfo): unknown {
-    const obj: any = {};
-    if (message.monthlyEur !== 0) {
-      obj.monthlyEur = Math.round(message.monthlyEur);
-    }
-    if (message.lookupKey !== "") {
-      obj.lookupKey = message.lookupKey;
-    }
-    if (message.description !== "") {
-      obj.description = message.description;
-    }
-    if (message.vcpu !== 0) {
-      obj.vcpu = Math.round(message.vcpu);
-    }
-    if (message.memoryBytes !== 0) {
-      obj.memoryBytes = Math.round(message.memoryBytes);
-    }
-    return obj;
-  },
-
-  create(base?: DeepPartial<PlanInfo>): PlanInfo {
-    return PlanInfo.fromPartial(base ?? {});
-  },
-  fromPartial(object: DeepPartial<PlanInfo>): PlanInfo {
-    const message = createBasePlanInfo();
-    message.monthlyEur = object.monthlyEur ?? 0;
-    message.lookupKey = object.lookupKey ?? "";
-    message.description = object.description ?? "";
-    message.vcpu = object.vcpu ?? 0;
-    message.memoryBytes = object.memoryBytes ?? 0;
     return message;
   },
 };
@@ -35423,21 +35163,6 @@ export const BoxdApiService = {
       Buffer.from(DeleteApiKeyResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer): DeleteApiKeyResponse => DeleteApiKeyResponse.decode(value),
   },
-  /**
-   * Billing — individual subscriptions. ListPlans is unauth-friendly
-   * (returns the single self-serve plan), the rest require JWT.
-   * RPC ChangeShape removed (shape retired, rc/0.2) — it only ever returned
-   * UNIMPLEMENTED in prod. Do not reuse the method name with new semantics.
-   */
-  listPlans: {
-    path: "/boxd.api.v1.BoxdApi/ListPlans" as const,
-    requestStream: false as const,
-    responseStream: false as const,
-    requestSerialize: (value: ListPlansRequest): Buffer => Buffer.from(ListPlansRequest.encode(value).finish()),
-    requestDeserialize: (value: Buffer): ListPlansRequest => ListPlansRequest.decode(value),
-    responseSerialize: (value: ListPlansResponse): Buffer => Buffer.from(ListPlansResponse.encode(value).finish()),
-    responseDeserialize: (value: Buffer): ListPlansResponse => ListPlansResponse.decode(value),
-  },
   getBilling: {
     path: "/boxd.api.v1.BoxdApi/GetBilling" as const,
     requestStream: false as const,
@@ -36361,13 +36086,6 @@ export interface BoxdApiServer extends UntypedServiceImplementation {
   createApiKey: handleUnaryCall<CreateApiKeyRequest, CreateApiKeyResponse>;
   listApiKeys: handleUnaryCall<ListApiKeysRequest, ListApiKeysResponse>;
   deleteApiKey: handleUnaryCall<DeleteApiKeyRequest, DeleteApiKeyResponse>;
-  /**
-   * Billing — individual subscriptions. ListPlans is unauth-friendly
-   * (returns the single self-serve plan), the rest require JWT.
-   * RPC ChangeShape removed (shape retired, rc/0.2) — it only ever returned
-   * UNIMPLEMENTED in prod. Do not reuse the method name with new semantics.
-   */
-  listPlans: handleUnaryCall<ListPlansRequest, ListPlansResponse>;
   getBilling: handleUnaryCall<GetBillingRequest, GetBillingResponse>;
   createCheckoutSession: handleUnaryCall<CreateCheckoutSessionRequest, CreateCheckoutSessionResponse>;
   createBillingPortalSession: handleUnaryCall<CreateBillingPortalSessionRequest, CreateBillingPortalSessionResponse>;
@@ -38003,27 +37721,6 @@ export interface BoxdApiClient extends Client {
     metadata: Metadata,
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: DeleteApiKeyResponse) => void,
-  ): ClientUnaryCall;
-  /**
-   * Billing — individual subscriptions. ListPlans is unauth-friendly
-   * (returns the single self-serve plan), the rest require JWT.
-   * RPC ChangeShape removed (shape retired, rc/0.2) — it only ever returned
-   * UNIMPLEMENTED in prod. Do not reuse the method name with new semantics.
-   */
-  listPlans(
-    request: ListPlansRequest,
-    callback: (error: ServiceError | null, response: ListPlansResponse) => void,
-  ): ClientUnaryCall;
-  listPlans(
-    request: ListPlansRequest,
-    metadata: Metadata,
-    callback: (error: ServiceError | null, response: ListPlansResponse) => void,
-  ): ClientUnaryCall;
-  listPlans(
-    request: ListPlansRequest,
-    metadata: Metadata,
-    options: Partial<CallOptions>,
-    callback: (error: ServiceError | null, response: ListPlansResponse) => void,
   ): ClientUnaryCall;
   getBilling(
     request: GetBillingRequest,

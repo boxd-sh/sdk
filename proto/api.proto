@@ -229,11 +229,13 @@ service BoxdApi {
   rpc ListApiKeys(ListApiKeysRequest)     returns (ListApiKeysResponse);
   rpc DeleteApiKey(DeleteApiKeyRequest)   returns (DeleteApiKeyResponse);
 
-  // Billing — individual subscriptions. ListPlans is unauth-friendly
-  // (returns the single self-serve plan), the rest require JWT.
+  // Billing — individual subscriptions. All require JWT.
   // RPC ChangeShape removed (shape retired, rc/0.2) — it only ever returned
   // UNIMPLEMENTED in prod. Do not reuse the method name with new semantics.
-  rpc ListPlans(ListPlansRequest)                                   returns (ListPlansResponse);
+  // RPC ListPlans removed — it listed the retired monthly subscription plan.
+  // Usage is billed on credits at the rates on https://boxd.sh/pricing. Do
+  // not reuse the method name with new semantics.
+
   rpc GetBilling(GetBillingRequest)                                 returns (GetBillingResponse);
   rpc CreateCheckoutSession(CreateCheckoutSessionRequest)           returns (CreateCheckoutSessionResponse);
   rpc CreateBillingPortalSession(CreateBillingPortalSessionRequest) returns (CreateBillingPortalSessionResponse);
@@ -1493,29 +1495,6 @@ message BillingInfo {
   // 0 from servers that predate the field — fall back to vcpu/memory_bytes.
   uint32 ceiling_vcpu           = 13;
   uint64 ceiling_memory_bytes   = 14;
-}
-
-// Catalog of plans the website + console render — the single self-serve
-// plan (lookup_key 'boxd-monthly'). The server is the authority on the
-// catalog so the public site and the API never drift on prices.
-message ListPlansRequest {}
-message ListPlansResponse {
-  repeated PlanInfo plans = 1;
-}
-
-message PlanInfo {
-  // Field 1 removed (tier). Plan identity is lookup_key; size is vcpu +
-  // memory_bytes.
-  reserved 1;
-  reserved "tier";
-  // Field 2 removed (shape).
-  reserved 2;
-  reserved "shape";
-  uint32 monthly_eur   = 3;  // price in EUR cents, e.g. 2000 for €20
-  string lookup_key    = 4;  // 'boxd-monthly'
-  string description   = 5;  // human-readable
-  uint32 vcpu          = 6;
-  uint64 memory_bytes  = 7;
 }
 
 // Detailed billing view (same as Whoami.billing today; kept as its own

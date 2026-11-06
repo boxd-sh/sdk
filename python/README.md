@@ -24,7 +24,7 @@ boxd.machines.wait_until_ready(machine.id)
 result = boxd.machines.exec(machine.id, "uname -a")
 print(result.stdout)
 
-# What it cost (metered every few minutes; still answers after delete):
+# What it cost (metered every second, settled every 15 minutes; still answers after delete):
 usage = boxd.machines.usage(machine.id)
 print(usage.cost_micro / 1e6, usage.currency)
 

@@ -90,7 +90,6 @@ const HOME_METHODS: ReadonlySet<string> = new Set([
   "CreateApiKey",
   "ListApiKeys",
   "DeleteApiKey",
-  "ListPlans",
   "GetBilling",
   "CreateCheckoutSession",
   "CreateBillingPortalSession",
