@@ -1170,13 +1170,12 @@ volume.attachments      # [DiskAttachment(machine_id, machine_name, mount_path, 
 
 ```python
 machine = boxd.machines.get(machine_id)
-print(boxd.domains.dns_instructions(
-    "app.example.com", machine_name=machine.name, machine_ip="<machine's public IP>",
-    zone=boxd.account.config().zone,
-))
+zone = boxd.account.config().zone
 # Point an A record at the machine's public IP, and a wildcard CNAME
 # (*.app.example.com) at <machine>.<zone> — only once those are actually in
 # place:
+#   A      app.example.com     <machine's public IP>
+#   CNAME  *.app.example.com   {machine.name}.{zone}
 domain = boxd.domains.create("app.example.com", machine_id)   # starts "pending"
 domain.status           # "pending" | "active"
 domain.last_error       # empty once active
@@ -1187,10 +1186,10 @@ boxd.domains.delete("app.example.com")
 `create` binds the domain and starts verification immediately — call it only
 once DNS is actually set. Checking before the records exist risks a public
 DNS resolver caching the "no records" answer, which would delay verification
-after you do set them. `dns_instructions` is a local helper (no network
-call) for rendering the records to show a user first — it doesn't touch the
-API. A background check verifies DNS and issues certs automatically, then
-flips `status` to `"active"`.
+after you do set them. The records to set are the A record and wildcard
+CNAME shown above; nothing is sent to the API until you call `create`. A
+background check verifies DNS and issues certs automatically, then flips
+`status` to `"active"`.
 
 ## Organizations, credentials, account
 
