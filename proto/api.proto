@@ -205,7 +205,9 @@ service BoxdApi {
   rpc CreateVmFromSnapshot(CreateVmFromSnapshotRequest) returns (CreateVmResponse);
   // Checkpoints: per-VM, worker-local full captures (state+memory+disk) with
   // warm restore in place. Same artifacts as a snapshot, but never replicated
-  // and never an account-level image — they live and die with the VM.
+  // and never an account-level image — they live and die with the VM. A
+  // Windows machine's checkpoint is its disk alone, restored in place by
+  // stopping the machine, putting the disk back and booting it cold.
   rpc CreateCheckpoint(CreateCheckpointRequest)   returns (CreateCheckpointResponse);
   rpc ListCheckpoints(ListCheckpointsRequest)     returns (ListCheckpointsResponse);
   rpc DeleteCheckpoint(DeleteCheckpointRequest)   returns (DeleteCheckpointResponse);
@@ -215,6 +217,8 @@ service BoxdApi {
   rpc SetBotProtection(SetBotProtectionRequest) returns (SetBotProtectionResponse);
   rpc SetIdleIgnoreOutbound(SetIdleIgnoreOutboundRequest) returns (SetIdleIgnoreOutboundResponse);
   rpc SetSsh(SetSshRequest) returns (SetSshResponse);
+  rpc SetRdp(SetRdpRequest) returns (SetRdpResponse);
+  rpc ResetRdpPassword(ResetRdpPasswordRequest) returns (ResetRdpPasswordResponse);
   rpc SetDeleteAfter(SetDeleteAfterRequest) returns (SetDeleteAfterResponse);
 
   // Disks
@@ -303,6 +307,8 @@ service BoxdApi {
   // Set/Clear require org admin; Get is readable by any member.
   rpc SetOrgIdleIgnoreOutboundDefault(SetOrgIdleIgnoreOutboundDefaultRequest) returns (SetOrgIdleIgnoreOutboundDefaultResponse);
   rpc GetOrgIdleIgnoreOutboundDefault(GetOrgIdleIgnoreOutboundDefaultRequest) returns (GetOrgIdleIgnoreOutboundDefaultResponse);
+  rpc SetOrgRdpDefault(SetOrgRdpDefaultRequest) returns (SetOrgRdpDefaultResponse);
+  rpc GetOrgRdpDefault(GetOrgRdpDefaultRequest) returns (GetOrgRdpDefaultResponse);
 
   // The org's default bot protection mode: what a NEW machine in
   // the org starts with. An org without one follows the cluster's setting
@@ -443,6 +449,10 @@ message NetworkConfig {
   // so it reads as unset here.
   optional bool        ssh     = 1;
   repeated ProxyEntry  proxies = 2;
+  // RDP on a Windows machine's own port (ignored for any other machine). Unset = not requested:
+  // a new machine takes its org's default (SetOrgRdpDefault), else on; a restore keeps the
+  // snapshot's setting. SetRdp changes it afterwards.
+  optional bool        rdp     = 3;
 }
 
 message ProxyEntry {
@@ -529,6 +539,24 @@ message CreateVmRequest {
   // no `machine` back sets the timer with SetDeleteAfter itself.
   optional uint64 delete_after_secs = 16;
   optional string delete_after_cron = 17;
+  // The guest OS: "" or "linux" (every machine so far), or "windows"
+  // (plans/2026-11-10-windows-guests.md): a firmware boot of the cluster's
+  // Windows image, which the operator registers. Needs a license with
+  // Windows guests (else PERMISSION_DENIED with a sentence to show), and in
+  // this release no `image_ref`, `config.volumes`, `spec` or team default
+  // snapshot (INVALID_ARGUMENT/FAILED_PRECONDITION). A Windows machine has no
+  // takeoff: no exec, cp or SSH through the proxy
+  // yet; RDP and the guest's own sshd through port forwards. It hibernates, and
+  // its snapshot is its disk alone (running, hibernated or stopped; a running
+  // one's crash-consistent), which CreateVmFromSnapshot boots as a new Windows
+  // machine (the snapshot decides the OS: leave `os` out of a restore). Its
+  // fork (ForkVm) is a copy of its disk too, generalized (its own SID) and
+  // booted cold as a new Windows machine, `starting` until Windows is up; its
+  // checkpoint is its disk alone, restored in place by a cold boot. The
+  // response's `machine.os` says what it boots. A server from before this
+  // field ignores it and creates a Linux machine: a client checks
+  // `machine.os` in the answer.
+  string os = 18;
 }
 
 // What a machine spec boots from.
@@ -932,6 +960,17 @@ message GetVmResponse {
   bool ssh_disabled = 41;
   // The region the machine lives in; "" when boxd runs in one place.
   string region = 42;
+  // The guest OS: "linux" or "windows" (CreateVmRequest.os). A server from
+  // before this field sends "", which is a Linux machine.
+  string os = 43;
+  // A Windows machine's RDP (plans/2026-11-10-windows-guests.md 2d): its port on the proxy's
+  // address (`<name>.<zone>:<rdp_port>`; 0 for any other machine), RDP off (SetRdp; the proxy
+  // closes a connection to the port then), and whether its Administrator password was ever
+  // generated through boxd (ResetRdpPassword; or carried over from a snapshot's source). The
+  // password itself is never in a response but ResetRdpPassword's.
+  uint32 rdp_port         = 44;
+  bool   rdp_disabled     = 45;
+  bool   rdp_password_set = 46;
 }
 
 // Patch a machine's spec (GetVmResponse.spec).
@@ -2041,12 +2080,19 @@ message SnapshotInfo {
   string storage          = 16;
   // The region the snapshot lives in; "" when boxd runs in one place.
   string region = 17;
+  // The guest OS of the machine it was saved from: "linux" or "windows"
+  // (GetVmResponse.os), read off its current version (its newest while none
+  // is ready). A machine created from it has that OS. A server from before
+  // this field sends "", which is a Linux snapshot.
+  string os = 18;
 }
 
 // --- Checkpoints ---
 
 message CreateCheckpointRequest {
-  string vm   = 1;   // VM name or id (owned by the caller, must be running)
+  // VM name or id (owned by the caller, must be running; a Windows machine
+  // may also be suspended, hibernated or stopped: its checkpoint is its disk)
+  string vm   = 1;
   string name = 2;   // checkpoint name (unique per VM)
 }
 message CreateCheckpointResponse {
@@ -2236,6 +2282,31 @@ message SetSshRequest {
 }
 
 message SetSshResponse {}
+
+// RDP on or off for a Windows machine. Off: the proxy closes any connection to the machine's RDP
+// port before relaying a byte, on the public address and on the org's overlay network, and ends
+// the RDP connections already open to it. The port stays allocated. Not available from inside
+// the machine.
+message SetRdpRequest {
+  string vm_id   = 1; // name or id
+  bool   enabled = 2;
+}
+
+message SetRdpResponse {}
+
+// A new password for a Windows machine's built-in Administrator: 20 random characters meeting
+// Windows' complexity rules, set in the guest (its boxd agent, from the hash alone) before this
+// answers, and returned here once. boxd never stores it: a lost password means another reset.
+// The machine must be running (a suspended or hibernated one is woken; a stopped one refused).
+// Not available from inside the machine itself.
+message ResetRdpPasswordRequest {
+  string vm_id = 1; // name or id
+}
+
+message ResetRdpPasswordResponse {
+  string password = 1;
+  string user     = 2;  // "Administrator"
+}
 
 // --- API Keys ---
 
@@ -2698,6 +2769,31 @@ message SetOrgIdleIgnoreOutboundDefaultResponse {
   uint32 machines_changed  = 1;  // existing machines whose value changed
   uint32 machines_skipped  = 2;  // other members' private machines, left alone
   uint32 snapshots_changed = 3;  // snapshots whose value changed
+}
+
+// The org default for RDP on new Windows machines (D11 of the Windows plan), as the idle clock's.
+message SetOrgRdpDefaultRequest {
+  string org_id = 1;  // name or id; "" = your home org
+  // Absent clears the org default: new machines then have RDP on. Present is the default.
+  optional bool enabled = 2;
+  // By default `enabled` is also set on the org's existing machines and snapshots the caller may
+  // manage. True leaves existing machines as they are.
+  bool new_machines_only = 3;
+}
+
+message SetOrgRdpDefaultResponse {
+  uint32 machines_changed  = 1;
+  uint32 machines_skipped  = 2;
+  uint32 snapshots_changed = 3;
+}
+
+message GetOrgRdpDefaultRequest {
+  string org_id = 1;  // name or id; "" = your home org
+}
+
+message GetOrgRdpDefaultResponse {
+  bool set     = 1;  // an explicit org default is stored
+  bool enabled = 2;  // what a new Windows machine in the org starts with
 }
 
 message GetOrgIdleIgnoreOutboundDefaultRequest {

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import random
+import re
 import shlex
 import time
 import warnings
@@ -34,12 +36,14 @@ from ..models import (
     ExposedPort,
     SelfDeleteResult,
     Machine,
+    MachineOs,
     MachineUsageReport,
     PauseResult,
     CreatedProxy,
     ProxyEntry,
     Proxy,
     MachineSpecUpdate,
+    RdpPassword,
     RegionalList,
     ResizeResult,
     ResumeResult,
@@ -122,6 +126,15 @@ def _self_delete_result(status: int, text: str, body: Any) -> SelfDeleteResult:
 
 
 # A machine that reaches one of these is never going to become ready.
+# `reset_password` may wake the machine (up to 30 s) and then waits up to 70 s
+# for its agent to set the password. A client deadline before that would lose
+# a password the machine already took, so the call gets this much on top of
+# the client's timeout.
+_RESET_PASSWORD_EXTRA_SECS = 90.0
+# Sent once: the server's own "try again in a minute" reaches the caller
+# rather than another wait of the same length.
+_RESET_PASSWORD_OPTIONS = {"extra_timeout": _RESET_PASSWORD_EXTRA_SECS, "retry": False}
+
 _TERMINAL_STATES = {"failed", "destroyed", "stopped"}
 # UploadFileStream chunk size — comfortably under the 4 MiB gRPC message cap
 # that the non-streaming UploadFile is stuck with.
@@ -145,6 +158,7 @@ def _create_request(
     spec: MachineSpecBuilder | Mapping[str, Any] | None = None,
     delete_after: int | None = None,
     delete_after_cron: str | None = None,
+    guest_os: str | None = None,
 ) -> tuple[str, object]:
     """Pick the create RPC and build its request.
 
@@ -208,6 +222,8 @@ def _create_request(
                 # settable afterwards with `set_networks`. (`isolated` is NOT
                 # rejected — it is a one-way override the restore accepts.)
                 ("networks", networks or None),
+                # The snapshot decides the OS.
+                ("os", guest_os),
             )
             if value
         ]
@@ -242,6 +258,7 @@ def _create_request(
         isolated=isolated,
         config=config,
         labels=labels,
+        guest_os=guest_os,
     )
     if wire_spec is not None:
         request.spec.CopyFrom(wire_spec)
@@ -272,6 +289,86 @@ def _answered_machine(created, seconds: int | None, cron: str | None):
     return machine if applied else None
 
 
+def _ps_quote(arg: str) -> str:
+    """A single-quoted PowerShell string: nothing inside is expanded, and a
+    quote is written twice. PowerShell reads the typographic single quotes
+    (U+2018 to U+201B) as quotes too, so each of those is doubled as well."""
+    return "'" + re.sub("['‘-‛]", lambda q: q.group() * 2, arg) + "'"
+
+
+def _ps_bare(arg: str) -> bool:
+    """Whether PowerShell reads `arg` unquoted as exactly this text. Not a
+    token that starts like a number: PowerShell would read ``007``, ``1kb``
+    or ``-1`` as one."""
+    return bool(re.fullmatch(r"[A-Za-z0-9_\-./\\:=]+", arg)) and not re.match(
+        r"[-.]*[0-9]", arg
+    )
+
+
+def _ps_argv(argv: Sequence[str]) -> str:
+    """Argv as one PowerShell command line. A plain word stays bare, so
+    ``-Force`` is still a parameter; anything else is quoted. A quoted string
+    alone is a value, not a command, so a first element that needs quoting
+    goes after the call operator ``&``."""
+    if not argv:
+        return ""
+    first, *rest = argv
+    if _ps_bare(first) and re.match(r"[A-Za-z_.\\/]", first):
+        head = first
+    else:
+        head = f"& {_ps_quote(first)}"
+    return " ".join([head, *(a if _ps_bare(a) else _ps_quote(a) for a in rest)])
+
+
+def _ps_env_variable(name: str) -> str:
+    """``$env:NAME``, or ``${env:NAME}`` for a name PowerShell can't write bare."""
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        return f"$env:{name}"
+    if not name or "}" in name or "`" in name:
+        raise ValueError(
+            f"exec: the env variable name {name!r} can't be set on a Windows "
+            "machine: PowerShell can't write a variable name that is empty or "
+            "holds '}' or a backtick"
+        )
+    return "${env:" + name + "}"
+
+
+def _powershell_line(
+    command: str | Sequence[str],
+    *,
+    env: Mapping[str, str] | None,
+    cwd: str | None,
+) -> str:
+    """The exec command line for a Windows machine, which runs it as one
+    PowerShell command: `cwd` becomes a ``Set-Location`` that stops the
+    command when it fails (as ``cd ... &&`` does on Linux) and `env` becomes
+    ``$env:`` assignments, both ahead of the command."""
+    line = command if isinstance(command, str) else _ps_argv(command)
+    prefix = []
+    if cwd:
+        prefix.append(f"Set-Location -LiteralPath {_ps_quote(cwd)} -ErrorAction Stop")
+    for k, v in (env or {}).items():
+        prefix.append(f"{_ps_env_variable(k)}={_ps_quote(v)}")
+    return "; ".join([*prefix, line]) if prefix else line
+
+
+def _needs_os(
+    command: str | Sequence[str],
+    env: Mapping[str, str] | None,
+    cwd: str | None,
+) -> bool:
+    """Whether the exec command line depends on the machine's OS. A plain
+    string with no `cwd` or `env` goes as it is to Linux and Windows alike."""
+    return not isinstance(command, str) or bool(env) or bool(cwd)
+
+
+def _ready_probe(machine: Machine) -> str:
+    """The command `wait_until_ready` runs to see that exec gets through.
+    ``true`` is no PowerShell command; ``exit 0`` is, and a plain string goes
+    to a Windows machine as it is."""
+    return "exit 0" if machine.os == "windows" else "true"
+
+
 def _exec_init(
     machine_id: str,
     command: str | Sequence[str],
@@ -281,8 +378,21 @@ def _exec_init(
     cols: int,
     rows: int,
     cwd: str | None = None,
+    os: str = "linux",
 ) -> api_pb2.ExecChunk:
-    """The first chunk of an `Exec` stream: command, PTY flags, geometry."""
+    """The first chunk of an `Exec` stream: command, PTY flags, geometry.
+
+    A Windows machine (`os`) runs the command line as one PowerShell
+    command; any other as a POSIX shell line.
+    """
+    if os == "windows":
+        return req.exec_chunk(
+            machine_id=machine_id,
+            command=_powershell_line(command, env=env, cwd=cwd),
+            tty=tty,
+            cols=cols,
+            rows=rows,
+        )
     line = req.join_command(command)
     if env:
         # There is no env field on ExecChunk — the command runs through a
@@ -466,6 +576,41 @@ class Machines(Namespace):
         self.proxies = Proxies(transport)
         self.checkpoints = Checkpoints(transport)
         self.backups = Backups(transport)
+        self.rdp = Rdp(transport)
+        # Each machine's OS as this client has seen it, by (region, id or
+        # name): what `exec` builds its command line for. It never changes.
+        self._os_seen: dict[tuple[str | None, str], str] = {}
+
+    def _note_os(self, machine: Machine, region: str | None, *keys: str) -> None:
+        """Remember a machine's OS under its id and `keys` (the name it was
+        asked by)."""
+        for key in (machine.id, *keys):
+            if key:
+                self._os_seen[(region, key)] = machine.os
+
+    def _os_of(self, machine_id: str, region: str | None) -> str:
+        """The machine's OS: read once (`get`), then remembered."""
+        seen = self._os_seen.get((region, machine_id))
+        return seen if seen is not None else self.get(machine_id, region=region).os
+
+    def _init_chunk(
+        self,
+        machine_id: str,
+        command: str | Sequence[str],
+        *,
+        env: Mapping[str, str] | None,
+        cwd: str | None,
+        tty: bool,
+        cols: int,
+        rows: int,
+        region: str | None,
+    ) -> api_pb2.ExecChunk:
+        """The first chunk, for the machine's OS when the command line
+        depends on it."""
+        os = self._os_of(machine_id, region) if _needs_os(command, env, cwd) else "linux"
+        return _exec_init(
+            machine_id, command, env=env, tty=tty, cols=cols, rows=rows, cwd=cwd, os=os
+        )
 
     def create(
         self,
@@ -482,6 +627,7 @@ class Machines(Namespace):
         isolated: bool = False,
         labels: Mapping[str, str] | None = None,
         spec: MachineSpecBuilder | MachineSpec | None = None,
+        os: MachineOs | None = None,
         vcpu: int | None = None,
         memory: int | str | None = None,
         disk: int | str | None = None,
@@ -491,6 +637,7 @@ class Machines(Namespace):
         delete_after: int | None = None,
         delete_after_cron: str | None = None,
         ssh: bool | None = None,
+        rdp: bool | None = None,
         proxies: Sequence[ProxyEntry] | None = None,
         volumes: Sequence[VolumeMount] | None = None,
         region: str | None = None,
@@ -520,6 +667,18 @@ class Machines(Namespace):
         ``boxd connect`` and the console terminal don't use SSH and keep
         working. Left as None, a new machine has SSH on and a restore keeps
         the snapshot's setting. Change it later with :meth:`set_ssh`.
+
+        ``os="windows"`` creates a Windows machine (the cluster must offer
+        them). Its desktop is reached over RDP (:attr:`Machine.rdp`) with a
+        password :meth:`Rdp.reset_password` generates; ``exec`` runs
+        PowerShell there, and files and SSH work as on Linux. Left as None,
+        the machine is Linux. Not with ``from_snapshot``: the snapshot decides
+        the OS.
+
+        ``rdp=False`` creates a Windows machine with RDP off: nothing answers
+        on its RDP port. Left as None, it takes its org's default (else on),
+        and a restore keeps the snapshot's setting. Ignored for any other
+        machine. Change it later with :meth:`set_rdp`.
 
         ``labels`` are ``key=value`` metadata for grouping and finding
         machines (``{"env": "prod"}``); see :meth:`update_labels` for the
@@ -552,6 +711,7 @@ class Machines(Namespace):
             spec=spec,
             delete_after=delete_after,
             delete_after_cron=delete_after_cron,
+            guest_os=os,
             config_kwargs=dict(
                 vcpu=vcpu,
                 memory=memory,
@@ -560,6 +720,7 @@ class Machines(Namespace):
                 auto_destroy_timeout=auto_destroy_timeout,
                 idle_ignore_outbound=idle_ignore_outbound,
                 ssh=ssh,
+                rdp=rdp,
                 proxies=proxies,
                 volumes=volumes,
             ),
@@ -586,7 +747,9 @@ class Machines(Namespace):
         delete-after timer set and the machine read back here."""
         answered = _answered_machine(created, seconds, cron)
         if answered is not None:
-            return m.machine(answered, self._transport.console_origin_for(region))
+            machine = m.machine(answered, self._transport.console_origin_for(region))
+            self._note_os(machine, region, machine.name)
+            return machine
         self._apply_delete_after(created.vm_id, seconds, cron, region=region)
         return self._reread(created, region=region)
 
@@ -609,12 +772,14 @@ class Machines(Namespace):
         after `delete(id)` returns is a reliable way to confirm teardown
         completed.
         """
-        return m.machine(
+        machine = m.machine(
             self._transport.call(
                 "GetVm", api_pb2.GetVmRequest(vm_id=machine_id), region=region
             ),
             self._transport.console_origin_for(region),
         )
+        self._note_os(machine, region, machine_id)
+        return machine
 
     def usage(
         self,
@@ -919,11 +1084,16 @@ class Machines(Namespace):
         delete_after: int | None = None,
         delete_after_cron: str | None = None,
         ssh: bool | None = None,
+        rdp: bool | None = None,
         proxies: Sequence[ProxyEntry] | None = None,
         volumes: Sequence[VolumeMount] | None = None,
         region: str | None = None,
     ) -> Machine:
         """Clone a machine, live. Config left unset is inherited from the source.
+
+        A Windows machine's fork is a copy of its disk booted as a new machine
+        (its own identity, the source's Administrator password), in about a
+        minute; nothing in memory carries over.
 
         Call :meth:`wait_until_ready` on the source first — forking a machine
         that is not yet fully up falls back to a slower path that does not
@@ -933,8 +1103,8 @@ class Machines(Namespace):
         isolated, and passing ``True`` isolates a fork of a machine that
         isn't. There is no way to de-isolate.
 
-        ``idle_ignore_outbound`` and ``ssh`` left as None keep the source's
-        value; ``True`` or ``False`` overrides it either way.
+        ``idle_ignore_outbound``, ``ssh`` and ``rdp`` left as None keep the
+        source's value; ``True`` or ``False`` overrides it either way.
 
         The fork inherits the source's labels; ``labels`` are merged over
         them, key by key.
@@ -955,6 +1125,7 @@ class Machines(Namespace):
             auto_destroy_timeout=auto_destroy_timeout,
             idle_ignore_outbound=idle_ignore_outbound,
             ssh=ssh,
+            rdp=rdp,
             proxies=proxies,
             volumes=volumes,
         )
@@ -1186,6 +1357,22 @@ class Machines(Namespace):
             region=region,
         )
 
+    def set_rdp(
+        self, machine_id: str, enabled: bool, *, region: str | None = None
+    ) -> None:
+        """Turn RDP on or off for a Windows machine.
+
+        Off: the connection to its RDP port is closed before a byte is
+        relayed, on the public address or the org's network, and RDP
+        connections already open to it are closed. The port stays allocated,
+        so turning RDP back on keeps the address. Can't be called from inside
+        the machine itself."""
+        self._transport.call(
+            "SetRdp",
+            api_pb2.SetRdpRequest(vm_id=machine_id, enabled=enabled),
+            region=region,
+        )
+
     def exec(
         self,
         machine_id: str,
@@ -1209,6 +1396,11 @@ class Machines(Namespace):
         fails fast (the remote `cd` errors and the command never runs)
         instead of silently running in the default directory.
 
+        A Windows machine runs the command line as one PowerShell command: a
+        list is quoted for PowerShell, `cwd` becomes ``Set-Location`` and
+        `env` ``$env:`` assignments. A list, `env` or `cwd` needs the
+        machine's OS, read once with :meth:`get` and remembered by the client.
+
         `stdout`/`stderr` are UTF-8-decoded by default, which silently
         replaces any invalid byte sequence with U+FFFD — pass
         `encoding="buffer"` for byte-exact `bytes` output instead (e.g.
@@ -1223,8 +1415,15 @@ class Machines(Namespace):
         and it is run again up to twice (within `timeout`). Any other
         failure is raised as it is: the command may have run.
         """
-        init = _exec_init(
-            machine_id, command, env=env, tty=tty, cols=cols, rows=rows, cwd=cwd
+        init = self._init_chunk(
+            machine_id,
+            command,
+            env=env,
+            cwd=cwd,
+            tty=tty,
+            cols=cols,
+            rows=rows,
+            region=region,
         )
         deadline = None if timeout is None else time.monotonic() + timeout
         attempt = 0
@@ -1270,8 +1469,15 @@ class Machines(Namespace):
                 "stream_exec: close_stdin=True is incompatible with tty=True — "
                 "a PTY shell needs stdin open"
             )
-        init = _exec_init(
-            machine_id, command, env=env, tty=tty, cols=cols, rows=rows, cwd=cwd
+        init = self._init_chunk(
+            machine_id,
+            command,
+            env=env,
+            cwd=cwd,
+            tty=tty,
+            cols=cols,
+            rows=rows,
+            region=region,
         )
         return ExecStream(self._transport, init, close_stdin=close_stdin, region=region)
 
@@ -1298,7 +1504,8 @@ class Machines(Namespace):
         """Poll until the machine is running and `exec` round-trips.
 
         Not an RPC — `create` and `fork` return before the machine is usable,
-        and status alone can lag the reality by a second.
+        and status alone can lag the reality by a second. On a Windows
+        machine the `exec` goes through PowerShell.
         """
         deadline = time.monotonic() + timeout
         machine = self.get(machine_id, region=region)
@@ -1309,10 +1516,11 @@ class Machines(Namespace):
                 )
             time.sleep(poll_interval)
             machine = self.get(machine_id, region=region)
+        probe = _ready_probe(machine)
 
         while True:
             try:
-                self.exec(machine_id, "true", region=region)
+                self.exec(machine_id, probe, region=region)
                 return machine
             except BoxdError:
                 if time.monotonic() >= deadline:
@@ -1612,11 +1820,40 @@ class Checkpoints(Namespace):
 
     def restore(self, machine_id: str, name: str, *, region: str | None = None) -> None:
         """Warm-restore the machine from a checkpoint. It must be `available`.
-        Returns once the machine runs again from the checkpoint."""
+        Returns once the machine runs again from the checkpoint. A Windows
+        machine's checkpoint is its disk only, restored by a cold boot."""
         self._transport.call(
             "RestoreCheckpoint",
             api_pb2.RestoreCheckpointRequest(vm=machine_id, name=name),
             region=region,
+        )
+
+
+class Rdp(Namespace):
+    """`boxd.machines.rdp` — a Windows machine's RDP sign-in.
+
+    The connection details are on the machine (:attr:`Machine.rdp`), never
+    with a password. boxd does not store the password: ``reset_password``
+    generates one and this is the only time it is shown.
+    """
+
+    def reset_password(
+        self, machine_id: str, *, region: str | None = None
+    ) -> RdpPassword:
+        """Generate a new password for the Windows machine's Administrator,
+        set it in the machine and return it, once. Any password it had stops
+        working.
+
+        boxd keeps no copy: a lost password means another reset. The machine
+        must be running (one in standby or hibernated is woken; a stopped one
+        is refused). Can't be called from inside the machine itself."""
+        return m.rdp_password(
+            self._transport.call(
+                "ResetRdpPassword",
+                api_pb2.ResetRdpPasswordRequest(vm_id=machine_id),
+                region=region,
+                **_RESET_PASSWORD_OPTIONS,
+            )
         )
 
 
@@ -1726,6 +1963,43 @@ class AsyncMachines(Namespace):
         self.proxies = AsyncProxies(transport)
         self.checkpoints = AsyncCheckpoints(transport)
         self.backups = AsyncBackups(transport)
+        self.rdp = AsyncRdp(transport)
+        # See `Machines.__init__`.
+        self._os_seen: dict[tuple[str | None, str], str] = {}
+
+    def _note_os(self, machine: Machine, region: str | None, *keys: str) -> None:
+        """See :meth:`Machines._note_os`."""
+        for key in (machine.id, *keys):
+            if key:
+                self._os_seen[(region, key)] = machine.os
+
+    async def _os_of(self, machine_id: str, region: str | None) -> str:
+        """See :meth:`Machines._os_of`."""
+        seen = self._os_seen.get((region, machine_id))
+        if seen is not None:
+            return seen
+        return (await self.get(machine_id, region=region)).os
+
+    async def _init_chunk(
+        self,
+        machine_id: str,
+        command: str | Sequence[str],
+        *,
+        env: Mapping[str, str] | None,
+        cwd: str | None,
+        tty: bool,
+        cols: int,
+        rows: int,
+        region: str | None,
+    ) -> api_pb2.ExecChunk:
+        """See :meth:`Machines._init_chunk`."""
+        if _needs_os(command, env, cwd):
+            os = await self._os_of(machine_id, region)
+        else:
+            os = "linux"
+        return _exec_init(
+            machine_id, command, env=env, tty=tty, cols=cols, rows=rows, cwd=cwd, os=os
+        )
 
     async def create(
         self,
@@ -1742,6 +2016,7 @@ class AsyncMachines(Namespace):
         isolated: bool = False,
         labels: Mapping[str, str] | None = None,
         spec: MachineSpecBuilder | MachineSpec | None = None,
+        os: MachineOs | None = None,
         vcpu: int | None = None,
         memory: int | str | None = None,
         disk: int | str | None = None,
@@ -1751,6 +2026,7 @@ class AsyncMachines(Namespace):
         delete_after: int | None = None,
         delete_after_cron: str | None = None,
         ssh: bool | None = None,
+        rdp: bool | None = None,
         proxies: Sequence[ProxyEntry] | None = None,
         volumes: Sequence[VolumeMount] | None = None,
         region: str | None = None,
@@ -1760,8 +2036,8 @@ class AsyncMachines(Namespace):
         The result is the whole machine. It is still only scheduled — call
         :meth:`wait_until_ready` before using it.
 
-        ``idle_ignore_outbound``, ``ssh``, ``labels``, ``spec``: see
-        :meth:`Machines.create`.
+        ``idle_ignore_outbound``, ``ssh``, ``os``, ``rdp``, ``labels``,
+        ``spec``: see :meth:`Machines.create`.
         """
         method, request = _create_request(
             name=name,
@@ -1778,6 +2054,7 @@ class AsyncMachines(Namespace):
             spec=spec,
             delete_after=delete_after,
             delete_after_cron=delete_after_cron,
+            guest_os=os,
             config_kwargs=dict(
                 vcpu=vcpu,
                 memory=memory,
@@ -1786,6 +2063,7 @@ class AsyncMachines(Namespace):
                 auto_destroy_timeout=auto_destroy_timeout,
                 idle_ignore_outbound=idle_ignore_outbound,
                 ssh=ssh,
+                rdp=rdp,
                 proxies=proxies,
                 volumes=volumes,
             ),
@@ -1810,7 +2088,9 @@ class AsyncMachines(Namespace):
         """See :meth:`Machines._complete`."""
         answered = _answered_machine(created, seconds, cron)
         if answered is not None:
-            return m.machine(answered, self._transport.console_origin_for(region))
+            machine = m.machine(answered, self._transport.console_origin_for(region))
+            self._note_os(machine, region, machine.name)
+            return machine
         await self._apply_delete_after(created.vm_id, seconds, cron, region=region)
         return await self._reread(created, region=region)
 
@@ -1829,12 +2109,14 @@ class AsyncMachines(Namespace):
         after `delete(id)` returns is a reliable way to confirm teardown
         completed.
         """
-        return m.machine(
+        machine = m.machine(
             await self._transport.call(
                 "GetVm", api_pb2.GetVmRequest(vm_id=machine_id), region=region
             ),
             self._transport.console_origin_for(region),
         )
+        self._note_os(machine, region, machine_id)
+        return machine
 
     async def usage(
         self,
@@ -2104,18 +2386,23 @@ class AsyncMachines(Namespace):
         delete_after: int | None = None,
         delete_after_cron: str | None = None,
         ssh: bool | None = None,
+        rdp: bool | None = None,
         proxies: Sequence[ProxyEntry] | None = None,
         volumes: Sequence[VolumeMount] | None = None,
         region: str | None = None,
     ) -> Machine:
         """Clone a machine, live. Config left unset is inherited from the source.
 
+        A Windows machine's fork is a copy of its disk booted as a new machine
+        (its own identity, the source's Administrator password), in about a
+        minute; nothing in memory carries over.
+
         ``isolated`` is one-way: a fork of an isolated machine is always
         isolated, and passing ``True`` isolates a fork of a machine that
         isn't. There is no way to de-isolate.
 
-        ``idle_ignore_outbound`` and ``ssh`` left as None keep the source's
-        value; ``True`` or ``False`` overrides it either way.
+        ``idle_ignore_outbound``, ``ssh`` and ``rdp`` left as None keep the
+        source's value; ``True`` or ``False`` overrides it either way.
 
         The fork inherits the source's labels; ``labels`` are merged over
         them, key by key.
@@ -2136,6 +2423,7 @@ class AsyncMachines(Namespace):
             auto_destroy_timeout=auto_destroy_timeout,
             idle_ignore_outbound=idle_ignore_outbound,
             ssh=ssh,
+            rdp=rdp,
             proxies=proxies,
             volumes=volumes,
         )
@@ -2319,6 +2607,16 @@ class AsyncMachines(Namespace):
             region=region,
         )
 
+    async def set_rdp(
+        self, machine_id: str, enabled: bool, *, region: str | None = None
+    ) -> None:
+        """See :meth:`Machines.set_rdp`."""
+        await self._transport.call(
+            "SetRdp",
+            api_pb2.SetRdpRequest(vm_id=machine_id, enabled=enabled),
+            region=region,
+        )
+
     async def exec(
         self,
         machine_id: str,
@@ -2342,6 +2640,11 @@ class AsyncMachines(Namespace):
         fails fast (the remote `cd` errors and the command never runs)
         instead of silently running in the default directory.
 
+        A Windows machine runs the command line as one PowerShell command: a
+        list is quoted for PowerShell, `cwd` becomes ``Set-Location`` and
+        `env` ``$env:`` assignments. A list, `env` or `cwd` needs the
+        machine's OS, read once with :meth:`get` and remembered by the client.
+
         `stdout`/`stderr` are UTF-8-decoded by default, which silently
         replaces any invalid byte sequence with U+FFFD — pass
         `encoding="buffer"` for byte-exact `bytes` output instead (e.g.
@@ -2356,8 +2659,15 @@ class AsyncMachines(Namespace):
         and it is run again up to twice (within `timeout`). Any other
         failure is raised as it is: the command may have run.
         """
-        init = _exec_init(
-            machine_id, command, env=env, tty=tty, cols=cols, rows=rows, cwd=cwd
+        init = await self._init_chunk(
+            machine_id,
+            command,
+            env=env,
+            cwd=cwd,
+            tty=tty,
+            cols=cols,
+            rows=rows,
+            region=region,
         )
 
         async def once():
@@ -2414,9 +2724,24 @@ class AsyncMachines(Namespace):
                 "stream_exec: close_stdin=True is incompatible with tty=True — "
                 "a PTY shell needs stdin open"
             )
-        init = _exec_init(
-            machine_id, command, env=env, tty=tty, cols=cols, rows=rows, cwd=cwd
-        )
+        if _needs_os(command, env, cwd):
+            # Building the command line may need a `get`, which this
+            # synchronous call can't await: the stream does, when it starts.
+            init = functools.partial(
+                self._init_chunk,
+                machine_id,
+                command,
+                env=env,
+                cwd=cwd,
+                tty=tty,
+                cols=cols,
+                rows=rows,
+                region=region,
+            )
+        else:
+            init = _exec_init(
+                machine_id, command, env=env, tty=tty, cols=cols, rows=rows, cwd=cwd
+            )
         return AsyncExecStream(
             self._transport, init, close_stdin=close_stdin, region=region
         )
@@ -2455,10 +2780,11 @@ class AsyncMachines(Namespace):
                 )
             await asyncio.sleep(poll_interval)
             machine = await self.get(machine_id, region=region)
+        probe = _ready_probe(machine)
 
         while True:
             try:
-                await self.exec(machine_id, "true", region=region)
+                await self.exec(machine_id, probe, region=region)
                 return machine
             except BoxdError:
                 if time.monotonic() >= deadline:
@@ -2754,11 +3080,29 @@ class AsyncCheckpoints(Namespace):
         self, machine_id: str, name: str, *, region: str | None = None
     ) -> None:
         """Warm-restore the machine from a checkpoint. It must be `available`.
-        Returns once the machine runs again from the checkpoint."""
+        Returns once the machine runs again from the checkpoint. A Windows
+        machine's checkpoint is its disk only, restored by a cold boot."""
         await self._transport.call(
             "RestoreCheckpoint",
             api_pb2.RestoreCheckpointRequest(vm=machine_id, name=name),
             region=region,
+        )
+
+
+class AsyncRdp(Namespace):
+    """Async twin of :class:`Rdp`."""
+
+    async def reset_password(
+        self, machine_id: str, *, region: str | None = None
+    ) -> RdpPassword:
+        """See :meth:`Rdp.reset_password`."""
+        return m.rdp_password(
+            await self._transport.call(
+                "ResetRdpPassword",
+                api_pb2.ResetRdpPasswordRequest(vm_id=machine_id),
+                region=region,
+                **_RESET_PASSWORD_OPTIONS,
+            )
         )
 
 

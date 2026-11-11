@@ -278,6 +278,7 @@ boxd.machines.set_auto_suspend_timeout(id, 300) # seconds idle; 0 disables
 boxd.machines.set_auto_hibernate_timeout(id, 0)
 boxd.machines.set_idle_ignore_outbound(id, True) # only inbound connections keep it awake
 boxd.machines.set_ssh(id, False)                # nothing answers SSH; exec still works
+boxd.machines.set_rdp(id, False)                # Windows: nothing answers RDP
 boxd.machines.wait_until_ready(id)
 boxd.machines.wait_until_ready(id, timeout=180.0, poll_interval=1.0)   # seconds
 boxd.machines.suggest_name()
@@ -664,6 +665,9 @@ machine.access.ssh_port         # int | None — None until allocated
 machine.access.domain
 machine.access.url              # https://<name>.<domain>
 machine.ssh                     # bool — False: SSH is off, nothing answers on ssh_port
+machine.os                      # "linux" | "windows"
+machine.rdp                     # MachineRdp | None — a Windows machine's RDP; None otherwise:
+                                #   host, port, user, enabled, password_set (never a password)
 
 machine.idle.suspend_after      # seconds; 0 = that timer is disabled
 machine.idle.hibernate_after
@@ -715,6 +719,45 @@ machine = boxd.machines.create("from-golden", from_snapshot="golden")
 Restoring a snapshot replays the machine as it was captured, so `from_snapshot`
 goes with `name`, `org` and the sizing options. Combining it with `image`,
 `env`, `cmd`, `restart_policy` or `shared` raises `ValueError`.
+
+### Windows machines
+
+`os="windows"` creates a Windows machine, where the cluster offers them. Its
+desktop is reached over RDP; `exec`, files and SSH work too (see below).
+`machine.rdp` holds the connection details and never a password: boxd doesn't
+store one, so no password works until you generate one. `reset_password` sets
+a new one in the machine and returns it, once.
+
+```python
+machine = boxd.machines.create("win-1", os="windows")
+machine.rdp.host, machine.rdp.port      # point an RDP client here
+machine.rdp.user                        # "Administrator"
+machine.rdp.password_set                # False until a password was generated
+r = boxd.machines.rdp.reset_password("win-1")
+r.user, r.password                      # shown once; a lost one means another reset
+boxd.machines.set_rdp("win-1", False)   # nothing answers RDP; open sessions close
+boxd.machines.create("win-2", os="windows", rdp=False)   # born with RDP off
+```
+
+`reset_password` needs the machine running (one in standby or hibernated is
+woken) and, like `set_rdp`, can't be called from inside the machine itself.
+`rdp` left as None takes the org's default (below), else on. A restore keeps
+the snapshot's RDP setting and password; `os` can't go with `from_snapshot`,
+since the snapshot decides it.
+
+`exec` on a Windows machine runs the command line as one PowerShell command, as
+the Administrator, from its home `C:\Users\Administrator`. A list is quoted
+for PowerShell, `cwd` becomes `Set-Location` and `env` becomes `$env:`
+assignments (the SDK reads the machine's OS once to know). `files` and `fs`
+take Windows paths (`C:\...`, or relative to that home). A fork copies the disk
+and boots it as a new machine (its own identity, the source's Administrator
+password), in about a minute; a checkpoint is the disk alone, restored in place
+by a cold boot. The desktop view and computer use aren't available on Windows.
+
+```python
+boxd.machines.exec("win-1", "Get-ChildItem", cwd=r"C:\Users\Administrator\Desktop")
+boxd.machines.exec("win-1", ["git", "clone", "https://example.com/repo.git"])
+```
 
 ### Exec
 
@@ -1156,6 +1199,7 @@ snapshot.use_count      # machines restored from it so far
 snapshot.storage        # "local" | "archiving" | "archived" | "unarchiving"
 snapshot.archived       # True unless storage is "local": machines can't be created from it
 snapshot.region         # str | None — where it lives
+snapshot.os             # "linux" | "windows" — a machine created from it has this OS
 
 volume = boxd.disks.list()[0]
 volume.id, volume.name, volume.size_bytes
@@ -1257,6 +1301,16 @@ i = boxd.orgs.get_idle_ignore_outbound_default("acme")
 i.is_set, i.enabled                                # is_set False = no default, so enabled is
 i.platform_enabled                                 # the platform's setting, this one
 boxd.orgs.clear_idle_ignore_outbound_default("acme")  # existing machines keep theirs
+```
+
+RDP on new Windows machines has an org default the same way:
+
+```python
+r = boxd.orgs.set_rdp_default("acme", enabled=False)  # also existing machines, unless
+r.machines_changed, r.snapshots_changed            # new_machines_only=True
+d = boxd.orgs.get_rdp_default("acme")
+d.is_set, d.enabled                                # is_set False = no default: RDP on
+boxd.orgs.clear_rdp_default("acme")                # existing machines keep theirs
 ```
 
 An org has a machine limit: how many machines it may have at once. Any member

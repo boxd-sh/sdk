@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import queue
+from collections.abc import Awaitable, Callable
 from typing import NamedTuple
 
 from ._generated import api_pb2
@@ -145,12 +146,13 @@ class AsyncExecStream:
     def __init__(
         self,
         transport,
-        init: api_pb2.ExecChunk,
+        init: api_pb2.ExecChunk | Callable[[], Awaitable[api_pb2.ExecChunk]],
         *,
         close_stdin: bool = False,
         region: str | None = None,
     ):
         self._transport = transport
+        # A callable is awaited for the first chunk when the stream starts.
         self._init = init
         self._close_stdin = close_stdin
         self._region = region
@@ -161,6 +163,8 @@ class AsyncExecStream:
 
     async def _start(self) -> None:
         if self._call is None:
+            if callable(self._init):
+                self._init = await self._init()
             self._call = await self._transport.bidi(
                 "Exec",
                 self._requests(),

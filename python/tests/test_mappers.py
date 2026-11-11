@@ -240,6 +240,20 @@ def test_snapshot_says_where_it_is():
     assert old.archived is False
 
 
+def test_snapshot_says_its_guest_os():
+    windows = m.snapshot(
+        api_pb2.SnapshotInfo(snapshot_id="s1", name="win-base", version=1, status="ready", os="windows")
+    )
+    assert windows.os == "windows"
+    linux = m.snapshot(
+        api_pb2.SnapshotInfo(snapshot_id="s2", name="base", version=1, status="ready", os="linux")
+    )
+    assert linux.os == "linux"
+    # A server from before Windows machines sends "": a Linux snapshot.
+    old = m.snapshot(api_pb2.SnapshotInfo(snapshot_id="s3", name="base", version=1, status="ready"))
+    assert old.os == "linux"
+
+
 # --- secrets never carry a value ---
 
 
@@ -579,6 +593,71 @@ def test_ssh_is_on_unless_the_server_says_disabled():
         api_pb2.CreateVmResponse(vm_id="vm-1", name="alpha", status="pending")
     )
     assert created.ssh is True
+
+
+def test_os_is_linux_unless_the_server_says_windows():
+    assert m.machine(a_vm(os="windows")).os == "windows"
+    assert m.machine(a_vm(os="linux")).os == "linux"
+    # A server from before Windows machines sends "": every machine is Linux.
+    assert m.machine(a_vm()).os == "linux"
+
+
+def test_rdp_is_none_for_a_linux_machine():
+    # Even with RDP fields set, only a Windows machine has RDP.
+    assert m.machine(a_vm()).rdp is None
+    assert m.machine(a_vm(os="linux", rdp_port=61000)).rdp is None
+
+
+def test_rdp_connection_details_of_a_windows_machine():
+    rdp = m.machine(
+        a_vm(os="windows", rdp_port=61234, rdp_password_set=True)
+    ).rdp
+    assert rdp is not None
+    assert (rdp.host, rdp.port, rdp.user) == ("alpha.boxd.sh", 61234, "Administrator")
+    # Inverted on the wire, like SSH: a server that never sends it reads as on.
+    assert rdp.enabled is True
+    assert rdp.password_set is True
+    # Connection details never carry a password.
+    assert "password" not in type(rdp).model_fields
+
+    off = m.machine(a_vm(os="windows", rdp_port=61234, rdp_disabled=True)).rdp
+    assert off.enabled is False
+    assert off.password_set is False
+
+
+def test_rdp_port_zero_means_not_allocated():
+    assert m.machine(a_vm(os="windows", rdp_port=0)).rdp.port is None
+    # No domain yet: no host to give.
+    assert m.machine(a_vm(os="windows", access_domain="")).rdp.host == ""
+
+
+def test_os_and_rdp_are_unknown_in_the_create_fallback():
+    # Not reported by the create response; create()/fork() re-read the machine.
+    created = m.machine_from_created(
+        api_pb2.CreateVmResponse(vm_id="vm-1", name="alpha", status="pending")
+    )
+    assert created.os == "linux"
+    assert created.rdp is None
+
+
+def test_rdp_password_and_org_rdp_default():
+    reset = m.rdp_password(
+        api_pb2.ResetRdpPasswordResponse(password="pw", user="Administrator")
+    )
+    assert (reset.password, reset.user) == ("pw", "Administrator")
+    # `set` on the wire is `is_set` here.
+    default = m.org_rdp_default(api_pb2.GetOrgRdpDefaultResponse(set=True, enabled=False))
+    assert (default.is_set, default.enabled) == (True, False)
+    result = m.org_rdp_default_result(
+        api_pb2.SetOrgRdpDefaultResponse(
+            machines_changed=3, machines_skipped=1, snapshots_changed=2
+        )
+    )
+    assert (
+        result.machines_changed,
+        result.snapshots_changed,
+        result.machines_skipped,
+    ) == (3, 2, 1)
 
 
 def test_secret_domains_survive_and_default_empty():

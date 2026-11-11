@@ -63,6 +63,8 @@ describe("generated stubs are current", () => {
       "setAutoHibernateTimeout",
       "setIdleIgnoreOutbound",
       "setSsh",
+      "setRdp",
+      "resetRdpPassword",
       "setDeleteAfter",
       "suggestVmName",
       "exec",
@@ -104,6 +106,8 @@ describe("generated stubs are current", () => {
       "clearOrgDomain",
       "setOrgIdleIgnoreOutboundDefault",
       "getOrgIdleIgnoreOutboundDefault",
+      "setOrgRdpDefault",
+      "getOrgRdpDefault",
       "createNetwork",
       "listNetworks",
       "listOrgs",
@@ -148,6 +152,20 @@ describe("generated stubs are current", () => {
         NetworkConfig.decode(NetworkConfig.encode(NetworkConfig.fromPartial({ ssh: v })).finish())
           .ssh;
       expect(NetworkConfig.fromPartial({}).ssh).toBeUndefined();
+      expect(roundTrip(undefined)).toBeUndefined();
+      expect(roundTrip(false)).toBe(false);
+      expect(roundTrip(true)).toBe(true);
+    }
+  });
+
+  it("NetworkConfig.rdp is optional in both flavors", () => {
+    // Unset means "not requested": a new Windows machine takes its org's
+    // default, so an explicit false must survive the wire as false.
+    for (const NetworkConfig of [gen.NetworkConfig, defs.NetworkConfig]) {
+      const roundTrip = (v: boolean | undefined) =>
+        NetworkConfig.decode(NetworkConfig.encode(NetworkConfig.fromPartial({ rdp: v })).finish())
+          .rdp;
+      expect(NetworkConfig.fromPartial({}).rdp).toBeUndefined();
       expect(roundTrip(undefined)).toBeUndefined();
       expect(roundTrip(false)).toBe(false);
       expect(roundTrip(true)).toBe(true);

@@ -129,6 +129,7 @@ export { MachinePorts } from "./ports.js";
 export { MachineProxies } from "./proxies.js";
 export { MachineCheckpoints } from "./checkpoints.js";
 export { MachineBackups } from "./backups.js";
+export { MachineRdpNamespace } from "./rdp.js";
 export { Snapshots } from "./snapshots.js";
 export { Disks } from "./disks.js";
 export { EnvVars, Secrets } from "./vars.js";
@@ -140,6 +141,7 @@ export type {
   OrgIdleIgnoreOutboundDefaultParams,
   OrgMachineDefaultsParams,
   OrgMachineLimitRequestParams,
+  OrgRdpDefaultParams,
   OrgUsageParams,
 } from "./orgs.js";
 export type { TimeBound } from "./utils.js";
@@ -190,10 +192,12 @@ export type {
   MachineAccess,
   MachineConfig,
   MachineIdle,
+  MachineOs,
   MachinePackage,
   MachineSpecApply,
   MachineSpecChange,
   MachineSpecUpdate,
+  MachineRdp,
   MachineRequirement,
   MachineResources,
   MachineSource,
@@ -213,12 +217,15 @@ export type {
   OrgMachineLimit,
   OrgMember,
   OrgMembers,
+  OrgRdpDefault,
+  OrgRdpDefaultResult,
   OrgRef,
   OrgRole,
   OrgUsage,
   PortProtocol,
   Proxy,
   ProxyPortMode,
+  RdpPassword,
   Region,
   RegionalList,
   RegionCount,

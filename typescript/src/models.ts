@@ -35,6 +35,7 @@ import type {
   GetOrgMachineDefaultsResponse,
   GetOrgMachineLimitResponse,
   GetOrgMembersResponse,
+  GetOrgRdpDefaultResponse,
   GetOrgUsageResponse,
   GetVmResponse,
   GetVmUsageResponse,
@@ -48,10 +49,12 @@ import type {
   ProxyInfo,
   Region as WireRegion,
   RequestOrgMachineLimitResponse,
+  ResetRdpPasswordResponse,
   ResizeVmResponse,
   UpdateMachineSpecResponse,
   SetOrgIdleIgnoreOutboundDefaultResponse,
   SetOrgBotProtectionDefaultResponse,
+  SetOrgRdpDefaultResponse,
   SnapshotInfo,
   TeamInfo,
   TeamMemberInfo,
@@ -193,6 +196,51 @@ export function toBotProtectionMode(mode: string | undefined, enabled: boolean):
   return enabled ? "sleep_only" : "off";
 }
 
+/**
+ * A machine's guest OS. See {@link Machine.os}. A value a newer server
+ * introduces is passed through as is.
+ */
+export type MachineOs = "linux" | "windows";
+
+/**
+ * How to reach a Windows machine over RDP. Never holds a password: boxd does
+ * not store one. `machines.rdp.resetPassword` generates one and returns it
+ * once.
+ */
+export interface MachineRdp {
+  /**
+   * `<name>.<domain>`: the address to point an RDP client at, with `port`.
+   * Empty when the domain is not known yet.
+   */
+  host: string;
+  /** The machine's RDP port on that address. `null` = not allocated yet. */
+  port: number | null;
+  /** The account to sign in as: `"Administrator"`. */
+  user: string;
+  /**
+   * Whether RDP answers on the port. Off: the connection is closed before a
+   * byte is relayed. See {@link Machines.setRdp}.
+   */
+  enabled: boolean;
+  /**
+   * Whether a password was ever generated through boxd (or came with the
+   * snapshot the machine was restored from). Until then no password works:
+   * generate one with `machines.rdp.resetPassword`.
+   */
+  passwordSet: boolean;
+}
+
+/**
+ * What `machines.rdp.resetPassword` resolves to. The only place a Windows
+ * machine's password is ever shown: boxd keeps no copy, so a lost password
+ * means another reset.
+ */
+export interface RdpPassword {
+  password: string;
+  /** The account it is for: `"Administrator"`. */
+  user: string;
+}
+
 /** Where a machine came from. A standalone machine has no source at all. */
 export interface MachineSource {
   kind: MachineSourceKind;
@@ -274,6 +322,17 @@ export interface Machine {
    * See {@link Machines.setSsh}.
    */
   ssh: boolean;
+  /**
+   * The guest OS: `"linux"` or `"windows"` (`create({ os })`). A server from
+   * before Windows machines reports every machine as Linux.
+   */
+  os: MachineOs;
+  /**
+   * How to reach a Windows machine over RDP: host, port, user, whether RDP is
+   * on and whether a password was set. `null` for any other machine. Never a
+   * password; see {@link MachineRdp}.
+   */
+  rdp: MachineRdp | null;
   /**
    * When the platform will permanently delete this machine, whatever state it
    * is in. `null` = no delete-after timer. See {@link Machines.setDeleteAfter}.
@@ -560,6 +619,41 @@ function machineUrl(name: string, domain: string): string {
   return domain === "" ? "" : `https://${name}.${domain}`;
 }
 
+/**
+ * The built-in account a Windows machine's RDP signs in as. `GetVm` does not
+ * carry it; `ResetRdpPassword` names it too.
+ */
+const RDP_USER = "Administrator";
+
+/**
+ * @internal
+ * A Windows machine's RDP connection details; `null` for any other machine.
+ * No password: the server never sends one here.
+ */
+export function toMachineRdp(v: {
+  name: string;
+  accessDomain: string;
+  os?: string;
+  rdpPort?: number;
+  rdpDisabled?: boolean;
+  rdpPasswordSet?: boolean;
+}): MachineRdp | null {
+  if (v.os !== "windows") return null;
+  return {
+    host: v.accessDomain === "" ? "" : `${v.name}.${v.accessDomain}`,
+    // 0 = not allocated, never a real port.
+    port: v.rdpPort ? v.rdpPort : null,
+    user: RDP_USER,
+    // Inverted on the wire, like `sshDisabled`.
+    enabled: !(v.rdpDisabled ?? false),
+    passwordSet: v.rdpPasswordSet ?? false,
+  };
+}
+
+export function toRdpPassword(r: ResetRdpPasswordResponse): RdpPassword {
+  return { password: r.password, user: r.user || RDP_USER };
+}
+
 /** An unset `VmSource` is how the wire says "standalone" — not a kind. */
 export function toMachineSource(s: VmSource | undefined): MachineSource | null {
   if (!s) return null;
@@ -616,6 +710,10 @@ export function toMachine(v: GetVmResponse, consoleOrigin = "", region?: string)
     idleIgnoreOutbound: v.idleIgnoreOutbound ?? false,
     // Inverted on the wire, so a server that predates it reads as on.
     ssh: !(v.sshDisabled ?? false),
+    // A server from before Windows machines sends "": every machine it has
+    // is Linux.
+    os: (v.os || "linux") as MachineOs,
+    rdp: toMachineRdp(v),
     deleteAt: optionalMillisToDate(v.deleteAtMs ?? 0),
     deleteAfterCron: v.deleteAfterCron || null,
     source: toMachineSource(v.sourceInfo),
@@ -722,6 +820,10 @@ export function toMachineFromCreate(v: {
     // Not reported either. `true` here means "not known": the fork's source
     // or the snapshot may have had SSH off.
     ssh: true,
+    // Not reported either: a Windows machine shows as one only once it is
+    // read back.
+    os: "linux",
+    rdp: null,
     deleteAt: null,
     deleteAfterCron: null,
     source: null,
@@ -1102,6 +1204,12 @@ export interface Snapshot {
   archived: boolean;
   /** The region the snapshot lives in. `null` when boxd runs in one place. */
   region: string | null;
+  /**
+   * The guest OS of the machine it was saved from: `"linux"` or `"windows"`.
+   * A machine created from it has that OS. A server from before Windows
+   * machines reports every snapshot as Linux.
+   */
+  os: MachineOs;
 }
 
 export function toSnapshot(s: SnapshotInfo, region?: string): Snapshot {
@@ -1120,6 +1228,9 @@ export function toSnapshot(s: SnapshotInfo, region?: string): Snapshot {
     storage: s.storage || "local",
     archived: s.archived ?? false,
     region: s.region || region || null,
+    // A server from before Windows machines sends "": every snapshot it has
+    // is Linux.
+    os: (s.os || "linux") as MachineOs,
   };
 }
 
@@ -1525,6 +1636,43 @@ export interface OrgIdleIgnoreOutboundDefaultResult {
 export function toOrgIdleIgnoreOutboundDefaultResult(
   r: SetOrgIdleIgnoreOutboundDefaultResponse,
 ): OrgIdleIgnoreOutboundDefaultResult {
+  return {
+    machinesChanged: r.machinesChanged,
+    snapshotsChanged: r.snapshotsChanged,
+    machinesSkipped: r.machinesSkipped,
+  };
+}
+
+/** Whether new Windows machines in an org start with RDP on. */
+export interface OrgRdpDefault {
+  /**
+   * `true` when the org stores an explicit default. `false` means new
+   * machines have RDP on, which is what `enabled` then holds.
+   */
+  isSet: boolean;
+  /** Effective default: what a create that does not say gets. */
+  enabled: boolean;
+}
+
+export function toOrgRdpDefault(d: GetOrgRdpDefaultResponse): OrgRdpDefault {
+  // `set` on the wire; `isSet` here, like `OrgMachineDefaults`.
+  return { isSet: d.set, enabled: d.enabled };
+}
+
+/**
+ * What `orgs.setRdpDefault` did to the org's existing machines. All counts
+ * are 0 with `newMachinesOnly`.
+ */
+export interface OrgRdpDefaultResult {
+  /** Existing machines whose setting was changed. */
+  machinesChanged: number;
+  /** Snapshots whose setting was changed (a restore takes its snapshot's). */
+  snapshotsChanged: number;
+  /** Other members' private machines, left as they were. */
+  machinesSkipped: number;
+}
+
+export function toOrgRdpDefaultResult(r: SetOrgRdpDefaultResponse): OrgRdpDefaultResult {
   return {
     machinesChanged: r.machinesChanged,
     snapshotsChanged: r.snapshotsChanged,
@@ -2064,6 +2212,13 @@ export interface MachineConfig {
    * Change it later with `machines.setSsh`.
    */
   ssh?: boolean;
+  /**
+   * `false`: RDP off for a Windows machine. Nothing answers on its RDP port.
+   * Unset = not requested: a new machine takes its org's default (else on),
+   * and a restore keeps the snapshot's setting. Ignored for any other
+   * machine. Change it later with `machines.setRdp`.
+   */
+  rdp?: boolean;
   proxies?: { name: string; port?: number }[];
   volumes?: { diskId: string; mountPath: string; readOnly?: boolean }[];
 }

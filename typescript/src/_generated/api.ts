@@ -137,6 +137,12 @@ export interface NetworkConfig {
    */
   ssh?: boolean | undefined;
   proxies: ProxyEntry[];
+  /**
+   * RDP on a Windows machine's own port (ignored for any other machine). Unset = not requested:
+   * a new machine takes its org's default (SetOrgRdpDefault), else on; a restore keeps the
+   * snapshot's setting. SetRdp changes it afterwards.
+   */
+  rdp?: boolean | undefined;
 }
 
 export interface ProxyEntry {
@@ -242,7 +248,29 @@ export interface CreateVmRequest {
    * no `machine` back sets the timer with SetDeleteAfter itself.
    */
   deleteAfterSecs?: number | undefined;
-  deleteAfterCron?: string | undefined;
+  deleteAfterCron?:
+    | string
+    | undefined;
+  /**
+   * The guest OS: "" or "linux" (every machine so far), or "windows"
+   * (plans/2026-11-10-windows-guests.md): a firmware boot of the cluster's
+   * Windows image, which the operator registers. Needs a license with
+   * Windows guests (else PERMISSION_DENIED with a sentence to show), and in
+   * this release no `image_ref`, `config.volumes`, `spec` or team default
+   * snapshot (INVALID_ARGUMENT/FAILED_PRECONDITION). A Windows machine has no
+   * takeoff: no exec, cp or SSH through the proxy
+   * yet; RDP and the guest's own sshd through port forwards. It hibernates, and
+   * its snapshot is its disk alone (running, hibernated or stopped; a running
+   * one's crash-consistent), which CreateVmFromSnapshot boots as a new Windows
+   * machine (the snapshot decides the OS: leave `os` out of a restore). Its
+   * fork (ForkVm) is a copy of its disk too, generalized (its own SID) and
+   * booted cold as a new Windows machine, `starting` until Windows is up; its
+   * checkpoint is its disk alone, restored in place by a cold boot. The
+   * response's `machine.os` says what it boots. A server from before this
+   * field ignores it and creates a Linux machine: a client checks
+   * `machine.os` in the answer.
+   */
+  os: string;
 }
 
 export interface CreateVmRequest_LabelsEntry {
@@ -874,6 +902,21 @@ export interface GetVmResponse {
   sshDisabled: boolean;
   /** The region the machine lives in; "" when boxd runs in one place. */
   region: string;
+  /**
+   * The guest OS: "linux" or "windows" (CreateVmRequest.os). A server from
+   * before this field sends "", which is a Linux machine.
+   */
+  os: string;
+  /**
+   * A Windows machine's RDP (plans/2026-11-10-windows-guests.md 2d): its port on the proxy's
+   * address (`<name>.<zone>:<rdp_port>`; 0 for any other machine), RDP off (SetRdp; the proxy
+   * closes a connection to the port then), and whether its Administrator password was ever
+   * generated through boxd (ResetRdpPassword; or carried over from a snapshot's source). The
+   * password itself is never in a response but ResetRdpPassword's.
+   */
+  rdpPort: number;
+  rdpDisabled: boolean;
+  rdpPasswordSet: boolean;
 }
 
 export interface GetVmResponse_LabelsEntry {
@@ -2277,10 +2320,20 @@ export interface SnapshotInfo {
   storage: string;
   /** The region the snapshot lives in; "" when boxd runs in one place. */
   region: string;
+  /**
+   * The guest OS of the machine it was saved from: "linux" or "windows"
+   * (GetVmResponse.os), read off its current version (its newest while none
+   * is ready). A machine created from it has that OS. A server from before
+   * this field sends "", which is a Linux snapshot.
+   */
+  os: string;
 }
 
 export interface CreateCheckpointRequest {
-  /** VM name or id (owned by the caller, must be running) */
+  /**
+   * VM name or id (owned by the caller, must be running; a Windows machine
+   * may also be suspended, hibernated or stopped: its checkpoint is its disk)
+   */
   vm: string;
   /** checkpoint name (unique per VM) */
   name: string;
@@ -2505,6 +2558,39 @@ export interface SetSshRequest {
 }
 
 export interface SetSshResponse {
+}
+
+/**
+ * RDP on or off for a Windows machine. Off: the proxy closes any connection to the machine's RDP
+ * port before relaying a byte, on the public address and on the org's overlay network, and ends
+ * the RDP connections already open to it. The port stays allocated. Not available from inside
+ * the machine.
+ */
+export interface SetRdpRequest {
+  /** name or id */
+  vmId: string;
+  enabled: boolean;
+}
+
+export interface SetRdpResponse {
+}
+
+/**
+ * A new password for a Windows machine's built-in Administrator: 20 random characters meeting
+ * Windows' complexity rules, set in the guest (its boxd agent, from the hash alone) before this
+ * answers, and returned here once. boxd never stores it: a lost password means another reset.
+ * The machine must be running (a suspended or hibernated one is woken; a stopped one refused).
+ * Not available from inside the machine itself.
+ */
+export interface ResetRdpPasswordRequest {
+  /** name or id */
+  vmId: string;
+}
+
+export interface ResetRdpPasswordResponse {
+  password: string;
+  /** "Administrator" */
+  user: string;
 }
 
 export interface CreateApiKeyRequest {
@@ -3105,6 +3191,39 @@ export interface SetOrgIdleIgnoreOutboundDefaultResponse {
   machinesSkipped: number;
   /** snapshots whose value changed */
   snapshotsChanged: number;
+}
+
+/** The org default for RDP on new Windows machines (D11 of the Windows plan), as the idle clock's. */
+export interface SetOrgRdpDefaultRequest {
+  /** name or id; "" = your home org */
+  orgId: string;
+  /** Absent clears the org default: new machines then have RDP on. Present is the default. */
+  enabled?:
+    | boolean
+    | undefined;
+  /**
+   * By default `enabled` is also set on the org's existing machines and snapshots the caller may
+   * manage. True leaves existing machines as they are.
+   */
+  newMachinesOnly: boolean;
+}
+
+export interface SetOrgRdpDefaultResponse {
+  machinesChanged: number;
+  machinesSkipped: number;
+  snapshotsChanged: number;
+}
+
+export interface GetOrgRdpDefaultRequest {
+  /** name or id; "" = your home org */
+  orgId: string;
+}
+
+export interface GetOrgRdpDefaultResponse {
+  /** an explicit org default is stored */
+  set: boolean;
+  /** what a new Windows machine in the org starts with */
+  enabled: boolean;
 }
 
 export interface GetOrgIdleIgnoreOutboundDefaultRequest {
@@ -3766,7 +3885,7 @@ export const SrfConfig: MessageFns<SrfConfig> = {
 };
 
 function createBaseNetworkConfig(): NetworkConfig {
-  return { ssh: undefined, proxies: [] };
+  return { ssh: undefined, proxies: [], rdp: undefined };
 }
 
 export const NetworkConfig: MessageFns<NetworkConfig> = {
@@ -3776,6 +3895,9 @@ export const NetworkConfig: MessageFns<NetworkConfig> = {
     }
     for (const v of message.proxies) {
       ProxyEntry.encode(v!, writer.uint32(18).fork()).join();
+    }
+    if (message.rdp !== undefined) {
+      writer.uint32(24).bool(message.rdp);
     }
     return writer;
   },
@@ -3803,6 +3925,14 @@ export const NetworkConfig: MessageFns<NetworkConfig> = {
           message.proxies.push(ProxyEntry.decode(reader, reader.uint32()));
           continue;
         }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.rdp = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -3816,6 +3946,7 @@ export const NetworkConfig: MessageFns<NetworkConfig> = {
     return {
       ssh: isSet(object.ssh) ? globalThis.Boolean(object.ssh) : undefined,
       proxies: globalThis.Array.isArray(object?.proxies) ? object.proxies.map((e: any) => ProxyEntry.fromJSON(e)) : [],
+      rdp: isSet(object.rdp) ? globalThis.Boolean(object.rdp) : undefined,
     };
   },
 
@@ -3827,6 +3958,9 @@ export const NetworkConfig: MessageFns<NetworkConfig> = {
     if (message.proxies?.length) {
       obj.proxies = message.proxies.map((e) => ProxyEntry.toJSON(e));
     }
+    if (message.rdp !== undefined) {
+      obj.rdp = message.rdp;
+    }
     return obj;
   },
 
@@ -3837,6 +3971,7 @@ export const NetworkConfig: MessageFns<NetworkConfig> = {
     const message = createBaseNetworkConfig();
     message.ssh = object.ssh ?? undefined;
     message.proxies = object.proxies?.map((e) => ProxyEntry.fromPartial(e)) || [];
+    message.rdp = object.rdp ?? undefined;
     return message;
   },
 };
@@ -4038,6 +4173,7 @@ function createBaseCreateVmRequest(): CreateVmRequest {
     spec: undefined,
     deleteAfterSecs: undefined,
     deleteAfterCron: undefined,
+    os: "",
   };
 }
 
@@ -4087,6 +4223,9 @@ export const CreateVmRequest: MessageFns<CreateVmRequest> = {
     }
     if (message.deleteAfterCron !== undefined) {
       writer.uint32(138).string(message.deleteAfterCron);
+    }
+    if (message.os !== "") {
+      writer.uint32(146).string(message.os);
     }
     return writer;
   },
@@ -4221,6 +4360,14 @@ export const CreateVmRequest: MessageFns<CreateVmRequest> = {
           message.deleteAfterCron = reader.string();
           continue;
         }
+        case 18: {
+          if (tag !== 146) {
+            break;
+          }
+
+          message.os = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -4271,6 +4418,7 @@ export const CreateVmRequest: MessageFns<CreateVmRequest> = {
         : isSet(object.delete_after_cron)
         ? globalThis.String(object.delete_after_cron)
         : undefined,
+      os: isSet(object.os) ? globalThis.String(object.os) : "",
     };
   },
 
@@ -4327,6 +4475,9 @@ export const CreateVmRequest: MessageFns<CreateVmRequest> = {
     if (message.deleteAfterCron !== undefined) {
       obj.deleteAfterCron = message.deleteAfterCron;
     }
+    if (message.os !== "") {
+      obj.os = message.os;
+    }
     return obj;
   },
 
@@ -4362,6 +4513,7 @@ export const CreateVmRequest: MessageFns<CreateVmRequest> = {
       : undefined;
     message.deleteAfterSecs = object.deleteAfterSecs ?? undefined;
     message.deleteAfterCron = object.deleteAfterCron ?? undefined;
+    message.os = object.os ?? "";
     return message;
   },
 };
@@ -8528,6 +8680,10 @@ function createBaseGetVmResponse(): GetVmResponse {
     packages: [],
     sshDisabled: false,
     region: "",
+    os: "",
+    rdpPort: 0,
+    rdpDisabled: false,
+    rdpPasswordSet: false,
   };
 }
 
@@ -8658,6 +8814,18 @@ export const GetVmResponse: MessageFns<GetVmResponse> = {
     }
     if (message.region !== "") {
       writer.uint32(338).string(message.region);
+    }
+    if (message.os !== "") {
+      writer.uint32(346).string(message.os);
+    }
+    if (message.rdpPort !== 0) {
+      writer.uint32(352).uint32(message.rdpPort);
+    }
+    if (message.rdpDisabled !== false) {
+      writer.uint32(360).bool(message.rdpDisabled);
+    }
+    if (message.rdpPasswordSet !== false) {
+      writer.uint32(368).bool(message.rdpPasswordSet);
     }
     return writer;
   },
@@ -9008,6 +9176,38 @@ export const GetVmResponse: MessageFns<GetVmResponse> = {
           message.region = reader.string();
           continue;
         }
+        case 43: {
+          if (tag !== 346) {
+            break;
+          }
+
+          message.os = reader.string();
+          continue;
+        }
+        case 44: {
+          if (tag !== 352) {
+            break;
+          }
+
+          message.rdpPort = reader.uint32();
+          continue;
+        }
+        case 45: {
+          if (tag !== 360) {
+            break;
+          }
+
+          message.rdpDisabled = reader.bool();
+          continue;
+        }
+        case 46: {
+          if (tag !== 368) {
+            break;
+          }
+
+          message.rdpPasswordSet = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -9195,6 +9395,22 @@ export const GetVmResponse: MessageFns<GetVmResponse> = {
         ? globalThis.Boolean(object.ssh_disabled)
         : false,
       region: isSet(object.region) ? globalThis.String(object.region) : "",
+      os: isSet(object.os) ? globalThis.String(object.os) : "",
+      rdpPort: isSet(object.rdpPort)
+        ? globalThis.Number(object.rdpPort)
+        : isSet(object.rdp_port)
+        ? globalThis.Number(object.rdp_port)
+        : 0,
+      rdpDisabled: isSet(object.rdpDisabled)
+        ? globalThis.Boolean(object.rdpDisabled)
+        : isSet(object.rdp_disabled)
+        ? globalThis.Boolean(object.rdp_disabled)
+        : false,
+      rdpPasswordSet: isSet(object.rdpPasswordSet)
+        ? globalThis.Boolean(object.rdpPasswordSet)
+        : isSet(object.rdp_password_set)
+        ? globalThis.Boolean(object.rdp_password_set)
+        : false,
     };
   },
 
@@ -9332,6 +9548,18 @@ export const GetVmResponse: MessageFns<GetVmResponse> = {
     if (message.region !== "") {
       obj.region = message.region;
     }
+    if (message.os !== "") {
+      obj.os = message.os;
+    }
+    if (message.rdpPort !== 0) {
+      obj.rdpPort = Math.round(message.rdpPort);
+    }
+    if (message.rdpDisabled !== false) {
+      obj.rdpDisabled = message.rdpDisabled;
+    }
+    if (message.rdpPasswordSet !== false) {
+      obj.rdpPasswordSet = message.rdpPasswordSet;
+    }
     return obj;
   },
 
@@ -9396,6 +9624,10 @@ export const GetVmResponse: MessageFns<GetVmResponse> = {
     message.packages = object.packages?.map((e) => MachinePackage.fromPartial(e)) || [];
     message.sshDisabled = object.sshDisabled ?? false;
     message.region = object.region ?? "";
+    message.os = object.os ?? "";
+    message.rdpPort = object.rdpPort ?? 0;
+    message.rdpDisabled = object.rdpDisabled ?? false;
+    message.rdpPasswordSet = object.rdpPasswordSet ?? false;
     return message;
   },
 };
@@ -21235,6 +21467,7 @@ function createBaseSnapshotInfo(): SnapshotInfo {
     archived: false,
     storage: "",
     region: "",
+    os: "",
   };
 }
 
@@ -21284,6 +21517,9 @@ export const SnapshotInfo: MessageFns<SnapshotInfo> = {
     }
     if (message.region !== "") {
       writer.uint32(138).string(message.region);
+    }
+    if (message.os !== "") {
+      writer.uint32(146).string(message.os);
     }
     return writer;
   },
@@ -21415,6 +21651,14 @@ export const SnapshotInfo: MessageFns<SnapshotInfo> = {
           message.region = reader.string();
           continue;
         }
+        case 18: {
+          if (tag !== 146) {
+            break;
+          }
+
+          message.os = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -21473,6 +21717,7 @@ export const SnapshotInfo: MessageFns<SnapshotInfo> = {
       archived: isSet(object.archived) ? globalThis.Boolean(object.archived) : false,
       storage: isSet(object.storage) ? globalThis.String(object.storage) : "",
       region: isSet(object.region) ? globalThis.String(object.region) : "",
+      os: isSet(object.os) ? globalThis.String(object.os) : "",
     };
   },
 
@@ -21523,6 +21768,9 @@ export const SnapshotInfo: MessageFns<SnapshotInfo> = {
     if (message.region !== "") {
       obj.region = message.region;
     }
+    if (message.os !== "") {
+      obj.os = message.os;
+    }
     return obj;
   },
 
@@ -21546,6 +21794,7 @@ export const SnapshotInfo: MessageFns<SnapshotInfo> = {
     message.archived = object.archived ?? false;
     message.storage = object.storage ?? "";
     message.region = object.region ?? "";
+    message.os = object.os ?? "";
     return message;
   },
 };
@@ -24088,6 +24337,269 @@ export const SetSshResponse: MessageFns<SetSshResponse> = {
   },
   fromPartial(_: DeepPartial<SetSshResponse>): SetSshResponse {
     const message = createBaseSetSshResponse();
+    return message;
+  },
+};
+
+function createBaseSetRdpRequest(): SetRdpRequest {
+  return { vmId: "", enabled: false };
+}
+
+export const SetRdpRequest: MessageFns<SetRdpRequest> = {
+  encode(message: SetRdpRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    if (message.enabled !== false) {
+      writer.uint32(16).bool(message.enabled);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetRdpRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSetRdpRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.enabled = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SetRdpRequest {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      enabled: isSet(object.enabled) ? globalThis.Boolean(object.enabled) : false,
+    };
+  },
+
+  toJSON(message: SetRdpRequest): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.enabled !== false) {
+      obj.enabled = message.enabled;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<SetRdpRequest>): SetRdpRequest {
+    return SetRdpRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<SetRdpRequest>): SetRdpRequest {
+    const message = createBaseSetRdpRequest();
+    message.vmId = object.vmId ?? "";
+    message.enabled = object.enabled ?? false;
+    return message;
+  },
+};
+
+function createBaseSetRdpResponse(): SetRdpResponse {
+  return {};
+}
+
+export const SetRdpResponse: MessageFns<SetRdpResponse> = {
+  encode(_: SetRdpResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetRdpResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSetRdpResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(_: any): SetRdpResponse {
+    return {};
+  },
+
+  toJSON(_: SetRdpResponse): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create(base?: DeepPartial<SetRdpResponse>): SetRdpResponse {
+    return SetRdpResponse.fromPartial(base ?? {});
+  },
+  fromPartial(_: DeepPartial<SetRdpResponse>): SetRdpResponse {
+    const message = createBaseSetRdpResponse();
+    return message;
+  },
+};
+
+function createBaseResetRdpPasswordRequest(): ResetRdpPasswordRequest {
+  return { vmId: "" };
+}
+
+export const ResetRdpPasswordRequest: MessageFns<ResetRdpPasswordRequest> = {
+  encode(message: ResetRdpPasswordRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ResetRdpPasswordRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseResetRdpPasswordRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ResetRdpPasswordRequest {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+    };
+  },
+
+  toJSON(message: ResetRdpPasswordRequest): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ResetRdpPasswordRequest>): ResetRdpPasswordRequest {
+    return ResetRdpPasswordRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ResetRdpPasswordRequest>): ResetRdpPasswordRequest {
+    const message = createBaseResetRdpPasswordRequest();
+    message.vmId = object.vmId ?? "";
+    return message;
+  },
+};
+
+function createBaseResetRdpPasswordResponse(): ResetRdpPasswordResponse {
+  return { password: "", user: "" };
+}
+
+export const ResetRdpPasswordResponse: MessageFns<ResetRdpPasswordResponse> = {
+  encode(message: ResetRdpPasswordResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.password !== "") {
+      writer.uint32(10).string(message.password);
+    }
+    if (message.user !== "") {
+      writer.uint32(18).string(message.user);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ResetRdpPasswordResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseResetRdpPasswordResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.password = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.user = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ResetRdpPasswordResponse {
+    return {
+      password: isSet(object.password) ? globalThis.String(object.password) : "",
+      user: isSet(object.user) ? globalThis.String(object.user) : "",
+    };
+  },
+
+  toJSON(message: ResetRdpPasswordResponse): unknown {
+    const obj: any = {};
+    if (message.password !== "") {
+      obj.password = message.password;
+    }
+    if (message.user !== "") {
+      obj.user = message.user;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ResetRdpPasswordResponse>): ResetRdpPasswordResponse {
+    return ResetRdpPasswordResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ResetRdpPasswordResponse>): ResetRdpPasswordResponse {
+    const message = createBaseResetRdpPasswordResponse();
+    message.password = object.password ?? "";
+    message.user = object.user ?? "";
     return message;
   },
 };
@@ -29611,6 +30123,350 @@ export const SetOrgIdleIgnoreOutboundDefaultResponse: MessageFns<SetOrgIdleIgnor
   },
 };
 
+function createBaseSetOrgRdpDefaultRequest(): SetOrgRdpDefaultRequest {
+  return { orgId: "", enabled: undefined, newMachinesOnly: false };
+}
+
+export const SetOrgRdpDefaultRequest: MessageFns<SetOrgRdpDefaultRequest> = {
+  encode(message: SetOrgRdpDefaultRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.orgId !== "") {
+      writer.uint32(10).string(message.orgId);
+    }
+    if (message.enabled !== undefined) {
+      writer.uint32(16).bool(message.enabled);
+    }
+    if (message.newMachinesOnly !== false) {
+      writer.uint32(24).bool(message.newMachinesOnly);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetOrgRdpDefaultRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSetOrgRdpDefaultRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.orgId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.enabled = reader.bool();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.newMachinesOnly = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SetOrgRdpDefaultRequest {
+    return {
+      orgId: isSet(object.orgId)
+        ? globalThis.String(object.orgId)
+        : isSet(object.org_id)
+        ? globalThis.String(object.org_id)
+        : "",
+      enabled: isSet(object.enabled) ? globalThis.Boolean(object.enabled) : undefined,
+      newMachinesOnly: isSet(object.newMachinesOnly)
+        ? globalThis.Boolean(object.newMachinesOnly)
+        : isSet(object.new_machines_only)
+        ? globalThis.Boolean(object.new_machines_only)
+        : false,
+    };
+  },
+
+  toJSON(message: SetOrgRdpDefaultRequest): unknown {
+    const obj: any = {};
+    if (message.orgId !== "") {
+      obj.orgId = message.orgId;
+    }
+    if (message.enabled !== undefined) {
+      obj.enabled = message.enabled;
+    }
+    if (message.newMachinesOnly !== false) {
+      obj.newMachinesOnly = message.newMachinesOnly;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<SetOrgRdpDefaultRequest>): SetOrgRdpDefaultRequest {
+    return SetOrgRdpDefaultRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<SetOrgRdpDefaultRequest>): SetOrgRdpDefaultRequest {
+    const message = createBaseSetOrgRdpDefaultRequest();
+    message.orgId = object.orgId ?? "";
+    message.enabled = object.enabled ?? undefined;
+    message.newMachinesOnly = object.newMachinesOnly ?? false;
+    return message;
+  },
+};
+
+function createBaseSetOrgRdpDefaultResponse(): SetOrgRdpDefaultResponse {
+  return { machinesChanged: 0, machinesSkipped: 0, snapshotsChanged: 0 };
+}
+
+export const SetOrgRdpDefaultResponse: MessageFns<SetOrgRdpDefaultResponse> = {
+  encode(message: SetOrgRdpDefaultResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.machinesChanged !== 0) {
+      writer.uint32(8).uint32(message.machinesChanged);
+    }
+    if (message.machinesSkipped !== 0) {
+      writer.uint32(16).uint32(message.machinesSkipped);
+    }
+    if (message.snapshotsChanged !== 0) {
+      writer.uint32(24).uint32(message.snapshotsChanged);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetOrgRdpDefaultResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSetOrgRdpDefaultResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.machinesChanged = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.machinesSkipped = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.snapshotsChanged = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SetOrgRdpDefaultResponse {
+    return {
+      machinesChanged: isSet(object.machinesChanged)
+        ? globalThis.Number(object.machinesChanged)
+        : isSet(object.machines_changed)
+        ? globalThis.Number(object.machines_changed)
+        : 0,
+      machinesSkipped: isSet(object.machinesSkipped)
+        ? globalThis.Number(object.machinesSkipped)
+        : isSet(object.machines_skipped)
+        ? globalThis.Number(object.machines_skipped)
+        : 0,
+      snapshotsChanged: isSet(object.snapshotsChanged)
+        ? globalThis.Number(object.snapshotsChanged)
+        : isSet(object.snapshots_changed)
+        ? globalThis.Number(object.snapshots_changed)
+        : 0,
+    };
+  },
+
+  toJSON(message: SetOrgRdpDefaultResponse): unknown {
+    const obj: any = {};
+    if (message.machinesChanged !== 0) {
+      obj.machinesChanged = Math.round(message.machinesChanged);
+    }
+    if (message.machinesSkipped !== 0) {
+      obj.machinesSkipped = Math.round(message.machinesSkipped);
+    }
+    if (message.snapshotsChanged !== 0) {
+      obj.snapshotsChanged = Math.round(message.snapshotsChanged);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<SetOrgRdpDefaultResponse>): SetOrgRdpDefaultResponse {
+    return SetOrgRdpDefaultResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<SetOrgRdpDefaultResponse>): SetOrgRdpDefaultResponse {
+    const message = createBaseSetOrgRdpDefaultResponse();
+    message.machinesChanged = object.machinesChanged ?? 0;
+    message.machinesSkipped = object.machinesSkipped ?? 0;
+    message.snapshotsChanged = object.snapshotsChanged ?? 0;
+    return message;
+  },
+};
+
+function createBaseGetOrgRdpDefaultRequest(): GetOrgRdpDefaultRequest {
+  return { orgId: "" };
+}
+
+export const GetOrgRdpDefaultRequest: MessageFns<GetOrgRdpDefaultRequest> = {
+  encode(message: GetOrgRdpDefaultRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.orgId !== "") {
+      writer.uint32(10).string(message.orgId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GetOrgRdpDefaultRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseGetOrgRdpDefaultRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.orgId = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): GetOrgRdpDefaultRequest {
+    return {
+      orgId: isSet(object.orgId)
+        ? globalThis.String(object.orgId)
+        : isSet(object.org_id)
+        ? globalThis.String(object.org_id)
+        : "",
+    };
+  },
+
+  toJSON(message: GetOrgRdpDefaultRequest): unknown {
+    const obj: any = {};
+    if (message.orgId !== "") {
+      obj.orgId = message.orgId;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<GetOrgRdpDefaultRequest>): GetOrgRdpDefaultRequest {
+    return GetOrgRdpDefaultRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<GetOrgRdpDefaultRequest>): GetOrgRdpDefaultRequest {
+    const message = createBaseGetOrgRdpDefaultRequest();
+    message.orgId = object.orgId ?? "";
+    return message;
+  },
+};
+
+function createBaseGetOrgRdpDefaultResponse(): GetOrgRdpDefaultResponse {
+  return { set: false, enabled: false };
+}
+
+export const GetOrgRdpDefaultResponse: MessageFns<GetOrgRdpDefaultResponse> = {
+  encode(message: GetOrgRdpDefaultResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.set !== false) {
+      writer.uint32(8).bool(message.set);
+    }
+    if (message.enabled !== false) {
+      writer.uint32(16).bool(message.enabled);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GetOrgRdpDefaultResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseGetOrgRdpDefaultResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.set = reader.bool();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.enabled = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): GetOrgRdpDefaultResponse {
+    return {
+      set: isSet(object.set) ? globalThis.Boolean(object.set) : false,
+      enabled: isSet(object.enabled) ? globalThis.Boolean(object.enabled) : false,
+    };
+  },
+
+  toJSON(message: GetOrgRdpDefaultResponse): unknown {
+    const obj: any = {};
+    if (message.set !== false) {
+      obj.set = message.set;
+    }
+    if (message.enabled !== false) {
+      obj.enabled = message.enabled;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<GetOrgRdpDefaultResponse>): GetOrgRdpDefaultResponse {
+    return GetOrgRdpDefaultResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<GetOrgRdpDefaultResponse>): GetOrgRdpDefaultResponse {
+    const message = createBaseGetOrgRdpDefaultResponse();
+    message.set = object.set ?? false;
+    message.enabled = object.enabled ?? false;
+    return message;
+  },
+};
+
 function createBaseGetOrgIdleIgnoreOutboundDefaultRequest(): GetOrgIdleIgnoreOutboundDefaultRequest {
   return { orgId: "" };
 }
@@ -34976,7 +35832,9 @@ export const BoxdApiService = {
   /**
    * Checkpoints: per-VM, worker-local full captures (state+memory+disk) with
    * warm restore in place. Same artifacts as a snapshot, but never replicated
-   * and never an account-level image — they live and die with the VM.
+   * and never an account-level image — they live and die with the VM. A
+   * Windows machine's checkpoint is its disk alone, restored in place by
+   * stopping the machine, putting the disk back and booting it cold.
    */
   createCheckpoint: {
     path: "/boxd.api.v1.BoxdApi/CreateCheckpoint" as const,
@@ -35075,6 +35933,26 @@ export const BoxdApiService = {
     requestDeserialize: (value: Buffer): SetSshRequest => SetSshRequest.decode(value),
     responseSerialize: (value: SetSshResponse): Buffer => Buffer.from(SetSshResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer): SetSshResponse => SetSshResponse.decode(value),
+  },
+  setRdp: {
+    path: "/boxd.api.v1.BoxdApi/SetRdp" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: SetRdpRequest): Buffer => Buffer.from(SetRdpRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): SetRdpRequest => SetRdpRequest.decode(value),
+    responseSerialize: (value: SetRdpResponse): Buffer => Buffer.from(SetRdpResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SetRdpResponse => SetRdpResponse.decode(value),
+  },
+  resetRdpPassword: {
+    path: "/boxd.api.v1.BoxdApi/ResetRdpPassword" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: ResetRdpPasswordRequest): Buffer =>
+      Buffer.from(ResetRdpPasswordRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): ResetRdpPasswordRequest => ResetRdpPasswordRequest.decode(value),
+    responseSerialize: (value: ResetRdpPasswordResponse): Buffer =>
+      Buffer.from(ResetRdpPasswordResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): ResetRdpPasswordResponse => ResetRdpPasswordResponse.decode(value),
   },
   setDeleteAfter: {
     path: "/boxd.api.v1.BoxdApi/SetDeleteAfter" as const,
@@ -35462,6 +36340,28 @@ export const BoxdApiService = {
       Buffer.from(GetOrgIdleIgnoreOutboundDefaultResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer): GetOrgIdleIgnoreOutboundDefaultResponse =>
       GetOrgIdleIgnoreOutboundDefaultResponse.decode(value),
+  },
+  setOrgRdpDefault: {
+    path: "/boxd.api.v1.BoxdApi/SetOrgRdpDefault" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: SetOrgRdpDefaultRequest): Buffer =>
+      Buffer.from(SetOrgRdpDefaultRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): SetOrgRdpDefaultRequest => SetOrgRdpDefaultRequest.decode(value),
+    responseSerialize: (value: SetOrgRdpDefaultResponse): Buffer =>
+      Buffer.from(SetOrgRdpDefaultResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SetOrgRdpDefaultResponse => SetOrgRdpDefaultResponse.decode(value),
+  },
+  getOrgRdpDefault: {
+    path: "/boxd.api.v1.BoxdApi/GetOrgRdpDefault" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: GetOrgRdpDefaultRequest): Buffer =>
+      Buffer.from(GetOrgRdpDefaultRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): GetOrgRdpDefaultRequest => GetOrgRdpDefaultRequest.decode(value),
+    responseSerialize: (value: GetOrgRdpDefaultResponse): Buffer =>
+      Buffer.from(GetOrgRdpDefaultResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): GetOrgRdpDefaultResponse => GetOrgRdpDefaultResponse.decode(value),
   },
   /**
    * The org's default bot protection mode: what a NEW machine in
@@ -36064,7 +36964,9 @@ export interface BoxdApiServer extends UntypedServiceImplementation {
   /**
    * Checkpoints: per-VM, worker-local full captures (state+memory+disk) with
    * warm restore in place. Same artifacts as a snapshot, but never replicated
-   * and never an account-level image — they live and die with the VM.
+   * and never an account-level image — they live and die with the VM. A
+   * Windows machine's checkpoint is its disk alone, restored in place by
+   * stopping the machine, putting the disk back and booting it cold.
    */
   createCheckpoint: handleUnaryCall<CreateCheckpointRequest, CreateCheckpointResponse>;
   listCheckpoints: handleUnaryCall<ListCheckpointsRequest, ListCheckpointsResponse>;
@@ -36075,6 +36977,8 @@ export interface BoxdApiServer extends UntypedServiceImplementation {
   setBotProtection: handleUnaryCall<SetBotProtectionRequest, SetBotProtectionResponse>;
   setIdleIgnoreOutbound: handleUnaryCall<SetIdleIgnoreOutboundRequest, SetIdleIgnoreOutboundResponse>;
   setSsh: handleUnaryCall<SetSshRequest, SetSshResponse>;
+  setRdp: handleUnaryCall<SetRdpRequest, SetRdpResponse>;
+  resetRdpPassword: handleUnaryCall<ResetRdpPasswordRequest, ResetRdpPasswordResponse>;
   setDeleteAfter: handleUnaryCall<SetDeleteAfterRequest, SetDeleteAfterResponse>;
   /** Disks */
   createDisk: handleUnaryCall<CreateDiskRequest, CreateDiskResponse>;
@@ -36174,6 +37078,8 @@ export interface BoxdApiServer extends UntypedServiceImplementation {
     GetOrgIdleIgnoreOutboundDefaultRequest,
     GetOrgIdleIgnoreOutboundDefaultResponse
   >;
+  setOrgRdpDefault: handleUnaryCall<SetOrgRdpDefaultRequest, SetOrgRdpDefaultResponse>;
+  getOrgRdpDefault: handleUnaryCall<GetOrgRdpDefaultRequest, GetOrgRdpDefaultResponse>;
   /**
    * The org's default bot protection mode: what a NEW machine in
    * the org starts with. An org without one follows the cluster's setting
@@ -37448,7 +38354,9 @@ export interface BoxdApiClient extends Client {
   /**
    * Checkpoints: per-VM, worker-local full captures (state+memory+disk) with
    * warm restore in place. Same artifacts as a snapshot, but never replicated
-   * and never an account-level image — they live and die with the VM.
+   * and never an account-level image — they live and die with the VM. A
+   * Windows machine's checkpoint is its disk alone, restored in place by
+   * stopping the machine, putting the disk back and booting it cold.
    */
   createCheckpoint(
     request: CreateCheckpointRequest,
@@ -37584,6 +38492,36 @@ export interface BoxdApiClient extends Client {
     metadata: Metadata,
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: SetSshResponse) => void,
+  ): ClientUnaryCall;
+  setRdp(
+    request: SetRdpRequest,
+    callback: (error: ServiceError | null, response: SetRdpResponse) => void,
+  ): ClientUnaryCall;
+  setRdp(
+    request: SetRdpRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: SetRdpResponse) => void,
+  ): ClientUnaryCall;
+  setRdp(
+    request: SetRdpRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: SetRdpResponse) => void,
+  ): ClientUnaryCall;
+  resetRdpPassword(
+    request: ResetRdpPasswordRequest,
+    callback: (error: ServiceError | null, response: ResetRdpPasswordResponse) => void,
+  ): ClientUnaryCall;
+  resetRdpPassword(
+    request: ResetRdpPasswordRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: ResetRdpPasswordResponse) => void,
+  ): ClientUnaryCall;
+  resetRdpPassword(
+    request: ResetRdpPasswordRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: ResetRdpPasswordResponse) => void,
   ): ClientUnaryCall;
   setDeleteAfter(
     request: SetDeleteAfterRequest,
@@ -38125,6 +39063,36 @@ export interface BoxdApiClient extends Client {
     metadata: Metadata,
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: GetOrgIdleIgnoreOutboundDefaultResponse) => void,
+  ): ClientUnaryCall;
+  setOrgRdpDefault(
+    request: SetOrgRdpDefaultRequest,
+    callback: (error: ServiceError | null, response: SetOrgRdpDefaultResponse) => void,
+  ): ClientUnaryCall;
+  setOrgRdpDefault(
+    request: SetOrgRdpDefaultRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: SetOrgRdpDefaultResponse) => void,
+  ): ClientUnaryCall;
+  setOrgRdpDefault(
+    request: SetOrgRdpDefaultRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: SetOrgRdpDefaultResponse) => void,
+  ): ClientUnaryCall;
+  getOrgRdpDefault(
+    request: GetOrgRdpDefaultRequest,
+    callback: (error: ServiceError | null, response: GetOrgRdpDefaultResponse) => void,
+  ): ClientUnaryCall;
+  getOrgRdpDefault(
+    request: GetOrgRdpDefaultRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: GetOrgRdpDefaultResponse) => void,
+  ): ClientUnaryCall;
+  getOrgRdpDefault(
+    request: GetOrgRdpDefaultRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: GetOrgRdpDefaultResponse) => void,
   ): ClientUnaryCall;
   /**
    * The org's default bot protection mode: what a NEW machine in

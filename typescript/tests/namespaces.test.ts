@@ -17,10 +17,11 @@ import {
   CreateVmRequest,
   ForkVmRequest,
   SetOrgIdleIgnoreOutboundDefaultRequest,
+  SetOrgRdpDefaultRequest,
   type MessageFns,
 } from "../src/_generated/definitions.js";
 import { nodePlatform } from "../src/_platformNode.js";
-import type { MethodDef, Transport } from "../src/_rpc.js";
+import type { MethodDef, Transport, UnaryOptions } from "../src/_rpc.js";
 import { BoxdError } from "../src/errors.js";
 import {
   AccountNamespace,
@@ -39,6 +40,8 @@ import {
 interface Recorded {
   method: string;
   req: Record<string, unknown>;
+  /** The options a unary call was sent with (deadline, retries). */
+  opts?: UnaryOptions;
 }
 
 /** A duplex/server-stream call that replays a script once handlers are on. */
@@ -118,8 +121,8 @@ class FakeTransport implements Transport {
     return "https://app.boxd.sh";
   }
 
-  async unary<Req, Resp>(method: MethodDef<Req, Resp>, req: Req): Promise<Resp> {
-    this.calls.push({ method: method.name, req: req as Record<string, unknown> });
+  async unary<Req, Resp>(method: MethodDef<Req, Resp>, req: Req, opts?: UnaryOptions): Promise<Resp> {
+    this.calls.push({ method: method.name, req: req as Record<string, unknown>, opts });
     const next = this.#responses.shift();
     if (next instanceof Error) throw next;
     return (next ?? {}) as Resp;
@@ -725,6 +728,108 @@ describe("machines", () => {
     const machines = new Machines(asTransport(t));
     expect((await machines.get("alpha")).ssh).toBe(false);
     expect((await machines.get("alpha")).ssh).toBe(true);
+  });
+
+  it("create sends os and rdp only when asked", async () => {
+    // Both unset by default: "" is a Linux machine, and an unset `rdp` lets a
+    // new Windows machine take its org's default.
+    const created = (name: string) => [{ vmId: `vm-${name}`, name }, aVm(name)];
+    const t = new FakeTransport(["a", "b", "c"].flatMap(created));
+    const machines = new Machines(asTransport(t));
+    await machines.create({ name: "a" });
+    await machines.create({ name: "b", os: "windows" });
+    await machines.create({ name: "c", os: "windows", config: { rdp: false } });
+
+    const sent = t.calls
+      .filter((c) => c.method === "CreateVm")
+      .map((c) => onTheWire(CreateVmRequest, c.req));
+    expect(sent.map((r) => r.os)).toEqual(["", "windows", "windows"]);
+    expect(sent.map((r) => r.config?.network?.rdp)).toEqual([undefined, undefined, false]);
+    // Only RDP asked for: SSH stays unset.
+    expect(sent[2]!.config?.network?.ssh).toBeUndefined();
+  });
+
+  it("create({ spec }) carries os", async () => {
+    const t = new FakeTransport([{ vmId: "vm-a", name: "a" }, aVm("a")]);
+    await new Machines(asTransport(t)).create({
+      name: "a",
+      os: "windows",
+      spec: { version: 1, secrets: ["NPM_TOKEN"] },
+    });
+    expect(onTheWire(CreateVmRequest, t.calls[0]!.req).os).toBe("windows");
+  });
+
+  it("fork and create(fromSnapshot) carry rdp the same way", async () => {
+    // Unset keeps the source's (or the snapshot's) setting.
+    const created = (name: string) => [{ vmId: `vm-${name}`, name }, aVm(name)];
+    const t = new FakeTransport(["a", "b", "c", "d"].flatMap(created));
+    const machines = new Machines(asTransport(t));
+    await machines.fork("alpha", { name: "a" });
+    await machines.fork("alpha", { name: "b", config: { rdp: true } });
+    await machines.create({ fromSnapshot: "base", name: "c" });
+    await machines.create({ fromSnapshot: "base", name: "d", config: { rdp: false } });
+
+    const forks = t.calls.filter((c) => c.method === "ForkVm");
+    expect(forks.map((c) => onTheWire(ForkVmRequest, c.req).config?.network?.rdp)).toEqual([
+      undefined,
+      true,
+    ]);
+    const restores = t.calls.filter((c) => c.method === "CreateVmFromSnapshot");
+    expect(
+      restores.map((c) => onTheWire(CreateVmFromSnapshotRequest, c.req).config?.network?.rdp),
+    ).toEqual([undefined, false]);
+  });
+
+  it("create({ fromSnapshot }) refuses os at runtime too", async () => {
+    // The types already make it a compile error; plain JavaScript has no compiler.
+    const t = new FakeTransport([]);
+    await expect(
+      new Machines(asTransport(t)).create({ fromSnapshot: "base", os: "windows" } as never),
+    ).rejects.toThrow(/does not accept os/);
+    expect(t.calls).toEqual([]);
+  });
+
+  it("get reports os and rdp", async () => {
+    const t = new FakeTransport([
+      { ...aVm("win"), os: "windows", rdpPort: 61000, rdpPasswordSet: true },
+      aVm(),
+    ]);
+    const machines = new Machines(asTransport(t));
+    const win = await machines.get("win");
+    expect(win.os).toBe("windows");
+    expect(win.rdp).toEqual({
+      host: "win.boxd.sh",
+      port: 61000,
+      user: "Administrator",
+      enabled: true,
+      passwordSet: true,
+    });
+    const linux = await machines.get("alpha");
+    expect(linux.os).toBe("linux");
+    expect(linux.rdp).toBeNull();
+  });
+
+  it("setRdp sends the flag either way", async () => {
+    const t = new FakeTransport([{}, {}]);
+    const m = new Machines(asTransport(t));
+    expect(await m.setRdp("win", false)).toBeUndefined();
+    await m.setRdp("win", true);
+    expect(t.calls.map((c) => c.method)).toEqual(["SetRdp", "SetRdp"]);
+    expect(t.calls[0]!.req).toEqual({ vmId: "win", enabled: false });
+    expect(t.calls[1]!.req).toEqual({ vmId: "win", enabled: true });
+  });
+
+  it("rdp.resetPassword returns the password once", async () => {
+    const t = new FakeTransport([{ password: "s3cret-Pw", user: "Administrator" }]);
+    const reset = await new Machines(asTransport(t)).rdp.resetPassword("win", { region: "nyc" });
+    expect(t.calls[0]!.method).toBe("ResetRdpPassword");
+    expect(t.calls[0]!.req).toEqual({ vmId: "win" });
+    expect(reset).toEqual({ password: "s3cret-Pw", user: "Administrator" });
+    // The server may wake the machine and wait for its agent, so the call gets
+    // a longer deadline, and is sent once.
+    expect(t.calls[0]!.opts?.region).toBe("nyc");
+    expect(t.calls[0]!.opts?.extraTimeoutMs).toBeGreaterThan(0);
+    expect(t.calls[0]!.opts?.retry).toBe(false);
   });
 });
 
@@ -1400,6 +1505,50 @@ describe("orgs", () => {
     expect(onTheWire(SetOrgIdleIgnoreOutboundDefaultRequest, cleared.req).enabled).toBeUndefined();
   });
 
+  it("set/get/clear the RDP default", async () => {
+    const t = new FakeTransport([
+      { machinesChanged: 3, snapshotsChanged: 2, machinesSkipped: 1 },
+      { machinesChanged: 0, snapshotsChanged: 0, machinesSkipped: 0 },
+      { set: true, enabled: false },
+      { set: false, enabled: true },
+      {},
+    ]);
+    const orgs = new Orgs(asTransport(t));
+
+    // Existing machines change by default.
+    const applied = await orgs.setRdpDefault("o1", { enabled: false });
+    expect(t.calls[0]!.method).toBe("SetOrgRdpDefault");
+    expect(t.calls[0]!.req).toEqual({ orgId: "o1", enabled: false, newMachinesOnly: false });
+    // An explicit false is a default too, so it is present on the wire.
+    expect(onTheWire(SetOrgRdpDefaultRequest, t.calls[0]!.req).enabled).toBe(false);
+    expect(applied).toEqual({ machinesChanged: 3, snapshotsChanged: 2, machinesSkipped: 1 });
+
+    await orgs.setRdpDefault("o1", { enabled: true, newMachinesOnly: true });
+    expect(t.calls[1]!.req).toEqual({ orgId: "o1", enabled: true, newMachinesOnly: true });
+
+    // `set` on the wire is `isSet` here; with no org default, RDP is on.
+    expect(await orgs.getRdpDefault("o1")).toEqual({ isSet: true, enabled: false });
+    expect(t.calls[2]!.method).toBe("GetOrgRdpDefault");
+    expect(t.calls[2]!.req).toEqual({ orgId: "o1" });
+    expect(await orgs.getRdpDefault()).toEqual({ isSet: false, enabled: true });
+    expect(t.calls[3]!.req).toEqual({ orgId: "" });
+
+    // Clearing is the same RPC with `enabled` ABSENT, not false.
+    await orgs.clearRdpDefault("o1");
+    const cleared = t.calls[4]!;
+    expect(cleared.method).toBe("SetOrgRdpDefault");
+    expect(onTheWire(SetOrgRdpDefaultRequest, cleared.req).enabled).toBeUndefined();
+  });
+
+  it("setRdpDefault without enabled points at clear", async () => {
+    // Sending it absent would silently clear the default, so `set` refuses it.
+    const t = new FakeTransport([]);
+    await expect(new Orgs(asTransport(t)).setRdpDefault("o1", {} as never)).rejects.toThrow(
+      /clearRdpDefault/,
+    );
+    expect(t.calls).toEqual([]);
+  });
+
   it("setIdleIgnoreOutboundDefault refuses applyExisting with newMachinesOnly", async () => {
     const t = new FakeTransport([]);
     await expect(
@@ -1640,5 +1789,124 @@ describe("orgs machine limit", () => {
       await expect(orgs.requestMachineLimit(bad)).rejects.toThrow(/maxVms/);
     }
     expect(t.calls).toEqual([]);
+  });
+});
+
+// ── exec: the command line for the machine's OS ───────────────────────────
+
+describe("machines.exec builds the command line for the machine's OS", () => {
+  const windowsVm = (name = "win") => ({ ...aVm(name), os: "windows" });
+  /** The command each exec call sent, in order. */
+  const sent = (t: FakeTransport) => t.streams.map((s) => s.written[0]!.command);
+
+  it("a plain string with no cwd or env goes as it is, without a GetVm", async () => {
+    const t = new FakeTransport([]);
+    await new Machines(asTransport(t)).exec("win", { command: "Get-Date; hostname" });
+    expect(t.calls.map((c) => c.method)).toEqual(["Exec"]);
+    expect(sent(t)).toEqual(["Get-Date; hostname"]);
+  });
+
+  it("Linux: argv, env and cwd stay POSIX, byte for byte", async () => {
+    const t = new FakeTransport([aVm()]);
+    const machines = new Machines(asTransport(t));
+    await machines.exec("alpha", { command: ["echo", "a b", "it's"] });
+    await machines.exec("alpha", { command: "pwd", cwd: "/opt/my app" });
+    await machines.exec("alpha", { command: "env", env: { MODE: "a b" } });
+    expect(sent(t)).toEqual([
+      `echo 'a b' 'it'"'"'s'`,
+      "cd '/opt/my app' && pwd",
+      "MODE='a b' env",
+    ]);
+  });
+
+  it("Windows: cwd becomes Set-Location and env $env: assignments, ahead of the command", async () => {
+    const t = new FakeTransport([windowsVm()]);
+    await new Machines(asTransport(t)).exec("win", {
+      command: "Get-ChildItem",
+      cwd: "C:\\Users\\Administrator\\My Docs",
+      env: { MODE: "it's", "ProgramFiles(x86)": "C:\\x", _x1: "" },
+    });
+    expect(sent(t)).toEqual([
+      "Set-Location -LiteralPath 'C:\\Users\\Administrator\\My Docs' -ErrorAction Stop; " +
+        "$env:MODE='it''s'; ${env:ProgramFiles(x86)}='C:\\x'; $env:_x1=''; Get-ChildItem",
+    ]);
+  });
+
+  it("Windows: argv is quoted for PowerShell, bare where that is safe", async () => {
+    const t = new FakeTransport([windowsVm()]);
+    const machines = new Machines(asTransport(t));
+    await machines.exec("win", {
+      command: ["Remove-Item", "-Force", "C:\\tmp\\a b", "it's", "x\u2019y", "007", "-1", "$HOME", ""],
+    });
+    expect(sent(t)).toEqual([
+      "Remove-Item -Force 'C:\\tmp\\a b' 'it''s' 'x\u2019\u2019y' '007' '-1' '$HOME' ''",
+    ]);
+  });
+
+  it("Windows: a first element that needs quoting runs through the call operator", async () => {
+    const t = new FakeTransport([windowsVm()]);
+    const machines = new Machines(asTransport(t));
+    await machines.exec("win", { command: ["C:\\Program Files\\Git\\bin\\git.exe", "status"] });
+    await machines.exec("win", { command: ["hostname"] });
+    await machines.exec("win", { command: ["C:\\tools\\it's.exe"] });
+    expect(sent(t)).toEqual([
+      "& 'C:\\Program Files\\Git\\bin\\git.exe' status",
+      "hostname",
+      "& 'C:\\tools\\it''s.exe'",
+    ]);
+  });
+
+  it("refuses an env name PowerShell can't write, before any exec", async () => {
+    const t = new FakeTransport([windowsVm()]);
+    const machines = new Machines(asTransport(t));
+    await expect(machines.exec("win", { command: "x", env: { "a}b": "1" } })).rejects.toThrow(
+      /a\}b.*Windows/,
+    );
+    expect(t.calls.map((c) => c.method)).toEqual(["GetVm"]);
+  });
+
+  it("reads the OS once per machine and remembers it, also from get()", async () => {
+    const t = new FakeTransport([windowsVm(), aVm("beta")]);
+    const machines = new Machines(asTransport(t));
+    await machines.exec("win", { command: ["hostname"] });
+    await machines.exec("win", { command: "pwd", cwd: "C:\\" });
+    await machines.exec("win", { command: "x", env: { A: "1" } });
+    await machines.get("beta");
+    await machines.exec("beta", { command: ["true"] });
+    // A machine read by its name is remembered under its id too.
+    await machines.exec("vm-1", { command: ["true"] });
+    expect(t.calls.map((c) => c.method)).toEqual([
+      "GetVm", "Exec", "Exec", "Exec", "GetVm", "Exec", "Exec",
+    ]);
+    expect(sent(t)).toEqual([
+      "hostname",
+      "Set-Location -LiteralPath 'C:\\' -ErrorAction Stop; pwd",
+      "$env:A='1'; x",
+      "true",
+      "true",
+    ]);
+  });
+
+  it("streamExec builds the same PowerShell line", async () => {
+    const t = new FakeTransport([windowsVm()]);
+    const stream = new Machines(asTransport(t)).streamExec("win", {
+      command: ["Get-Content", "a b.txt"],
+      cwd: "D:\\data",
+      closeStdin: true,
+    });
+    await stream.wait();
+    expect(t.calls.map((c) => c.method)).toEqual(["GetVm", "Exec"]);
+    expect(sent(t)).toEqual([
+      "Set-Location -LiteralPath 'D:\\data' -ErrorAction Stop; Get-Content 'a b.txt'",
+    ]);
+  });
+
+  it("waitUntilReady probes a Windows machine with `exit 0`, Linux with `true`, one GetVm each", async () => {
+    const t = new FakeTransport([windowsVm(), aVm()]);
+    const machines = new Machines(asTransport(t));
+    expect((await machines.waitUntilReady("win")).os).toBe("windows");
+    expect((await machines.waitUntilReady("alpha")).os).toBe("linux");
+    expect(t.calls.map((c) => c.method)).toEqual(["GetVm", "Exec", "GetVm", "Exec"]);
+    expect(sent(t)).toEqual(["exit 0", "true"]);
   });
 });

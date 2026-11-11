@@ -24,6 +24,8 @@ from ..models import (
     OrgMachineDefaults,
     OrgMachineLimit,
     OrgMembers,
+    OrgRdpDefault,
+    OrgRdpDefaultResult,
     OrgUsage,
     Region,
 )
@@ -271,6 +273,58 @@ class Orgs(Namespace):
         self._transport.call(
             "SetOrgIdleIgnoreOutboundDefault",
             req.set_org_idle_ignore_outbound_default(org=org, enabled=None),
+        )
+
+    def set_rdp_default(
+        self,
+        org: str = "",
+        *,
+        enabled: bool,
+        new_machines_only: bool = False,
+    ) -> OrgRdpDefaultResult:
+        """Set whether new Windows machines in this org start with RDP on.
+        Requires org admin.
+
+        It is also set at once on the org's existing machines and snapshots
+        you can manage (your own and the shared ones); turning it off closes
+        their open RDP connections. Pass ``new_machines_only=True`` to leave
+        existing machines as they are. Other members' private machines are
+        never changed. A create that passes ``rdp`` itself still wins, and a
+        restore keeps its snapshot's setting. The result counts what changed
+        and what was left alone.
+        """
+        if enabled is None:
+            raise ValueError(
+                "set_rdp_default needs enabled=True or False. "
+                "To drop the default, call clear_rdp_default"
+            )
+        return m.org_rdp_default_result(
+            self._transport.call(
+                "SetOrgRdpDefault",
+                req.set_org_rdp_default(
+                    org=org, enabled=enabled, new_machines_only=new_machines_only
+                ),
+            )
+        )
+
+    def get_rdp_default(self, org: str = "") -> OrgRdpDefault:
+        """The org's default for RDP on new Windows machines.
+
+        Readable by any member. ``is_set`` false means the org stores no
+        default, so new machines have RDP on.
+        """
+        return m.org_rdp_default(
+            self._transport.call(
+                "GetOrgRdpDefault", api_pb2.GetOrgRdpDefaultRequest(org_id=org)
+            )
+        )
+
+    def clear_rdp_default(self, org: str = "") -> None:
+        """Drop the org's RDP default, so new Windows machines have RDP on
+        again unless their create says otherwise. Requires org admin.
+        Existing machines keep their setting."""
+        self._transport.call(
+            "SetOrgRdpDefault", req.set_org_rdp_default(org=org, enabled=None)
         )
 
     def set_bot_protection_default(
@@ -716,6 +770,42 @@ class AsyncOrgs(Namespace):
         await self._transport.call(
             "SetOrgIdleIgnoreOutboundDefault",
             req.set_org_idle_ignore_outbound_default(org=org, enabled=None),
+        )
+
+    async def set_rdp_default(
+        self,
+        org: str = "",
+        *,
+        enabled: bool,
+        new_machines_only: bool = False,
+    ) -> OrgRdpDefaultResult:
+        """See :meth:`Orgs.set_rdp_default`."""
+        if enabled is None:
+            raise ValueError(
+                "set_rdp_default needs enabled=True or False. "
+                "To drop the default, call clear_rdp_default"
+            )
+        return m.org_rdp_default_result(
+            await self._transport.call(
+                "SetOrgRdpDefault",
+                req.set_org_rdp_default(
+                    org=org, enabled=enabled, new_machines_only=new_machines_only
+                ),
+            )
+        )
+
+    async def get_rdp_default(self, org: str = "") -> OrgRdpDefault:
+        """See :meth:`Orgs.get_rdp_default`."""
+        return m.org_rdp_default(
+            await self._transport.call(
+                "GetOrgRdpDefault", api_pb2.GetOrgRdpDefaultRequest(org_id=org)
+            )
+        )
+
+    async def clear_rdp_default(self, org: str = "") -> None:
+        """See :meth:`Orgs.clear_rdp_default`."""
+        await self._transport.call(
+            "SetOrgRdpDefault", req.set_org_rdp_default(org=org, enabled=None)
         )
 
     async def set_bot_protection_default(

@@ -21,12 +21,16 @@ import type {
 /**
  * Full captures of a single machine (state + memory + disk) that restore in
  * place. Unlike a snapshot they are not replicated and never become an
- * account-level image — they live and die with the machine.
+ * account-level image — they live and die with the machine. A Windows
+ * machine's checkpoint is its disk only, restored in place by a cold boot.
  */
 export class MachineCheckpoints {
   constructor(private readonly transport: Transport) {}
 
-  /** The machine must be running. `status` is `"pending"` until the artifact lands. */
+  /**
+   * The machine must be running (a Windows machine may also be suspended, hibernated or
+   * stopped: its checkpoint is its disk alone). `status` is `"pending"` until the artifact lands.
+   */
   async create(id: string, name: string, opts: RegionOption = {}): Promise<CreatedCheckpoint> {
     const resp = await this.transport.unary(
       BoxdApiDefinition.methods.createCheckpoint,

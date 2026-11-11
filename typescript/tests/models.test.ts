@@ -16,6 +16,9 @@ import {
   toExposedPort,
   toMachine,
   toMachineFromCreate,
+  toOrgRdpDefault,
+  toOrgRdpDefaultResult,
+  toRdpPassword,
   toProxy,
   toSecret,
   toSnapshot,
@@ -101,6 +104,67 @@ describe("toMachine: idleIgnoreOutbound", () => {
       image: "ubuntu:24.04",
     });
     expect(m.idleIgnoreOutbound).toBe(false);
+  });
+});
+
+describe("toMachine: os and rdp", () => {
+  it("is Linux unless the server says Windows", () => {
+    expect(toMachine(machineRow({ os: "windows" })).os).toBe("windows");
+    expect(toMachine(machineRow({ os: "linux" })).os).toBe("linux");
+    // A server from before Windows machines sends "": every machine is Linux.
+    expect(toMachine(machineRow()).os).toBe("linux");
+  });
+
+  it("has no rdp on a Linux machine", () => {
+    // Even with RDP fields set, only a Windows machine has RDP.
+    expect(toMachine(machineRow()).rdp).toBeNull();
+    expect(toMachine(machineRow({ os: "linux", rdpPort: 61000 })).rdp).toBeNull();
+  });
+
+  it("carries a Windows machine's connection details, never a password", () => {
+    const rdp = toMachine(machineRow({ os: "windows", rdpPort: 61234, rdpPasswordSet: true })).rdp;
+    expect(rdp).toEqual({
+      host: "brave-otter.boxd.sh",
+      port: 61234,
+      user: "Administrator",
+      // Inverted on the wire, like SSH: a server that never sends it reads as on.
+      enabled: true,
+      passwordSet: true,
+    });
+    expect(Object.keys(rdp ?? {})).not.toContain("password");
+    const off = toMachine(machineRow({ os: "windows", rdpPort: 61234, rdpDisabled: true })).rdp;
+    expect(off?.enabled).toBe(false);
+    expect(off?.passwordSet).toBe(false);
+  });
+
+  it("reads port 0 as not allocated, and no domain as no host", () => {
+    expect(toMachine(machineRow({ os: "windows", rdpPort: 0 })).rdp?.port).toBeNull();
+    expect(toMachine(machineRow({ os: "windows", accessDomain: "" })).rdp?.host).toBe("");
+  });
+
+  it("the create-response fallback reports Linux and no rdp", () => {
+    // Not known from that response; create()/fork() re-read the machine.
+    const m = toMachineFromCreate({
+      vmId: "vm_1",
+      name: "brave-otter",
+      publicIp: "",
+      status: "pending",
+      image: "ubuntu:24.04",
+    });
+    expect(m.os).toBe("linux");
+    expect(m.rdp).toBeNull();
+  });
+
+  it("maps a reset password and the org default", () => {
+    expect(toRdpPassword({ password: "pw", user: "Administrator" })).toEqual({
+      password: "pw",
+      user: "Administrator",
+    });
+    // `set` on the wire is `isSet` here.
+    expect(toOrgRdpDefault({ set: true, enabled: false })).toEqual({ isSet: true, enabled: false });
+    expect(
+      toOrgRdpDefaultResult({ machinesChanged: 3, machinesSkipped: 1, snapshotsChanged: 2 }),
+    ).toEqual({ machinesChanged: 3, snapshotsChanged: 2, machinesSkipped: 1 });
   });
 });
 
@@ -505,6 +569,28 @@ describe("other mappers", () => {
     const old = toSnapshot({ ...base, archived: false, storage: "" });
     expect(old.storage).toBe("local");
     expect(old.archived).toBe(false);
+  });
+
+  it("snapshot: os is the guest OS, and an older server means linux", () => {
+    const base = {
+      snapshotId: "sn_1",
+      name: "golden",
+      version: 3,
+      status: "ready",
+      sizeBytes: 0,
+      createdAt: 0,
+      updatedAt: 0,
+      vcpu: 2,
+      memoryBytes: 0,
+      useCount: 0,
+      archived: false,
+      storage: "local",
+      region: "",
+    };
+    expect(toSnapshot({ ...base, os: "windows" }).os).toBe("windows");
+    expect(toSnapshot({ ...base, os: "linux" }).os).toBe("linux");
+    // A server from before Windows machines sends "".
+    expect(toSnapshot({ ...base, os: "" }).os).toBe("linux");
   });
 
   it("proxy: the port is the effective one, and the mode is machine-readable", () => {

@@ -48,6 +48,7 @@ from .models import (
     MachineIdle,
     MachineNetworking,
     MachinePackage,
+    MachineRdp,
     MachineSpecChange,
     MachineSpecUpdate,
     MachineRequirement,
@@ -67,9 +68,12 @@ from .models import (
     OrgMachineLimit,
     OrgMember,
     OrgMembers,
+    OrgRdpDefault,
+    OrgRdpDefaultResult,
     OrgRef,
     OrgUsage,
     Proxy,
+    RdpPassword,
     Region,
     RegionCount,
     ResizeResult,
@@ -124,6 +128,31 @@ def _desktop_url(name: str, console_origin: str) -> str:
 def _machine_url(name: str, domain: str) -> str:
     """`https://<name>.<domain>`, or "" when the domain is not known yet."""
     return f"https://{name}.{domain}" if domain else ""
+
+
+# The built-in account a Windows machine's RDP signs in as. `GetVm` does not
+# carry it; `ResetRdpPassword` names it too.
+_RDP_USER = "Administrator"
+
+
+def machine_rdp(msg) -> MachineRdp | None:
+    """A Windows machine's RDP connection details; None for any other machine.
+    No password: the server never sends one here."""
+    if msg.os != "windows":
+        return None
+    return MachineRdp(
+        host=f"{msg.name}.{msg.access_domain}" if msg.access_domain else "",
+        # 0 = not allocated, never a real port.
+        port=msg.rdp_port or None,
+        user=_RDP_USER,
+        # Inverted on the wire, like `ssh_disabled`.
+        enabled=not msg.rdp_disabled,
+        password_set=msg.rdp_password_set,
+    )
+
+
+def rdp_password(msg) -> RdpPassword:
+    return RdpPassword(password=msg.password, user=msg.user or _RDP_USER)
 
 
 def machine_source(msg) -> MachineSource | None:
@@ -193,6 +222,10 @@ def machine(msg, console_origin: str = "", region: str | None = None) -> Machine
         idle_ignore_outbound=msg.idle_ignore_outbound,
         # Inverted on the wire, so a server that predates it reads as on.
         ssh=not msg.ssh_disabled,
+        # A server from before Windows machines sends "": every machine it
+        # has is Linux.
+        os=msg.os or "linux",
+        rdp=machine_rdp(msg),
         delete_at=_epoch_ms(msg.delete_at_ms),
         delete_after_cron=msg.delete_after_cron or None,
         source=machine_source(msg),
@@ -274,6 +307,8 @@ def machine_from_created(msg) -> Machine:
         # Not reported either. True here means "not known": the fork's
         # source or the snapshot may have had SSH off.
         ssh=True,
+        # Not reported either: `os` keeps its default and `rdp` its None, so
+        # a Windows machine shows as one only once it is read back.
         source=None,
         hibernated_at=None,
         last_connected_at=None,
@@ -375,6 +410,9 @@ def snapshot(msg, region: str | None = None) -> Snapshot:
         storage=msg.storage or "local",
         archived=msg.archived,
         region=msg.region or region or None,
+        # A server from before Windows machines sends "": every snapshot it
+        # has is Linux.
+        os=msg.os or "linux",
     )
 
 
@@ -625,6 +663,19 @@ def org_idle_ignore_outbound_default_result(
     msg,
 ) -> OrgIdleIgnoreOutboundDefaultResult:
     return OrgIdleIgnoreOutboundDefaultResult(
+        machines_changed=msg.machines_changed,
+        snapshots_changed=msg.snapshots_changed,
+        machines_skipped=msg.machines_skipped,
+    )
+
+
+def org_rdp_default(msg) -> OrgRdpDefault:
+    # `set` on the wire; `is_set` here, like `OrgMachineDefaults`.
+    return OrgRdpDefault(is_set=msg.set, enabled=msg.enabled)
+
+
+def org_rdp_default_result(msg) -> OrgRdpDefaultResult:
+    return OrgRdpDefaultResult(
         machines_changed=msg.machines_changed,
         snapshots_changed=msg.snapshots_changed,
         machines_skipped=msg.machines_skipped,

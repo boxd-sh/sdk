@@ -124,6 +124,36 @@ def test_ssh_true_is_sent():
     assert sent.network.ssh is True
 
 
+def test_rdp_left_unset_when_not_given():
+    # `optional` on the wire: unset gives a new Windows machine its org's
+    # default and a restore the snapshot's setting, so a defaulted value must
+    # never go out, not even next to SSH or proxies.
+    assert not req.vm_config(vcpu=2).HasField("network")
+    config = req.vm_config(ssh=False, proxies=[ProxyEntry(name="web", port=3000)])
+    assert not config.network.HasField("rdp")
+    assert not _vm_config_on_the_wire(config).network.HasField("rdp")
+
+
+def test_rdp_false_and_true_are_sent_explicitly():
+    config = req.vm_config(rdp=False)
+    assert config is not None
+    sent = _vm_config_on_the_wire(config)
+    assert sent.network.HasField("rdp")
+    assert sent.network.rdp is False
+    # Only RDP asked for: SSH stays unset.
+    assert not sent.network.HasField("ssh")
+    assert _vm_config_on_the_wire(req.vm_config(rdp=True)).network.rdp is True
+
+
+def test_create_vm_sends_the_os_only_when_asked():
+    common = dict(
+        name="w", image=None, env=None, cmd=None, restart_policy=None, org=None,
+        shared=False, networks=None, isolated=False, config=None,
+    )
+    assert req.create_vm(**common).os == ""
+    assert req.create_vm(**common, guest_os="windows").os == "windows"
+
+
 def test_volumes():
     config = req.vm_config(
         volumes=[VolumeMount(disk_id="d1", mount_path="/data", read_only=True)]
@@ -278,6 +308,23 @@ def test_set_org_idle_ignore_outbound_default_without_enabled_leaves_it_unset():
     assert request.org_id == ""
     assert not request.HasField("enabled")
     assert request.apply_existing is False
+
+
+def test_set_org_rdp_default_carries_enabled_and_new_machines_only():
+    request = req.set_org_rdp_default(org="acme", enabled=False, new_machines_only=True)
+    assert request.org_id == "acme"
+    # An explicit False is a default too, so it is present on the wire.
+    assert request.HasField("enabled")
+    assert request.enabled is False
+    assert request.new_machines_only is True
+
+
+def test_set_org_rdp_default_without_enabled_leaves_it_unset():
+    # Absence is what clears the default; None must not become False.
+    request = req.set_org_rdp_default(org=None, enabled=None)
+    assert request.org_id == ""
+    assert not request.HasField("enabled")
+    assert request.new_machines_only is False
 
 
 # --- exec ---

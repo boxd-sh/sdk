@@ -101,6 +101,40 @@ MachineSourceKind = Literal["fork", "snapshot"]
 BotProtectionMode = Literal["on", "sleep_only", "off"]
 """A machine's bot protection mode. See ``Machine.bot_protection_mode``."""
 
+MachineOs = Literal["linux", "windows"]
+"""A machine's guest OS. See ``Machine.os``."""
+
+
+class MachineRdp(BaseModel):
+    """How to reach a Windows machine over RDP. Never holds a password: boxd
+    does not store one. :meth:`Rdp.reset_password` generates one and returns
+    it once."""
+
+    host: str
+    """``<name>.<domain>``: the address to point an RDP client at, with
+    ``port``. Empty when the domain is not known yet."""
+    port: int | None
+    """The machine's RDP port on that address; None until allocated."""
+    user: str
+    """The account to sign in as: ``"Administrator"``."""
+    enabled: bool
+    """Whether RDP answers on the port. Off: the connection is closed before a
+    byte is relayed. Set with :meth:`Machines.set_rdp`."""
+    password_set: bool
+    """Whether a password was ever generated through boxd (or came with the
+    snapshot the machine was restored from). Until then no password works:
+    generate one with :meth:`Rdp.reset_password`."""
+
+
+class RdpPassword(BaseModel):
+    """What :meth:`Rdp.reset_password` answers. The only place a Windows
+    machine's password is ever shown: boxd keeps no copy, so a lost password
+    means another reset."""
+
+    password: str
+    user: str
+    """The account it is for: ``"Administrator"``."""
+
 
 class MachineSource(BaseModel):
     """Where a machine came from. A standalone machine has no source at all."""
@@ -318,6 +352,13 @@ class Machine(BaseModel):
     nothing answers SSH for it, on the public address or the org's network;
     the port stays allocated. ``exec`` and ``boxd connect`` don't use SSH.
     Set with :meth:`Machines.set_ssh`."""
+    os: MachineOs | str = "linux"
+    """The guest OS: ``"linux"`` or ``"windows"`` (``create(os=...)``). A
+    server from before Windows machines reports every machine as Linux."""
+    rdp: MachineRdp | None = None
+    """How to reach a Windows machine over RDP: host, port, user, whether RDP
+    is on and whether a password was set. None for any other machine. Never a
+    password; see :class:`MachineRdp`."""
     delete_at: datetime | None = None
     """When the platform will permanently delete this machine, whatever state
     it is in. None = no delete-after timer. Set, extend or clear it with
@@ -706,6 +747,10 @@ class Snapshot(BaseModel):
     nor can it be saved again, until an operator unarchives it."""
     region: str | None = None
     """The region the snapshot lives in. None when boxd runs in one place."""
+    os: MachineOs | str = "linux"
+    """The guest OS of the machine it was saved from: ``"linux"`` or
+    ``"windows"``. A machine created from it has that OS. A server from before
+    Windows machines reports every snapshot as Linux."""
 
 
 class CreatedSnapshot(BaseModel):
@@ -888,6 +933,28 @@ class OrgIdleIgnoreOutboundDefaultResult(BaseModel):
     """Existing machines whose value was changed."""
     snapshots_changed: int
     """Snapshots whose value was changed (a restore takes its snapshot's)."""
+    machines_skipped: int
+    """Other members' private machines, left as they were."""
+
+
+class OrgRdpDefault(BaseModel):
+    """Whether new Windows machines in an org start with RDP on."""
+
+    is_set: bool
+    """True when the org stores an explicit default. False means new machines
+    have RDP on, which is what ``enabled`` then holds."""
+    enabled: bool
+    """Effective default: what a create that does not say gets."""
+
+
+class OrgRdpDefaultResult(BaseModel):
+    """What `orgs.set_rdp_default` did to the org's existing machines. All
+    counts are 0 with ``new_machines_only=True``."""
+
+    machines_changed: int
+    """Existing machines whose setting was changed."""
+    snapshots_changed: int
+    """Snapshots whose setting was changed (a restore takes its snapshot's)."""
     machines_skipped: int
     """Other members' private machines, left as they were."""
 
@@ -1257,6 +1324,8 @@ __all__ = [
     "Machine",
     "MachineAccess",
     "MachineIdle",
+    "MachineOs",
+    "MachineRdp",
     "MachineResources",
     "MachineSource",
     "MachineSourceKind",
@@ -1265,11 +1334,14 @@ __all__ = [
     "Org",
     "OrgBotProtectionDefault",
     "OrgDomain",
+    "OrgRdpDefault",
+    "OrgRdpDefaultResult",
     "OrgRef",
     "PauseResult",
     "Proxy",
     "ProxyEntry",
     "ProxyPortMode",
+    "RdpPassword",
     "Region",
     "RegionCount",
     "RegionOrgState",

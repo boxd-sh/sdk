@@ -16,6 +16,8 @@ import {
   toOrgMachineDefaults,
   toOrgMachineLimit,
   toOrgMembers,
+  toOrgRdpDefault,
+  toOrgRdpDefaultResult,
   toOrgUsage,
   toRegion,
   type BillingActivityEntry,
@@ -33,6 +35,8 @@ import {
   type OrgMachineDefaults,
   type OrgMachineLimit,
   type OrgMembers,
+  type OrgRdpDefault,
+  type OrgRdpDefaultResult,
   type OrgUsage,
   type Region,
 } from "./models.js";
@@ -82,6 +86,22 @@ export interface OrgIdleIgnoreOutboundDefaultParams {
    * changes nothing. `true` together with `newMachinesOnly: true` is refused.
    */
   applyExisting?: boolean;
+}
+
+/**
+ * `enabled` is required: leaving it out would clear the default on the wire,
+ * which `clearRdpDefault` says out loud, so `setRdpDefault` refuses it
+ * instead.
+ */
+export interface OrgRdpDefaultParams {
+  /** Whether new Windows machines in the org start with RDP on when their create does not say. */
+  enabled: boolean;
+  /**
+   * Leave existing machines as they are: only machines created from now on
+   * start with it. Without it, `enabled` is also set on the org's existing
+   * machines and snapshots you can manage.
+   */
+  newMachinesOnly?: boolean;
 }
 
 /** Which org's usage, and over what window. */
@@ -363,6 +383,58 @@ export class Orgs {
       // `enabled` is `optional` on the wire, and absence is what clears the
       // default. An older server refuses `applyExisting` without it.
       { orgId: org, enabled: undefined, applyExisting: false, newMachinesOnly: false },
+    );
+  }
+
+  /**
+   * Set whether new Windows machines in this org start with RDP on. Requires
+   * org admin.
+   *
+   * It is also set at once on the org's existing machines and snapshots you
+   * can manage (your own and the shared ones); turning it off closes their
+   * open RDP connections. Pass `newMachinesOnly: true` to leave existing
+   * machines as they are. Other members' private machines are never changed.
+   * A create that names `config.rdp` itself still wins, and a restore keeps
+   * its snapshot's setting. The result counts what changed and what was left
+   * alone.
+   *
+   * `org` defaults to your home org.
+   */
+  async setRdpDefault(org = "", params: OrgRdpDefaultParams): Promise<OrgRdpDefaultResult> {
+    if (typeof params?.enabled !== "boolean") {
+      throw new BoxdError(
+        "setRdpDefault needs enabled: true or false. To drop the default, call clearRdpDefault",
+      );
+    }
+    const resp = await this.transport.unary(BoxdApiDefinition.methods.setOrgRdpDefault, {
+      orgId: org,
+      enabled: params.enabled,
+      newMachinesOnly: params.newMachinesOnly ?? false,
+    });
+    return toOrgRdpDefaultResult(resp);
+  }
+
+  /**
+   * The org's default for RDP on new Windows machines. Readable by any
+   * member. `isSet` false means the org stores no default, so new machines
+   * have RDP on.
+   */
+  async getRdpDefault(org = ""): Promise<OrgRdpDefault> {
+    const resp = await this.transport.unary(BoxdApiDefinition.methods.getOrgRdpDefault, {
+      orgId: org,
+    });
+    return toOrgRdpDefault(resp);
+  }
+
+  /**
+   * Drop the org's RDP default, so new Windows machines have RDP on again
+   * unless their create says otherwise. Requires org admin. Existing machines
+   * keep their setting.
+   */
+  async clearRdpDefault(org = ""): Promise<void> {
+    await this.transport.unary(BoxdApiDefinition.methods.setOrgRdpDefault,
+      // `enabled` is `optional` on the wire, and absence is what clears the default.
+      { orgId: org, enabled: undefined, newMachinesOnly: false },
     );
   }
 

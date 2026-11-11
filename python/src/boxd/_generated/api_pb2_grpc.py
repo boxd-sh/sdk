@@ -424,6 +424,16 @@ class BoxdApiStub(object):
                 request_serializer=api__pb2.SetSshRequest.SerializeToString,
                 response_deserializer=api__pb2.SetSshResponse.FromString,
                 _registered_method=True)
+        self.SetRdp = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/SetRdp',
+                request_serializer=api__pb2.SetRdpRequest.SerializeToString,
+                response_deserializer=api__pb2.SetRdpResponse.FromString,
+                _registered_method=True)
+        self.ResetRdpPassword = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/ResetRdpPassword',
+                request_serializer=api__pb2.ResetRdpPasswordRequest.SerializeToString,
+                response_deserializer=api__pb2.ResetRdpPasswordResponse.FromString,
+                _registered_method=True)
         self.SetDeleteAfter = channel.unary_unary(
                 '/boxd.api.v1.BoxdApi/SetDeleteAfter',
                 request_serializer=api__pb2.SetDeleteAfterRequest.SerializeToString,
@@ -583,6 +593,16 @@ class BoxdApiStub(object):
                 '/boxd.api.v1.BoxdApi/GetOrgIdleIgnoreOutboundDefault',
                 request_serializer=api__pb2.GetOrgIdleIgnoreOutboundDefaultRequest.SerializeToString,
                 response_deserializer=api__pb2.GetOrgIdleIgnoreOutboundDefaultResponse.FromString,
+                _registered_method=True)
+        self.SetOrgRdpDefault = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/SetOrgRdpDefault',
+                request_serializer=api__pb2.SetOrgRdpDefaultRequest.SerializeToString,
+                response_deserializer=api__pb2.SetOrgRdpDefaultResponse.FromString,
+                _registered_method=True)
+        self.GetOrgRdpDefault = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/GetOrgRdpDefault',
+                request_serializer=api__pb2.GetOrgRdpDefaultRequest.SerializeToString,
+                response_deserializer=api__pb2.GetOrgRdpDefaultResponse.FromString,
                 _registered_method=True)
         self.SetOrgBotProtectionDefault = channel.unary_unary(
                 '/boxd.api.v1.BoxdApi/SetOrgBotProtectionDefault',
@@ -1263,7 +1283,9 @@ class BoxdApiServicer(object):
     def CreateCheckpoint(self, request, context):
         """Checkpoints: per-VM, worker-local full captures (state+memory+disk) with
         warm restore in place. Same artifacts as a snapshot, but never replicated
-        and never an account-level image — they live and die with the VM.
+        and never an account-level image — they live and die with the VM. A
+        Windows machine's checkpoint is its disk alone, restored in place by
+        stopping the machine, putting the disk back and booting it cold.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -1312,6 +1334,18 @@ class BoxdApiServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def SetSsh(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SetRdp(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ResetRdpPassword(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -1552,6 +1586,18 @@ class BoxdApiServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def GetOrgIdleIgnoreOutboundDefault(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SetOrgRdpDefault(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetOrgRdpDefault(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -2162,6 +2208,16 @@ def add_BoxdApiServicer_to_server(servicer, server):
                     request_deserializer=api__pb2.SetSshRequest.FromString,
                     response_serializer=api__pb2.SetSshResponse.SerializeToString,
             ),
+            'SetRdp': grpc.unary_unary_rpc_method_handler(
+                    servicer.SetRdp,
+                    request_deserializer=api__pb2.SetRdpRequest.FromString,
+                    response_serializer=api__pb2.SetRdpResponse.SerializeToString,
+            ),
+            'ResetRdpPassword': grpc.unary_unary_rpc_method_handler(
+                    servicer.ResetRdpPassword,
+                    request_deserializer=api__pb2.ResetRdpPasswordRequest.FromString,
+                    response_serializer=api__pb2.ResetRdpPasswordResponse.SerializeToString,
+            ),
             'SetDeleteAfter': grpc.unary_unary_rpc_method_handler(
                     servicer.SetDeleteAfter,
                     request_deserializer=api__pb2.SetDeleteAfterRequest.FromString,
@@ -2321,6 +2377,16 @@ def add_BoxdApiServicer_to_server(servicer, server):
                     servicer.GetOrgIdleIgnoreOutboundDefault,
                     request_deserializer=api__pb2.GetOrgIdleIgnoreOutboundDefaultRequest.FromString,
                     response_serializer=api__pb2.GetOrgIdleIgnoreOutboundDefaultResponse.SerializeToString,
+            ),
+            'SetOrgRdpDefault': grpc.unary_unary_rpc_method_handler(
+                    servicer.SetOrgRdpDefault,
+                    request_deserializer=api__pb2.SetOrgRdpDefaultRequest.FromString,
+                    response_serializer=api__pb2.SetOrgRdpDefaultResponse.SerializeToString,
+            ),
+            'GetOrgRdpDefault': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetOrgRdpDefault,
+                    request_deserializer=api__pb2.GetOrgRdpDefaultRequest.FromString,
+                    response_serializer=api__pb2.GetOrgRdpDefaultResponse.SerializeToString,
             ),
             'SetOrgBotProtectionDefault': grpc.unary_unary_rpc_method_handler(
                     servicer.SetOrgBotProtectionDefault,
@@ -4565,6 +4631,60 @@ class BoxdApi(object):
             _registered_method=True)
 
     @staticmethod
+    def SetRdp(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/SetRdp',
+            api__pb2.SetRdpRequest.SerializeToString,
+            api__pb2.SetRdpResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ResetRdpPassword(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/ResetRdpPassword',
+            api__pb2.ResetRdpPasswordRequest.SerializeToString,
+            api__pb2.ResetRdpPasswordResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def SetDeleteAfter(request,
             target,
             options=(),
@@ -5418,6 +5538,60 @@ class BoxdApi(object):
             '/boxd.api.v1.BoxdApi/GetOrgIdleIgnoreOutboundDefault',
             api__pb2.GetOrgIdleIgnoreOutboundDefaultRequest.SerializeToString,
             api__pb2.GetOrgIdleIgnoreOutboundDefaultResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SetOrgRdpDefault(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/SetOrgRdpDefault',
+            api__pb2.SetOrgRdpDefaultRequest.SerializeToString,
+            api__pb2.SetOrgRdpDefaultResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetOrgRdpDefault(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/GetOrgRdpDefault',
+            api__pb2.GetOrgRdpDefaultRequest.SerializeToString,
+            api__pb2.GetOrgRdpDefaultResponse.FromString,
             options,
             channel_credentials,
             insecure,

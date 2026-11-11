@@ -292,6 +292,97 @@ def test_set_ssh_sends_the_flag_either_way():
     ]
 
 
+def test_create_sends_os_and_rdp_only_when_asked():
+    # Both unset by default: "" is a Linux machine, and an unset `rdp` lets a
+    # new Windows machine take its org's default.
+    transport = FakeTransport([*_created("a"), *_created("b"), *_created("c")])
+    machines = Machines(transport)
+    machines.create("a")
+    machines.create("b", os="windows")
+    machines.create("c", os="windows", rdp=False)
+
+    a, b, c = [r for method, r in transport.calls if method == "CreateVm"]
+    assert a.os == ""
+    assert not a.config.HasField("network")
+    assert b.os == "windows"
+    assert not b.config.HasField("network")
+    assert c.os == "windows"
+    assert c.config.network.HasField("rdp")
+    assert c.config.network.rdp is False
+    assert not c.config.network.HasField("ssh")
+
+
+def test_fork_and_create_from_snapshot_carry_rdp():
+    # Unset keeps the source's (or the snapshot's) setting.
+    transport = FakeTransport([*_forked("a"), *_forked("b"), *_created("c"), *_created("d")])
+    machines = Machines(transport)
+    machines.fork("alpha", "a")
+    machines.fork("alpha", "b", rdp=True)
+    machines.create("c", from_snapshot="base")
+    machines.create("d", from_snapshot="base", rdp=False)
+    for rpc, asked in (("ForkVm", True), ("CreateVmFromSnapshot", False)):
+        unset, set_ = [r for method, r in transport.calls if method == rpc]
+        assert not unset.config.network.HasField("rdp")
+        assert set_.config.network.HasField("rdp")
+        assert set_.config.network.rdp is asked
+
+
+def test_create_from_snapshot_refuses_os():
+    # The snapshot decides the OS; the restore request has no field for it.
+    transport = FakeTransport([])
+    with pytest.raises(ValueError, match="os"):
+        Machines(transport).create("w", from_snapshot="base", os="windows")
+    assert transport.calls == []
+
+
+def test_get_reports_os_and_rdp():
+    windows = a_vm("win")
+    windows.os = "windows"
+    windows.rdp_port = 61000
+    windows.rdp_password_set = True
+    transport = FakeTransport([windows, a_vm()])
+    machines = Machines(transport)
+    machine = machines.get("win")
+    assert machine.os == "windows"
+    assert (machine.rdp.host, machine.rdp.port, machine.rdp.user) == (
+        "win.boxd.sh",
+        61000,
+        "Administrator",
+    )
+    assert (machine.rdp.enabled, machine.rdp.password_set) == (True, True)
+    linux = machines.get("alpha")
+    assert (linux.os, linux.rdp) == ("linux", None)
+
+
+def test_set_rdp_sends_the_flag_either_way():
+    transport = FakeTransport([api_pb2.SetRdpResponse(), api_pb2.SetRdpResponse()])
+    machines = Machines(transport)
+    assert machines.set_rdp("win", False) is None
+    machines.set_rdp("win", True)
+    assert [c[0] for c in transport.calls] == ["SetRdp"] * 2
+    assert [(r.vm_id, r.enabled) for _, r in transport.calls] == [
+        ("win", False),
+        ("win", True),
+    ]
+
+
+def test_rdp_reset_password_returns_it_once():
+    transport = FakeTransport(
+        [api_pb2.ResetRdpPasswordResponse(password="s3cret-Pw", user="Administrator")]
+    )
+    machines = Machines(transport)
+    reset = machines.rdp.reset_password("win", region="nyc")
+    method, request = transport.calls[0]
+    assert method == "ResetRdpPassword"
+    assert request.vm_id == "win"
+    assert transport.regions == ["nyc"]
+    assert (reset.password, reset.user) == ("s3cret-Pw", "Administrator")
+    # The server may wake the machine and wait for its agent, so the call gets
+    # a longer deadline, and is sent once.
+    assert transport.call_options[0]["extra_timeout"] > 0
+    assert transport.call_options[0]["retry"] is False
+
+
 def test_labels_go_out_on_create_fork_and_restore():
     transport = FakeTransport([*_created("a"), *_forked("b"), *_created("c"), *_created("d")])
     machines = Machines(transport)
@@ -564,11 +655,13 @@ def test_suggest_name():
 def test_exec_folds_the_stream_into_one_result():
     transport = FakeTransport(
         [
+            # A list is quoted for the machine's OS, read first.
+            a_vm(),
             [
                 api_pb2.ExecChunk(data=b"hello "),
                 api_pb2.ExecChunk(data=b"oops", is_stderr=True),
                 api_pb2.ExecChunk(data=b"world", exit_code=0),
-            ]
+            ],
         ]
     )
     result = Machines(transport).exec("alpha", ["echo", "hi"])
@@ -599,15 +692,148 @@ def test_exec_buffer_encoding_is_byte_exact():
 
 
 def test_exec_prefixes_env_assignments():
-    transport = FakeTransport([[api_pb2.ExecChunk(exit_code=0)]])
+    transport = FakeTransport([a_vm(), [api_pb2.ExecChunk(exit_code=0)]])
     Machines(transport).exec("alpha", "env", env={"MODE": "a b"})
     assert transport.sent[0].command == "MODE='a b' env"
 
 
 def test_exec_cwd_prepends_a_cd():
-    transport = FakeTransport([[api_pb2.ExecChunk(exit_code=0)]])
+    transport = FakeTransport([a_vm(), [api_pb2.ExecChunk(exit_code=0)]])
     Machines(transport).exec("alpha", "pwd", cwd="/opt/my app")
     assert transport.sent[0].command == "cd '/opt/my app' && pwd"
+
+
+# --- exec on a Windows machine: one PowerShell command ---
+
+
+def a_windows_vm(name="win"):
+    vm = a_vm(name)
+    vm.os = "windows"
+    return vm
+
+
+def _exec_ok():
+    return [api_pb2.ExecChunk(exit_code=0)]
+
+
+def test_exec_sends_a_plain_string_as_it_is_without_a_get_vm():
+    transport = FakeTransport([_exec_ok()])
+    Machines(transport).exec("win", "Get-Date; hostname")
+    assert [c[0] for c in transport.calls] == ["Exec"]
+    assert transport.sent[0].command == "Get-Date; hostname"
+
+
+def test_exec_on_linux_stays_posix_byte_for_byte():
+    transport = FakeTransport([a_vm(), _exec_ok(), _exec_ok(), _exec_ok()])
+    machines = Machines(transport)
+    machines.exec("alpha", ["echo", "a b", "it's"])
+    assert transport.sent[0].command == "echo 'a b' 'it'\"'\"'s'"
+    machines.exec("alpha", "env", env={"MODE": "a b"}, cwd="/opt/my app")
+    assert transport.sent[0].command == "cd '/opt/my app' && MODE='a b' env"
+    machines.exec("alpha", ["true"])
+    assert transport.sent[0].command == "true"
+    assert [c[0] for c in transport.calls] == ["GetVm", "Exec", "Exec", "Exec"]
+
+
+def test_exec_on_windows_turns_cwd_and_env_into_powershell():
+    transport = FakeTransport([a_windows_vm(), _exec_ok()])
+    Machines(transport).exec(
+        "win",
+        "Get-ChildItem",
+        cwd="C:\\Users\\Administrator\\My Docs",
+        env={"MODE": "it's", "ProgramFiles(x86)": "C:\\x", "_x1": ""},
+    )
+    assert transport.sent[0].command == (
+        "Set-Location -LiteralPath 'C:\\Users\\Administrator\\My Docs' "
+        "-ErrorAction Stop; "
+        "$env:MODE='it''s'; ${env:ProgramFiles(x86)}='C:\\x'; $env:_x1=''; "
+        "Get-ChildItem"
+    )
+
+
+def test_exec_on_windows_quotes_a_list_for_powershell():
+    transport = FakeTransport([a_windows_vm(), _exec_ok()])
+    Machines(transport).exec(
+        "win",
+        [
+            "Remove-Item", "-Force", "C:\\tmp\\a b", "it's", "x\u2019y",
+            "007", "-1", "$HOME", "",
+        ],
+    )
+    assert transport.sent[0].command == (
+        "Remove-Item -Force 'C:\\tmp\\a b' 'it''s' 'x\u2019\u2019y' '007' '-1' "
+        "'$HOME' ''"
+    )
+
+
+def test_exec_on_windows_runs_a_quoted_first_element_through_the_call_operator():
+    transport = FakeTransport([a_windows_vm(), _exec_ok(), _exec_ok(), _exec_ok()])
+    machines = Machines(transport)
+    machines.exec("win", ["C:\\Program Files\\Git\\bin\\git.exe", "status"])
+    assert transport.sent[0].command == "& 'C:\\Program Files\\Git\\bin\\git.exe' status"
+    machines.exec("win", ["hostname"])
+    assert transport.sent[0].command == "hostname"
+    machines.exec("win", ["C:\\tools\\it's.exe"])
+    assert transport.sent[0].command == "& 'C:\\tools\\it''s.exe'"
+
+
+def test_exec_on_windows_refuses_an_env_name_powershell_cannot_write():
+    transport = FakeTransport([a_windows_vm()])
+    with pytest.raises(ValueError, match="a}b.*Windows"):
+        Machines(transport).exec("win", "x", env={"a}b": "1"})
+    assert [c[0] for c in transport.calls] == ["GetVm"]
+
+
+def test_exec_reads_the_os_once_and_remembers_it_also_from_get():
+    transport = FakeTransport(
+        [a_windows_vm(), _exec_ok(), _exec_ok(), a_vm("beta"), _exec_ok(), _exec_ok()]
+    )
+    machines = Machines(transport)
+    machines.exec("win", ["hostname"])
+    machines.exec("win", "pwd", cwd="C:\\")
+    assert transport.sent[0].command == (
+        "Set-Location -LiteralPath 'C:\\' -ErrorAction Stop; pwd"
+    )
+    machines.get("beta")
+    machines.exec("beta", ["true"])
+    # A machine read by its name is remembered under its id too.
+    machines.exec("vm-1", ["true"])
+    assert transport.sent[0].command == "true"
+    assert [c[0] for c in transport.calls] == [
+        "GetVm", "Exec", "Exec", "GetVm", "Exec", "Exec",
+    ]
+
+
+def test_stream_exec_on_windows_builds_the_same_line():
+    transport = FakeTransport([a_windows_vm(), _exec_ok()])
+    Machines(transport).stream_exec(
+        "win", command=["Get-Content", "a b.txt"], cwd="D:\\data", close_stdin=True
+    )
+    assert transport.sent[0].command == (
+        "Set-Location -LiteralPath 'D:\\data' -ErrorAction Stop; Get-Content 'a b.txt'"
+    )
+    assert [c[0] for c in transport.calls] == ["GetVm", "Exec"]
+
+
+async def test_async_exec_on_windows_reads_the_os_once():
+    transport = FakeAsyncTransport([a_windows_vm(), _exec_ok(), _exec_ok()])
+    machines = AsyncMachines(transport)
+    await machines.exec("win", ["hostname"], env={"A": "1"})
+    assert transport.sent[0].command == "$env:A='1'; hostname"
+    await machines.exec("win", "pwd", cwd="C:\\")
+    assert [c[0] for c in transport.calls] == ["GetVm", "Exec", "Exec"]
+
+
+async def test_async_stream_exec_on_windows_reads_the_os_when_it_starts():
+    transport = FakeAsyncTransport([a_windows_vm(), _exec_ok()])
+    stream = AsyncMachines(transport).stream_exec(
+        "win", command=["Get-Content", "a b.txt"], close_stdin=True
+    )
+    assert transport.calls == []
+    async with stream:
+        assert [chunk async for chunk in stream] == []
+    assert transport.sent[0].command == "Get-Content 'a b.txt'"
+    assert [c[0] for c in transport.calls] == ["GetVm", "Exec"]
 
 
 def test_exec_reports_a_nonzero_exit():
@@ -1172,6 +1398,70 @@ def test_set_bot_protection_default_refuses_what_would_clear_it():
     assert transport.calls == []
 
 
+def test_orgs_set_get_clear_rdp_default():
+    from boxd.resources.orgs import Orgs
+
+    transport = FakeTransport(
+        [
+            api_pb2.SetOrgRdpDefaultResponse(
+                machines_changed=3, snapshots_changed=2, machines_skipped=1
+            ),
+            api_pb2.SetOrgRdpDefaultResponse(),
+            api_pb2.GetOrgRdpDefaultResponse(set=True, enabled=False),
+            api_pb2.GetOrgRdpDefaultResponse(enabled=True),
+            api_pb2.SetOrgRdpDefaultResponse(),
+        ]
+    )
+    ns = Orgs(transport)
+
+    # Existing machines change by default.
+    applied = ns.set_rdp_default("o1", enabled=False)
+    method, request = transport.calls[0]
+    assert method == "SetOrgRdpDefault"
+    assert request.HasField("enabled")
+    assert (request.org_id, request.enabled, request.new_machines_only) == (
+        "o1",
+        False,
+        False,
+    )
+    assert (
+        applied.machines_changed,
+        applied.snapshots_changed,
+        applied.machines_skipped,
+    ) == (3, 2, 1)
+
+    ns.set_rdp_default("o1", enabled=True, new_machines_only=True)
+    request = transport.calls[1][1]
+    assert (request.enabled, request.new_machines_only) == (True, True)
+
+    # `set` on the wire is `is_set` here.
+    default = ns.get_rdp_default("o1")
+    assert transport.calls[2][0] == "GetOrgRdpDefault"
+    assert transport.calls[2][1].org_id == "o1"
+    assert (default.is_set, default.enabled) == (True, False)
+    # No org default: new machines have RDP on.
+    unset = ns.get_rdp_default()
+    assert transport.calls[3][1].org_id == ""
+    assert (unset.is_set, unset.enabled) == (False, True)
+
+    # Clearing is the same RPC with `enabled` ABSENT, not False.
+    ns.clear_rdp_default("o1")
+    method, request = transport.calls[4]
+    assert method == "SetOrgRdpDefault"
+    assert request.org_id == "o1"
+    assert not request.HasField("enabled")
+
+
+def test_orgs_set_rdp_default_without_enabled_points_at_clear():
+    # Sending it absent would silently clear the default, so `set` refuses it.
+    from boxd.resources.orgs import Orgs
+
+    transport = FakeTransport([])
+    with pytest.raises(ValueError, match="clear_rdp_default"):
+        Orgs(transport).set_rdp_default("o1", enabled=None)
+    assert transport.calls == []
+
+
 def test_orgs_set_get_clear_idle_ignore_outbound_default():
     from boxd.resources.orgs import Orgs
 
@@ -1352,6 +1642,57 @@ async def test_async_set_delete_after_and_create_with_it():
     assert transport.calls[2][1].delete_after_secs == 90
 
 
+async def test_async_rdp_matches_sync():
+    from boxd.resources.orgs import AsyncOrgs
+
+    transport = FakeAsyncTransport(
+        [
+            *_created("a"),
+            api_pb2.SetRdpResponse(),
+            api_pb2.ResetRdpPasswordResponse(password="pw", user="Administrator"),
+        ]
+    )
+    machines = AsyncMachines(transport)
+    await machines.create("a", os="windows", rdp=False)
+    await machines.set_rdp("a", True)
+    reset = await machines.rdp.reset_password("a")
+    create, _, setter, resetter = transport.calls
+    assert create[1].os == "windows"
+    assert create[1].config.network.rdp is False
+    assert setter[0] == "SetRdp"
+    assert (setter[1].vm_id, setter[1].enabled) == ("a", True)
+    assert resetter[0] == "ResetRdpPassword"
+    assert resetter[1].vm_id == "a"
+    assert transport.call_options[3]["retry"] is False
+    assert (reset.password, reset.user) == ("pw", "Administrator")
+
+    transport = FakeAsyncTransport(
+        [
+            api_pb2.SetOrgRdpDefaultResponse(
+                machines_changed=2, snapshots_changed=1, machines_skipped=1
+            ),
+            api_pb2.GetOrgRdpDefaultResponse(set=True, enabled=False),
+            api_pb2.SetOrgRdpDefaultResponse(),
+        ]
+    )
+    orgs = AsyncOrgs(transport)
+    applied = await orgs.set_rdp_default("o1", enabled=False)
+    assert (
+        applied.machines_changed,
+        applied.snapshots_changed,
+        applied.machines_skipped,
+    ) == (2, 1, 1)
+    default = await orgs.get_rdp_default("o1")
+    assert (default.is_set, default.enabled) == (True, False)
+    await orgs.clear_rdp_default("o1")
+    assert [c[0] for c in transport.calls] == [
+        "SetOrgRdpDefault",
+        "GetOrgRdpDefault",
+        "SetOrgRdpDefault",
+    ]
+    assert not transport.calls[2][1].HasField("enabled")
+
+
 async def test_async_idle_ignore_outbound_matches_sync():
     from boxd.resources.orgs import AsyncOrgs
 
@@ -1515,10 +1856,12 @@ def _namespace_pairs():
         AsyncFiles,
         AsyncPorts,
         AsyncProxies,
+        AsyncRdp,
         Checkpoints,
         Files,
         Ports,
         Proxies,
+        Rdp,
     )
 
     return [
@@ -1527,6 +1870,7 @@ def _namespace_pairs():
         (Ports, AsyncPorts),
         (Proxies, AsyncProxies),
         (Checkpoints, AsyncCheckpoints),
+        (Rdp, AsyncRdp),
         (Env, AsyncEnv),
         (Secrets, AsyncSecrets),
         (snapshots.Snapshots, snapshots.AsyncSnapshots),
@@ -1617,6 +1961,25 @@ def test_wait_until_ready_returns_once_running_and_exec_round_trips():
     machine = Machines(transport).wait_until_ready("alpha")
     assert machine.status == "running"
     assert [c[0] for c in transport.calls] == ["GetVm", "Exec"]
+
+
+def test_wait_until_ready_probes_a_windows_machine_with_powershell():
+    # `true` is no PowerShell command; `exit 0` is, sent as it is.
+    transport = FakeTransport([a_windows_vm(), _exec_ok()])
+    machine = Machines(transport).wait_until_ready("win")
+    assert machine.os == "windows"
+    assert [c[0] for c in transport.calls] == ["GetVm", "Exec"]
+    assert transport.sent[0].command == "exit 0"
+
+
+async def test_async_wait_until_ready_probes_each_os_with_its_own_command():
+    transport = FakeAsyncTransport([a_windows_vm(), _exec_ok(), a_vm(), _exec_ok()])
+    machines = AsyncMachines(transport)
+    assert (await machines.wait_until_ready("win")).os == "windows"
+    assert transport.sent[0].command == "exit 0"
+    assert (await machines.wait_until_ready("alpha")).os == "linux"
+    assert transport.sent[0].command == "true"
+    assert [c[0] for c in transport.calls] == ["GetVm", "Exec", "GetVm", "Exec"]
 
 
 def test_wait_until_ready_gives_up_immediately_on_a_terminal_state():

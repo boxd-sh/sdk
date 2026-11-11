@@ -256,6 +256,7 @@ await boxd.machines.setAutoSuspendTimeout(id, 300);    // seconds; 0 disables
 await boxd.machines.setAutoHibernateTimeout(id, 3600);
 await boxd.machines.setIdleIgnoreOutbound(id, true);   // only inbound connections keep it awake
 await boxd.machines.setSsh(id, false);                 // nothing answers SSH; exec still works
+await boxd.machines.setRdp(id, false);                 // Windows: nothing answers RDP
 
 await boxd.machines.waitUntilReady(id);       // running *and* exec works
 await boxd.machines.waitUntilReady(id, { timeout: 180_000, pollInterval: 1_000 }); // ms
@@ -310,6 +311,45 @@ machine are a compile error beside it.
 
 Renaming reboots the machine, so it is its own call. Every other setting is
 readable straight off `Machine`.
+
+### Windows machines
+
+`os: "windows"` creates a Windows machine, where the cluster offers them. Its
+desktop is reached over RDP; `exec`, files and SSH work too (see below).
+`machine.rdp` holds the connection details and never a password: boxd doesn't
+store one, so no password works until you generate one. `resetPassword` sets a
+new one in the machine and returns it, once.
+
+```typescript
+const win = await boxd.machines.create({ name: "win-1", os: "windows" });
+win.rdp?.host, win.rdp?.port;             // point an RDP client here
+win.rdp?.user;                            // "Administrator"
+win.rdp?.passwordSet;                     // false until a password was generated
+const { user, password } = await boxd.machines.rdp.resetPassword("win-1"); // shown once
+await boxd.machines.setRdp("win-1", false);   // nothing answers RDP; open sessions close
+await boxd.machines.create({ name: "win-2", os: "windows", config: { rdp: false } });
+```
+
+`resetPassword` needs the machine running (one in standby or hibernated is
+woken) and, like `setRdp`, can't be called from inside the machine itself. A
+lost password means another reset. `config.rdp` left unset takes the org's
+default (see Organizations), else on. A restore keeps the snapshot's RDP
+setting and password; `os` is a compile error beside `fromSnapshot`, since the
+snapshot decides it.
+
+`exec` on a Windows machine runs the command line as one PowerShell command, as
+the Administrator, from its home `C:\Users\Administrator`. Argv is quoted for
+PowerShell, `cwd` becomes `Set-Location` and `env` becomes `$env:` assignments
+(the SDK reads the machine's OS once to know). `files` and `fs` take Windows
+paths (`C:\...`, or relative to that home). A fork copies the disk and boots it
+as a new machine (its own identity, the source's Administrator password), in
+about a minute; a checkpoint is the disk alone, restored in place by a cold
+boot. The desktop view and computer use aren't available on Windows.
+
+```typescript
+await boxd.machines.exec("win-1", { command: "Get-ChildItem", cwd: "C:\\Users\\Administrator\\Desktop" });
+await boxd.machines.exec("win-1", { command: ["git", "clone", "https://example.com/repo.git"] });
+```
 
 ### Machine specs
 
@@ -687,6 +727,14 @@ interface Machine {
     url: string;                   // `https://<name>.<domain>`
   };
   ssh: boolean;                    // false: SSH is off, nothing answers on sshPort
+  os: "linux" | "windows";
+  rdp: {                           // a Windows machine's RDP; null on any other
+    host: string;                  // `<name>.<domain>`
+    port: number | null;           // null until allocated
+    user: string;                  // "Administrator"
+    enabled: boolean;              // false: nothing answers on port
+    passwordSet: boolean;          // false until a password was generated
+  } | null;                        // never a password
 
   idle: {                          // seconds; 0 = that timer is disabled
     suspendAfter: number;
@@ -1206,6 +1254,7 @@ interface Snapshot {
   storage: string;          // "local" | "archiving" | "archived" | "unarchiving"
   archived: boolean;        // true unless storage is "local": machines can't be created from it
   region: string | null;    // where it lives
+  os: "linux" | "windows";  // a machine created from it has this OS
 }
 
 interface Disk {
@@ -1315,6 +1364,16 @@ const i = await boxd.orgs.getIdleIgnoreOutboundDefault("acme");
 i.isSet, i.enabled;                       // isSet false = no default, so enabled is
 i.platformEnabled;                        // the platform's setting, this one
 await boxd.orgs.clearIdleIgnoreOutboundDefault("acme");  // existing machines keep theirs
+```
+
+RDP on new Windows machines has an org default the same way:
+
+```typescript
+const r = await boxd.orgs.setRdpDefault("acme", { enabled: false }); // also existing machines,
+r.machinesChanged, r.snapshotsChanged;    // unless newMachinesOnly: true
+const d = await boxd.orgs.getRdpDefault("acme");
+d.isSet, d.enabled;                       // isSet false = no default: RDP on
+await boxd.orgs.clearRdpDefault("acme");  // existing machines keep theirs
 ```
 
 An org has a machine limit: how many machines it may have at once. Any member

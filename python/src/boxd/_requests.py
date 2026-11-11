@@ -43,6 +43,7 @@ def vm_config(
     auto_destroy_timeout: int | None = None,
     idle_ignore_outbound: bool | None = None,
     ssh: bool | None = None,
+    rdp: bool | None = None,
     proxies: Sequence[ProxyEntry] | None = None,
     volumes: Sequence[VolumeMount] | None = None,
 ) -> api_pb2.VmConfig | None:
@@ -61,6 +62,7 @@ def vm_config(
             auto_destroy_timeout,
             idle_ignore_outbound,
             ssh,
+            rdp,
             proxies,
             volumes,
         )
@@ -85,7 +87,7 @@ def vm_config(
         # and a fork or restore keeps the source's value. Only touch it when
         # asked, and send an explicit False as False.
         config.idle_ignore_outbound = idle_ignore_outbound
-    if ssh is not None or proxies is not None:
+    if ssh is not None or rdp is not None or proxies is not None:
         network = api_pb2.NetworkConfig(
             proxies=[
                 api_pb2.ProxyEntry(name=p.name, port=p.port) for p in (proxies or [])
@@ -97,6 +99,10 @@ def vm_config(
             # or restore keeps the source's setting. Only touch it when
             # asked, and send an explicit False as False.
             network.ssh = ssh
+        if rdp is not None:
+            # `optional` too: unset gives a new Windows machine its org's
+            # default (else on) and a restore the snapshot's setting.
+            network.rdp = rdp
         config.network.CopyFrom(network)
     for volume in volumes or []:
         config.volumes.append(
@@ -125,10 +131,13 @@ def create_vm(
     isolated: bool,
     config: api_pb2.VmConfig | None,
     labels: Mapping[str, str] | None = None,
+    guest_os: str | None = None,
 ) -> api_pb2.CreateVmRequest:
     request = api_pb2.CreateVmRequest(
         name=name or "",
         image_ref=image or "",
+        # "" is Linux, as every machine before Windows ones.
+        os=guest_os or "",
         cmd=list(cmd or []),
         # "always" matches the platform default; every VM restarts on failure.
         restart_policy=restart_policy or "always",
@@ -579,6 +588,22 @@ def set_org_idle_ignore_outbound_default(
         # A clear has nothing to apply, and an older server refuses a
         # clear that asks for it.
         apply_existing=enabled is not None and not new_machines_only,
+    )
+    if enabled is not None:
+        request.enabled = enabled
+    return request
+
+
+def set_org_rdp_default(
+    *,
+    org: str | None,
+    enabled: bool | None,
+    new_machines_only: bool = False,
+) -> api_pb2.SetOrgRdpDefaultRequest:
+    """Build a `SetOrgRdpDefault` request. `enabled` is `optional` on the
+    wire, and absence is what clears the default, so None stays unset."""
+    request = api_pb2.SetOrgRdpDefaultRequest(
+        org_id=org or "", new_machines_only=new_machines_only
     )
     if enabled is not None:
         request.enabled = enabled

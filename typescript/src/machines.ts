@@ -34,6 +34,7 @@ import {
   type ExecResult,
   type Machine,
   type MachineConfig,
+  type MachineOs,
   type MachineSpecUpdate,
   type MachineUsageReport,
   type RegionalList,
@@ -47,6 +48,7 @@ import { MachineFiles } from "./files.js";
 import { MachineFs } from "./fs.js";
 import { MachinePorts } from "./ports.js";
 import { MachineProxies } from "./proxies.js";
+import { MachineRdpNamespace } from "./rdp.js";
 import type {
   CreateVmFromSnapshotRequest,
   CreateVmRequest,
@@ -178,6 +180,14 @@ export interface MachineCreateFromImageParams extends MachineCreateCommon {
    * can only ever add it (see {@link MachineForkParams.isolated}).
    */
   isolated?: boolean;
+  /**
+   * `"windows"` creates a Windows machine (the cluster must offer them). Its
+   * desktop is reached over RDP (`machine.rdp`) with a password
+   * `machines.rdp.resetPassword` generates; `exec` runs PowerShell there, and
+   * files and SSH work as on Linux. Omit for a Linux machine. Turn RDP off at
+   * create with `config: { rdp: false }`.
+   */
+  os?: MachineOs;
   fromSnapshot?: never;
   spec?: never;
 }
@@ -202,6 +212,8 @@ export interface MachineCreateFromSpecParams extends Omit<MachineCreateCommon, "
   restartPolicy?: never;
   networks?: never;
   isolated?: never;
+  /** See {@link MachineCreateFromImageParams.os}. */
+  os?: MachineOs;
 }
 
 /**
@@ -220,6 +232,8 @@ export interface MachineCreateFromSnapshotParams extends MachineCreateCommon {
   restartPolicy?: never;
   /** Restored from what the snapshot captured — use `setNetworks` after. */
   networks?: never;
+  /** The snapshot decides the OS. */
+  os?: never;
   /**
    * Isolate the restored machine even if the snapshot wasn't. One-way: the
    * snapshot's own `isolated` is always inherited, so this can add isolation
@@ -330,14 +344,25 @@ export interface MachineForkParams extends RegionOption {
 }
 
 export interface ExecParams extends RegionOption {
-  /** Argv (shell-quoted for you) or a ready-made shell command line. */
+  /**
+   * Argv (shell-quoted for you) or a ready-made shell command line. A Windows
+   * machine runs the command line as one PowerShell command, and argv is
+   * quoted for PowerShell there.
+   */
   command: string | string[];
-  /** Prefixed onto the command line as `K=V` assignments. */
+  /**
+   * Prefixed onto the command line as `K=V` assignments (`$env:K='V';` on a
+   * Windows machine).
+   */
   env?: Record<string, string>;
   /**
    * Working directory to run the command in. A `cwd` that doesn't exist
-   * fails fast — the remote `cd` errors and the command never runs — rather
-   * than silently running in the default directory.
+   * fails fast — the remote `cd` (`Set-Location` on Windows) errors and the
+   * command never runs — rather than silently running in the default
+   * directory.
+   *
+   * An argv `command`, `env` or `cwd` needs the machine's OS: the first such
+   * call for a machine reads it with one `get`, and the client remembers it.
    */
   cwd?: string;
   /** Allocate a PTY. Merges stderr into stdout at the kernel level. */
@@ -408,6 +433,8 @@ const REJECTED_WITH_SNAPSHOT: ReadonlyArray<[string, (p: MachineCreateParams) =>
   // afterwards with `setNetworks`. (`isolated` is NOT rejected here — it is a
   // one-way override the restore accepts, see MachineCreateFromSnapshotParams.)
   ["networks", (p) => (p.networks ?? []).length > 0],
+  // The snapshot decides the OS; the restore request has no field for it.
+  ["os", (p) => !!p.os],
 ];
 
 /** Every field is required on the wire — this fills the ones we don't set. */
@@ -448,6 +475,72 @@ function commandLine(command: string | string[], env?: Record<string, string>, c
   return line;
 }
 
+/**
+ * A single-quoted PowerShell string: nothing inside is expanded, and a quote
+ * is written twice. PowerShell reads the typographic single quotes
+ * (U+2018 to U+201B) as quotes too, so each of those is doubled as well.
+ */
+function psQuote(arg: string): string {
+  return "'" + arg.replace(/['‘-‛]/g, "$&$&") + "'";
+}
+
+/**
+ * Whether PowerShell reads `arg` unquoted as exactly this text. Not a token
+ * that starts like a number: PowerShell would read `007`, `1kb` or `-1` as
+ * one.
+ */
+function psBare(arg: string): boolean {
+  return /^[A-Za-z0-9_\-./\\:=]+$/.test(arg) && !/^[-.]*[0-9]/.test(arg);
+}
+
+/**
+ * Argv as one PowerShell command line. A plain word stays bare, so `-Force`
+ * is still a parameter; anything else is quoted. A quoted string alone is a
+ * value, not a command, so a first element that needs quoting goes after the
+ * call operator `&`.
+ */
+function psArgv(argv: string[]): string {
+  if (argv.length === 0) return "";
+  const [first, ...rest] = argv as [string, ...string[]];
+  const head = psBare(first) && /^[A-Za-z_.\\/]/.test(first) ? first : `& ${psQuote(first)}`;
+  return [head, ...rest.map((a) => (psBare(a) ? a : psQuote(a)))].join(" ");
+}
+
+/** `$env:NAME`, or `${env:NAME}` for a name PowerShell can't write bare. */
+function psEnvVariable(name: string): string {
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return `$env:${name}`;
+  if (name === "" || /[}`]/.test(name)) {
+    throw new BoxdError(
+      `exec: the env variable name ${JSON.stringify(name)} can't be set on a Windows ` +
+        "machine: PowerShell can't write a variable name that is empty or holds `}` or a backtick",
+    );
+  }
+  return `\${env:${name}}`;
+}
+
+/**
+ * The exec command line for a Windows machine, which runs it as one
+ * PowerShell command: `cwd` becomes a `Set-Location` that stops the command
+ * when it fails (as `cd ... &&` does on Linux) and `env` becomes `$env:`
+ * assignments, both ahead of the command.
+ */
+function powershellLine(
+  command: string | string[],
+  env?: Record<string, string>,
+  cwd?: string,
+): string {
+  const line = typeof command === "string" ? command : psArgv(command);
+  const prefix: string[] = [];
+  if (cwd) prefix.push(`Set-Location -LiteralPath ${psQuote(cwd)} -ErrorAction Stop`);
+  for (const [k, v] of Object.entries(env ?? {})) prefix.push(`${psEnvVariable(k)}=${psQuote(v)}`);
+  return prefix.length > 0 ? `${prefix.join("; ")}; ${line}` : line;
+}
+
+/** The key a machine's OS is remembered under: the region it was asked in, and its id or name. */
+function osKey(region: string | undefined, id: string): string {
+  return `${region ?? ""}\u0000${id}`;
+}
+
 /** Omitted fields stay zero, which the server reads as "use the default". */
 function toVmConfig(config: MachineConfig | undefined): VmConfig | undefined {
   if (!config) return undefined;
@@ -473,12 +566,14 @@ function toVmConfig(config: MachineConfig | undefined): VmConfig | undefined {
       autoDestroyTimeoutSecs: config.autoDestroyTimeout ?? 0,
     };
   }
-  if (config.ssh !== undefined || config.proxies) {
+  if (config.ssh !== undefined || config.rdp !== undefined || config.proxies) {
     vm.network = {
       // `optional` on the wire: unset means "not requested", which is not the
       // same as true. A new machine then has SSH on and a fork or restore
       // keeps the source's setting, so never default it here.
       ssh: config.ssh,
+      // The same for RDP: unset gives a new Windows machine its org's default.
+      rdp: config.rdp,
       proxies: (config.proxies ?? []).map((p) => ({ name: p.name, port: p.port ?? 0 })),
     };
   }
@@ -586,8 +681,15 @@ export class Machines {
   readonly proxies: MachineProxies;
   readonly checkpoints: MachineCheckpoints;
   readonly backups: MachineBackups;
+  /** A Windows machine's RDP password: `machines.rdp.resetPassword(id)`. */
+  readonly rdp: MachineRdpNamespace;
 
   readonly #platform: Platform;
+  /**
+   * Each machine's OS as this client has seen it, by {@link osKey}: what
+   * `exec` builds its command line for. A machine's OS never changes.
+   */
+  readonly #osSeen = new Map<string, MachineOs>();
 
   constructor(
     private readonly transport: Transport,
@@ -601,6 +703,7 @@ export class Machines {
     this.proxies = new MachineProxies(transport);
     this.checkpoints = new MachineCheckpoints(transport);
     this.backups = new MachineBackups(transport);
+    this.rdp = new MachineRdpNamespace(transport);
   }
 
   async create(params: MachineCreateParams = {}): Promise<Machine> {
@@ -654,6 +757,7 @@ export class Machines {
         isolated: false,
         labels: {},
         spec: specForCreate(params.spec, params),
+        os: params.os ?? "",
         ...deleteAfterFields(params),
       }, { region: params.region });
       const machine = await this.#complete(resp, params);
@@ -677,6 +781,8 @@ export class Machines {
       networks: params.networks ?? [],
       isolated: params.isolated ?? false,
       labels: params.labels ?? {},
+      // "" is Linux, as every machine before Windows ones.
+      os: params.os ?? "",
       ...deleteAfterFields(params),
     };
     const resp = await this.transport.unary(BoxdApiDefinition.methods.createVm, req, {
@@ -699,7 +805,35 @@ export class Machines {
       { vmId: id },
       { region: opts.region },
     );
-    return toMachine(resp, await this.transport.consoleOrigin(opts.region));
+    const machine = toMachine(resp, await this.transport.consoleOrigin(opts.region));
+    this.#noteOs(machine, opts.region, id);
+    return machine;
+  }
+
+  /** Remember a machine's OS under its id and `keys` (the name it was asked by). */
+  #noteOs(machine: Machine, region: string | undefined, ...keys: string[]): void {
+    for (const key of [machine.id, ...keys]) {
+      if (key) this.#osSeen.set(osKey(region, key), machine.os);
+    }
+  }
+
+  /**
+   * The command line `exec` sends: POSIX shell for a Linux machine, one
+   * PowerShell command for a Windows one. A plain string with no `cwd` or
+   * `env` is the same on both and goes as it is; otherwise the machine's OS
+   * is read once (`get`) and remembered for this client's lifetime.
+   */
+  async #commandLine(
+    id: string,
+    params: Pick<ExecParams, "command" | "env" | "cwd" | "region">,
+  ): Promise<string> {
+    const { command, env, cwd } = params;
+    if (typeof command === "string" && !cwd && Object.keys(env ?? {}).length === 0) {
+      return command;
+    }
+    const os =
+      this.#osSeen.get(osKey(params.region, id)) ?? (await this.get(id, { region: params.region })).os;
+    return os === "windows" ? powershellLine(command, env, cwd) : commandLine(command, env, cwd);
   }
 
   /**
@@ -1251,6 +1385,21 @@ export class Machines {
   }
 
   /**
+   * Turn RDP on or off for a Windows machine. Off: the connection to its RDP
+   * port is closed before a byte is relayed, on the public address or the
+   * org's network, and RDP connections already open to it are closed. The
+   * port stays allocated, so turning RDP back on keeps the address. Can't be
+   * called from inside the machine itself.
+   */
+  async setRdp(id: string, enabled: boolean, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.setRdp,
+      { vmId: id, enabled },
+      { region: opts.region },
+    );
+  }
+
+  /**
    * Run one command and collect its output.
    *
    * With `tty` the command runs under a PTY, which merges stderr into stdout —
@@ -1263,6 +1412,7 @@ export class Machines {
   async exec(id: string, params: ExecParams & { encoding: "buffer" }): Promise<ExecBytesResult>;
   async exec(id: string, params: ExecParams): Promise<ExecResult>;
   async exec(id: string, params: ExecParams): Promise<ExecResult | ExecBytesResult> {
+    const command = await this.#commandLine(id, params);
     // A machine whose agent didn't answer never got the command, so it is
     // run again, within the caller's `timeout` when there is one. Anything
     // else is reported as it is: the command may have run.
@@ -1271,7 +1421,7 @@ export class Machines {
       const left =
         attempt === 0 || deadline === undefined ? params.timeout : deadline - Date.now();
       try {
-        return await this.#execOnce(id, params, left);
+        return await this.#execOnce(id, params, command, left);
       } catch (err) {
         const backoff = EXEC_RETRY_BACKOFF_MS[attempt];
         if (
@@ -1286,10 +1436,14 @@ export class Machines {
     }
   }
 
-  /** One exec call, cancelled after `left` ms (what remains of `params.timeout`). */
+  /**
+   * One exec call of `command` (from `#commandLine`), cancelled after `left`
+   * ms (what remains of `params.timeout`).
+   */
   async #execOnce(
     id: string,
     params: ExecParams,
+    command: string,
     left: number | undefined,
   ): Promise<ExecResult | ExecBytesResult> {
     const call = this.transport.duplex(BoxdApiDefinition.methods.exec, {
@@ -1298,7 +1452,7 @@ export class Machines {
     });
     const init = execChunk({
       vmId: id,
-      command: commandLine(params.command, params.env, params.cwd),
+      command,
       tty: params.tty ?? false,
       cols: params.cols ?? 0,
       rows: params.rows ?? 0,
@@ -1406,6 +1560,7 @@ export class Machines {
 
     void (async () => {
       try {
+        const command = await this.#commandLine(id, params);
         const call = this.transport.duplex<ExecChunk, ExecChunk>(BoxdApiDefinition.methods.exec, {
           region: params.region,
           machine: id,
@@ -1438,7 +1593,7 @@ export class Machines {
         call.write(
           execChunk({
             vmId: id,
-            command: commandLine(params.command, params.env, params.cwd),
+            command,
             tty,
             cols: params.cols ?? 0,
             rows: params.rows ?? 0,
@@ -1486,7 +1641,7 @@ export class Machines {
 
   /**
    * Block until the machine is genuinely usable: status `running` **and** an
-   * exec round-trip succeeds.
+   * exec round-trip succeeds (on a Windows machine, through PowerShell).
    *
    * `create()` returns as soon as the machine is scheduled — exec may already
    * work while the machine still reports `pending`, and anything that gates on
@@ -1512,10 +1667,13 @@ export class Machines {
     if (machine.status !== "running") {
       throw new BoxdError(`machine ${machine.name} did not reach 'running' within ${timeout}ms`);
     }
+    // `true` is no PowerShell command; `exit 0` is, and a plain string goes
+    // to a Windows machine as it is.
+    const probe = machine.os === "windows" ? "exit 0" : ["true"];
 
     while (Date.now() < deadline) {
       try {
-        await this.exec(id, { command: ["true"], ...region });
+        await this.exec(id, { command: probe, ...region });
         return machine;
       } catch {
         await sleep(pollInterval);
@@ -1552,7 +1710,9 @@ export class Machines {
     const { deleteAfter, deleteAfterCron } = params;
     const region = { region: params.region };
     if (resp.machine && deleteAfterApplied(resp.machine, params)) {
-      return toMachine(resp.machine, await this.transport.consoleOrigin(params.region));
+      const machine = toMachine(resp.machine, await this.transport.consoleOrigin(params.region));
+      this.#noteOs(machine, params.region, machine.name);
+      return machine;
     }
     if (deleteAfterCron !== undefined) {
       await this.setDeleteAfterCron(resp.vmId, deleteAfterCron, region);
