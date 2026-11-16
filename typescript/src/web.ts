@@ -143,6 +143,23 @@ export type {
 } from "./computerOpenAI.js";
 export { MachinePorts } from "./ports.js";
 export { MachineProxies } from "./proxies.js";
+export { MachineAgents } from "./agents.js";
+export type {
+  AgentDelivery,
+  AgentEvent,
+  AgentEventType,
+  AgentEventsParams,
+  AgentFinishReason,
+  AgentInterruptResult,
+  AgentSendParams,
+  AgentSendResult,
+  AgentSendWhen,
+  AgentSession,
+  AgentSessionState,
+  AgentStartParams,
+  AgentToolKind,
+  Harness,
+} from "./agents.js";
 export { MachineCheckpoints } from "./checkpoints.js";
 export { MachineBackups } from "./backups.js";
 export { MachineRdpNamespace } from "./rdp.js";

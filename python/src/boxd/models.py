@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import base64 as _base64
 from datetime import datetime, timedelta, timezone
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, Field
 
@@ -717,6 +717,248 @@ class ComputerActionResult(BaseModel):
     screenshot: Screenshot | None = None
 
 
+# ── Coding agents ────────────────────────────────────────────────────
+
+
+class Harness(BaseModel):
+    """A coding agent a machine can run (``machines.agents.harnesses``)."""
+
+    id: str
+    """``"claude-code"``, ``"codex"`` or ``"opencode"``."""
+    version: str | None
+    """The version installed on the machine; None when it isn't installed."""
+    mid_turn_input: bool
+    """Whether a message can join a turn while it runs (``when="now"``).
+    Without it such a message waits for the next turn."""
+    models: list[str]
+    """Models the agent accepts in ``start(model=...)``; empty when the agent
+    doesn't list them."""
+
+
+AgentSessionState = Literal["idle", "running", "closed", "failed", "unknown"]
+"""``"idle"``: waiting for a message. ``"running"``: a turn is running.
+``"closed"``: ended with ``close()``. ``"failed"``: the agent can't go on; see
+``AgentSession.error``. ``"unknown"``: a state this SDK doesn't know yet."""
+
+AgentSendWhen = Literal["next", "now"]
+"""When a message reaches the agent (``machines.agents.send(when=...)``).
+
+``"next"`` (the default): a turn of its own, at once when the session is
+idle, else after the running turn and any messages already waiting.
+``"now"``: into the running turn, for the agent to take into account before
+the turn ends. An agent that can't take input mid-turn queues it for the next
+turn instead (``"queued_fallback"``); an idle session starts a turn with it."""
+
+AgentDelivery = Literal["started", "queued", "joined", "queued_fallback", "unknown"]
+"""What a message did. ``"started"``: started a turn. ``"queued"``: starts a
+turn once the running one ends. ``"joined"``: joined the running turn.
+``"queued_fallback"``: asked to join the running turn, but the agent can't
+take input mid-turn, so it is queued for the next turn instead.
+``"unknown"``: a delivery this SDK doesn't know yet."""
+
+AgentToolKind = Literal[
+    "shell", "edit", "read", "search", "web", "mcp", "computer", "other"
+]
+"""What a tool call does, the same for every agent; the agent's own tool name
+is in ``AgentToolStarted.name``. ``"shell"`` runs a command, ``"edit"`` writes
+or changes a file, ``"read"`` reads a file, ``"search"`` searches files or
+code, ``"web"`` fetches or searches the web, ``"mcp"`` calls an MCP server's
+tool, ``"computer"`` uses the desktop. A kind this SDK doesn't know yet is
+``"other"``."""
+
+AgentFinishReason = Literal[
+    "done",
+    "interrupted",
+    "timeout",
+    "max_steps",
+    "max_tokens",
+    "refused",
+    "failed",
+    "unknown",
+]
+"""Why a turn ended. ``"done"``: the agent finished its reply.
+``"interrupted"``: ``interrupt()``, ``close()``, or the machine stopped.
+``"timeout"`` / ``"max_steps"``: the ``timeout_secs`` / ``max_steps`` given to
+``send()`` ran out. ``"max_tokens"``: the model reached its output limit.
+``"refused"``: the model declined. ``"failed"``: see ``error``.
+``"unknown"``: a reason this SDK doesn't know yet."""
+
+
+class AgentSession(BaseModel):
+    """One conversation with one coding agent in a machine."""
+
+    id: str
+    machine_id: str
+    """The machine's id."""
+    harness: str
+    harness_version: str
+    """The agent version this session runs. It doesn't change during the
+    session, even if the machine's agent is updated meanwhile."""
+    model: str | None
+    """None: the agent's own default."""
+    cwd: str
+    """The directory the agent works in."""
+    state: AgentSessionState
+    turn: int
+    """The turn running now, or the last one; 0 before the first."""
+    queued: int
+    """Messages waiting for the running turn to end, each its own turn."""
+    last_seq: int
+    """The latest event's ``seq``; 0 before the first."""
+    created_at: datetime
+    error: str | None
+    """For a failed session: what went wrong and what to do about it. None
+    otherwise."""
+
+
+class AgentSendResult(BaseModel):
+    """What ``machines.agents.send`` did with the message."""
+
+    turn: int
+    """The turn the message started or joined, or the one it will start."""
+    delivery: AgentDelivery
+
+
+class AgentInterruptResult(BaseModel):
+    """What ``machines.agents.interrupt`` stopped."""
+
+    turn: int | None
+    """The turn that was interrupted; None when none was running."""
+
+
+class AgentEventBase(BaseModel):
+    """What every event of a session carries. A session's events are numbered
+    1, 2, 3… (``seq``), so a client that reconnects asks for
+    ``after_seq`` = the last one it saw and misses nothing."""
+
+    seq: int
+    turn: int
+    """The turn it belongs to."""
+    time: datetime
+
+
+class AgentTurnStarted(AgentEventBase):
+    """A turn began."""
+
+    type: Literal["turn.started"] = "turn.started"
+
+
+class AgentUserMessage(AgentEventBase):
+    """A message the turn received: the one that started it, or one that
+    joined it while it ran."""
+
+    type: Literal["user.message"] = "user.message"
+    text: str
+    delivery: AgentDelivery
+
+
+class AgentMessageDelta(AgentEventBase):
+    """The next piece of the agent's reply, as it is written."""
+
+    type: Literal["message.delta"] = "message.delta"
+    text: str
+
+
+class AgentMessage(AgentEventBase):
+    """One whole reply, once written: what its deltas add up to."""
+
+    type: Literal["message"] = "message"
+    text: str
+
+
+class AgentThinkingDelta(AgentEventBase):
+    """The next piece of the agent's reasoning, for agents that show it."""
+
+    type: Literal["thinking.delta"] = "thinking.delta"
+    text: str
+
+
+class AgentToolStarted(AgentEventBase):
+    """The agent called a tool."""
+
+    type: Literal["tool.started"] = "tool.started"
+    call_id: str
+    """Ties the call's output and end to it."""
+    kind: AgentToolKind
+    name: str
+    """The agent's own name for the tool (``Bash``, ``shell``, …)."""
+    input: Any = None
+    """The call's input as the agent sent it: the JSON parsed, the raw text
+    when it isn't JSON, None when there was none."""
+
+
+class AgentToolOutput(AgentEventBase):
+    """Output a tool call produces while it runs, such as a command's output."""
+
+    type: Literal["tool.output"] = "tool.output"
+    call_id: str
+    text: str
+
+
+class AgentToolFinished(AgentEventBase):
+    """A tool call ended."""
+
+    type: Literal["tool.finished"] = "tool.finished"
+    call_id: str
+    is_error: bool
+    result: str
+    """The result as the agent received it; long results may be cut short."""
+
+
+class AgentPlanItem(BaseModel):
+    """One entry of the agent's to-do list."""
+
+    text: str
+    status: str
+    """``"pending"``, ``"in_progress"`` or ``"done"``."""
+
+
+class AgentPlan(AgentEventBase):
+    """The agent's to-do list for the turn, whole each time it changes."""
+
+    type: Literal["plan"] = "plan"
+    items: list[AgentPlanItem]
+
+
+class AgentUsage(AgentEventBase):
+    """Tokens the turn has used so far, as the agent reports them; sent at
+    least once per turn, before it finishes."""
+
+    type: Literal["usage"] = "usage"
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+
+
+class AgentTurnFinished(AgentEventBase):
+    """The last event of every turn."""
+
+    type: Literal["turn.finished"] = "turn.finished"
+    reason: AgentFinishReason
+    error: str | None
+    """For ``"failed"``: what went wrong and what to do about it. None
+    otherwise."""
+
+
+AgentEvent = Union[
+    AgentTurnStarted,
+    AgentUserMessage,
+    AgentMessageDelta,
+    AgentMessage,
+    AgentThinkingDelta,
+    AgentToolStarted,
+    AgentToolOutput,
+    AgentToolFinished,
+    AgentPlan,
+    AgentUsage,
+    AgentTurnFinished,
+]
+"""What happened in a session, in order: one of the event classes above.
+Tell them apart by ``type`` (or ``isinstance``). New kinds may be added later;
+``machines.agents.events`` skips the ones this SDK doesn't know."""
+
+
 # ── Snapshots ────────────────────────────────────────────────────────
 
 
@@ -1303,6 +1545,28 @@ class RegionalList(list, Generic[_T]):
 
 __all__ = [
     "Account",
+    "AgentDelivery",
+    "AgentEvent",
+    "AgentEventBase",
+    "AgentFinishReason",
+    "AgentInterruptResult",
+    "AgentMessage",
+    "AgentMessageDelta",
+    "AgentPlan",
+    "AgentPlanItem",
+    "AgentSendResult",
+    "AgentSendWhen",
+    "AgentSession",
+    "AgentSessionState",
+    "AgentThinkingDelta",
+    "AgentToolFinished",
+    "AgentToolKind",
+    "AgentToolOutput",
+    "AgentToolStarted",
+    "AgentTurnFinished",
+    "AgentTurnStarted",
+    "AgentUsage",
+    "AgentUserMessage",
     "ApiKey",
     "Billing",
     "Checkpoint",
@@ -1321,6 +1585,7 @@ __all__ = [
     "ExecResult",
     "SelfDeleteResult",
     "ExposedPort",
+    "Harness",
     "Machine",
     "MachineAccess",
     "MachineIdle",

@@ -237,8 +237,10 @@ export class Transport implements ITransport {
     // synchronously (matches grpc-js's own shape), so proxy events until the
     // real stream is up.
     const handlers: Record<string, ((arg: unknown) => void)[]> = {};
-    let live: { cancel(): void } | undefined;
+    let live: { cancel(): void; pause(): unknown; resume(): unknown } | undefined;
     let cancelled = false;
+    // Asked before the call was up: applied once it is.
+    let paused = false;
     const proxy: ReadableCall<Resp> = {
       on(event, fn) {
         (handlers[event] ??= []).push(fn as (arg: unknown) => void);
@@ -246,6 +248,14 @@ export class Transport implements ITransport {
       cancel() {
         cancelled = true;
         live?.cancel();
+      },
+      pause() {
+        paused = true;
+        live?.pause();
+      },
+      resume() {
+        paused = false;
+        live?.resume();
       },
     };
     void (async () => {
@@ -268,6 +278,8 @@ export class Transport implements ITransport {
         call.on("data", (msg: Resp) => {
           if (!cancelled) emit(handlers, "data", msg);
         });
+        // After the "data" handler: adding one resumes a Node stream.
+        if (paused) call.pause();
         call.on("error", (err: ServiceError) => {
           if (!cancelled) emit(handlers, "error", fromGrpcError(err));
         });

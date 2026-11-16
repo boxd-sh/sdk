@@ -62,6 +62,331 @@ export function fsEntryTypeToJSON(object: FsEntryType): string {
   }
 }
 
+export enum AgentSessionState {
+  AGENT_SESSION_STATE_UNSPECIFIED = 0,
+  /** AGENT_SESSION_STATE_IDLE - waiting for a message */
+  AGENT_SESSION_STATE_IDLE = 1,
+  /** AGENT_SESSION_STATE_RUNNING - a turn is running */
+  AGENT_SESSION_STATE_RUNNING = 2,
+  /** AGENT_SESSION_STATE_CLOSED - ended with CloseAgentSession */
+  AGENT_SESSION_STATE_CLOSED = 3,
+  /** AGENT_SESSION_STATE_FAILED - the agent can't go on; see `error` */
+  AGENT_SESSION_STATE_FAILED = 4,
+  UNRECOGNIZED = -1,
+}
+
+export function agentSessionStateFromJSON(object: any): AgentSessionState {
+  switch (object) {
+    case 0:
+    case "AGENT_SESSION_STATE_UNSPECIFIED":
+      return AgentSessionState.AGENT_SESSION_STATE_UNSPECIFIED;
+    case 1:
+    case "AGENT_SESSION_STATE_IDLE":
+      return AgentSessionState.AGENT_SESSION_STATE_IDLE;
+    case 2:
+    case "AGENT_SESSION_STATE_RUNNING":
+      return AgentSessionState.AGENT_SESSION_STATE_RUNNING;
+    case 3:
+    case "AGENT_SESSION_STATE_CLOSED":
+      return AgentSessionState.AGENT_SESSION_STATE_CLOSED;
+    case 4:
+    case "AGENT_SESSION_STATE_FAILED":
+      return AgentSessionState.AGENT_SESSION_STATE_FAILED;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return AgentSessionState.UNRECOGNIZED;
+  }
+}
+
+export function agentSessionStateToJSON(object: AgentSessionState): string {
+  switch (object) {
+    case AgentSessionState.AGENT_SESSION_STATE_UNSPECIFIED:
+      return "AGENT_SESSION_STATE_UNSPECIFIED";
+    case AgentSessionState.AGENT_SESSION_STATE_IDLE:
+      return "AGENT_SESSION_STATE_IDLE";
+    case AgentSessionState.AGENT_SESSION_STATE_RUNNING:
+      return "AGENT_SESSION_STATE_RUNNING";
+    case AgentSessionState.AGENT_SESSION_STATE_CLOSED:
+      return "AGENT_SESSION_STATE_CLOSED";
+    case AgentSessionState.AGENT_SESSION_STATE_FAILED:
+      return "AGENT_SESSION_STATE_FAILED";
+    case AgentSessionState.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
+export enum AgentSendWhen {
+  /** AGENT_SEND_WHEN_UNSPECIFIED - the same as NEXT */
+  AGENT_SEND_WHEN_UNSPECIFIED = 0,
+  /**
+   * AGENT_SEND_WHEN_NEXT - A turn of its own: at once when the session is idle, else after the
+   * running turn and any messages already waiting.
+   */
+  AGENT_SEND_WHEN_NEXT = 1,
+  /**
+   * AGENT_SEND_WHEN_NOW - Into the running turn, for the agent to take into account before the
+   * turn ends. An agent that can't take input mid-turn queues it for the
+   * next turn instead (`AGENT_DELIVERY_QUEUED_FALLBACK`); an idle session
+   * starts a turn with it.
+   */
+  AGENT_SEND_WHEN_NOW = 2,
+  UNRECOGNIZED = -1,
+}
+
+export function agentSendWhenFromJSON(object: any): AgentSendWhen {
+  switch (object) {
+    case 0:
+    case "AGENT_SEND_WHEN_UNSPECIFIED":
+      return AgentSendWhen.AGENT_SEND_WHEN_UNSPECIFIED;
+    case 1:
+    case "AGENT_SEND_WHEN_NEXT":
+      return AgentSendWhen.AGENT_SEND_WHEN_NEXT;
+    case 2:
+    case "AGENT_SEND_WHEN_NOW":
+      return AgentSendWhen.AGENT_SEND_WHEN_NOW;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return AgentSendWhen.UNRECOGNIZED;
+  }
+}
+
+export function agentSendWhenToJSON(object: AgentSendWhen): string {
+  switch (object) {
+    case AgentSendWhen.AGENT_SEND_WHEN_UNSPECIFIED:
+      return "AGENT_SEND_WHEN_UNSPECIFIED";
+    case AgentSendWhen.AGENT_SEND_WHEN_NEXT:
+      return "AGENT_SEND_WHEN_NEXT";
+    case AgentSendWhen.AGENT_SEND_WHEN_NOW:
+      return "AGENT_SEND_WHEN_NOW";
+    case AgentSendWhen.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
+export enum AgentDelivery {
+  AGENT_DELIVERY_UNSPECIFIED = 0,
+  /** AGENT_DELIVERY_STARTED - started a turn */
+  AGENT_DELIVERY_STARTED = 1,
+  /** AGENT_DELIVERY_QUEUED - starts a turn once the running one ends */
+  AGENT_DELIVERY_QUEUED = 2,
+  /** AGENT_DELIVERY_JOINED - joined the running turn */
+  AGENT_DELIVERY_JOINED = 3,
+  /**
+   * AGENT_DELIVERY_QUEUED_FALLBACK - Asked to join the running turn, but the agent can't take input mid-turn:
+   * queued for the next turn instead.
+   */
+  AGENT_DELIVERY_QUEUED_FALLBACK = 4,
+  UNRECOGNIZED = -1,
+}
+
+export function agentDeliveryFromJSON(object: any): AgentDelivery {
+  switch (object) {
+    case 0:
+    case "AGENT_DELIVERY_UNSPECIFIED":
+      return AgentDelivery.AGENT_DELIVERY_UNSPECIFIED;
+    case 1:
+    case "AGENT_DELIVERY_STARTED":
+      return AgentDelivery.AGENT_DELIVERY_STARTED;
+    case 2:
+    case "AGENT_DELIVERY_QUEUED":
+      return AgentDelivery.AGENT_DELIVERY_QUEUED;
+    case 3:
+    case "AGENT_DELIVERY_JOINED":
+      return AgentDelivery.AGENT_DELIVERY_JOINED;
+    case 4:
+    case "AGENT_DELIVERY_QUEUED_FALLBACK":
+      return AgentDelivery.AGENT_DELIVERY_QUEUED_FALLBACK;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return AgentDelivery.UNRECOGNIZED;
+  }
+}
+
+export function agentDeliveryToJSON(object: AgentDelivery): string {
+  switch (object) {
+    case AgentDelivery.AGENT_DELIVERY_UNSPECIFIED:
+      return "AGENT_DELIVERY_UNSPECIFIED";
+    case AgentDelivery.AGENT_DELIVERY_STARTED:
+      return "AGENT_DELIVERY_STARTED";
+    case AgentDelivery.AGENT_DELIVERY_QUEUED:
+      return "AGENT_DELIVERY_QUEUED";
+    case AgentDelivery.AGENT_DELIVERY_JOINED:
+      return "AGENT_DELIVERY_JOINED";
+    case AgentDelivery.AGENT_DELIVERY_QUEUED_FALLBACK:
+      return "AGENT_DELIVERY_QUEUED_FALLBACK";
+    case AgentDelivery.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
+/**
+ * What a tool call does, the same for every agent; the agent's own tool
+ * name is in `AgentToolStarted.name`.
+ */
+export enum AgentToolKind {
+  AGENT_TOOL_KIND_UNSPECIFIED = 0,
+  /** AGENT_TOOL_KIND_SHELL - runs a command */
+  AGENT_TOOL_KIND_SHELL = 1,
+  /** AGENT_TOOL_KIND_EDIT - writes or changes a file */
+  AGENT_TOOL_KIND_EDIT = 2,
+  /** AGENT_TOOL_KIND_READ - reads a file */
+  AGENT_TOOL_KIND_READ = 3,
+  /** AGENT_TOOL_KIND_SEARCH - searches files or code */
+  AGENT_TOOL_KIND_SEARCH = 4,
+  /** AGENT_TOOL_KIND_WEB - fetches or searches the web */
+  AGENT_TOOL_KIND_WEB = 5,
+  /** AGENT_TOOL_KIND_MCP - calls an MCP server's tool */
+  AGENT_TOOL_KIND_MCP = 6,
+  /** AGENT_TOOL_KIND_COMPUTER - uses the desktop */
+  AGENT_TOOL_KIND_COMPUTER = 7,
+  AGENT_TOOL_KIND_OTHER = 8,
+  UNRECOGNIZED = -1,
+}
+
+export function agentToolKindFromJSON(object: any): AgentToolKind {
+  switch (object) {
+    case 0:
+    case "AGENT_TOOL_KIND_UNSPECIFIED":
+      return AgentToolKind.AGENT_TOOL_KIND_UNSPECIFIED;
+    case 1:
+    case "AGENT_TOOL_KIND_SHELL":
+      return AgentToolKind.AGENT_TOOL_KIND_SHELL;
+    case 2:
+    case "AGENT_TOOL_KIND_EDIT":
+      return AgentToolKind.AGENT_TOOL_KIND_EDIT;
+    case 3:
+    case "AGENT_TOOL_KIND_READ":
+      return AgentToolKind.AGENT_TOOL_KIND_READ;
+    case 4:
+    case "AGENT_TOOL_KIND_SEARCH":
+      return AgentToolKind.AGENT_TOOL_KIND_SEARCH;
+    case 5:
+    case "AGENT_TOOL_KIND_WEB":
+      return AgentToolKind.AGENT_TOOL_KIND_WEB;
+    case 6:
+    case "AGENT_TOOL_KIND_MCP":
+      return AgentToolKind.AGENT_TOOL_KIND_MCP;
+    case 7:
+    case "AGENT_TOOL_KIND_COMPUTER":
+      return AgentToolKind.AGENT_TOOL_KIND_COMPUTER;
+    case 8:
+    case "AGENT_TOOL_KIND_OTHER":
+      return AgentToolKind.AGENT_TOOL_KIND_OTHER;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return AgentToolKind.UNRECOGNIZED;
+  }
+}
+
+export function agentToolKindToJSON(object: AgentToolKind): string {
+  switch (object) {
+    case AgentToolKind.AGENT_TOOL_KIND_UNSPECIFIED:
+      return "AGENT_TOOL_KIND_UNSPECIFIED";
+    case AgentToolKind.AGENT_TOOL_KIND_SHELL:
+      return "AGENT_TOOL_KIND_SHELL";
+    case AgentToolKind.AGENT_TOOL_KIND_EDIT:
+      return "AGENT_TOOL_KIND_EDIT";
+    case AgentToolKind.AGENT_TOOL_KIND_READ:
+      return "AGENT_TOOL_KIND_READ";
+    case AgentToolKind.AGENT_TOOL_KIND_SEARCH:
+      return "AGENT_TOOL_KIND_SEARCH";
+    case AgentToolKind.AGENT_TOOL_KIND_WEB:
+      return "AGENT_TOOL_KIND_WEB";
+    case AgentToolKind.AGENT_TOOL_KIND_MCP:
+      return "AGENT_TOOL_KIND_MCP";
+    case AgentToolKind.AGENT_TOOL_KIND_COMPUTER:
+      return "AGENT_TOOL_KIND_COMPUTER";
+    case AgentToolKind.AGENT_TOOL_KIND_OTHER:
+      return "AGENT_TOOL_KIND_OTHER";
+    case AgentToolKind.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
+export enum AgentFinishReason {
+  AGENT_FINISH_REASON_UNSPECIFIED = 0,
+  /** AGENT_FINISH_REASON_DONE - the agent finished its reply */
+  AGENT_FINISH_REASON_DONE = 1,
+  /** AGENT_FINISH_REASON_INTERRUPTED - InterruptAgent, CloseAgentSession, or the machine stopped. */
+  AGENT_FINISH_REASON_INTERRUPTED = 2,
+  /** AGENT_FINISH_REASON_TIMEOUT - `timeout_secs` ran out */
+  AGENT_FINISH_REASON_TIMEOUT = 3,
+  /** AGENT_FINISH_REASON_MAX_STEPS - `max_steps` ran out */
+  AGENT_FINISH_REASON_MAX_STEPS = 4,
+  /** AGENT_FINISH_REASON_MAX_TOKENS - the model reached its output limit */
+  AGENT_FINISH_REASON_MAX_TOKENS = 5,
+  /** AGENT_FINISH_REASON_REFUSED - the model declined */
+  AGENT_FINISH_REASON_REFUSED = 6,
+  /** AGENT_FINISH_REASON_FAILED - see `error` */
+  AGENT_FINISH_REASON_FAILED = 7,
+  UNRECOGNIZED = -1,
+}
+
+export function agentFinishReasonFromJSON(object: any): AgentFinishReason {
+  switch (object) {
+    case 0:
+    case "AGENT_FINISH_REASON_UNSPECIFIED":
+      return AgentFinishReason.AGENT_FINISH_REASON_UNSPECIFIED;
+    case 1:
+    case "AGENT_FINISH_REASON_DONE":
+      return AgentFinishReason.AGENT_FINISH_REASON_DONE;
+    case 2:
+    case "AGENT_FINISH_REASON_INTERRUPTED":
+      return AgentFinishReason.AGENT_FINISH_REASON_INTERRUPTED;
+    case 3:
+    case "AGENT_FINISH_REASON_TIMEOUT":
+      return AgentFinishReason.AGENT_FINISH_REASON_TIMEOUT;
+    case 4:
+    case "AGENT_FINISH_REASON_MAX_STEPS":
+      return AgentFinishReason.AGENT_FINISH_REASON_MAX_STEPS;
+    case 5:
+    case "AGENT_FINISH_REASON_MAX_TOKENS":
+      return AgentFinishReason.AGENT_FINISH_REASON_MAX_TOKENS;
+    case 6:
+    case "AGENT_FINISH_REASON_REFUSED":
+      return AgentFinishReason.AGENT_FINISH_REASON_REFUSED;
+    case 7:
+    case "AGENT_FINISH_REASON_FAILED":
+      return AgentFinishReason.AGENT_FINISH_REASON_FAILED;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return AgentFinishReason.UNRECOGNIZED;
+  }
+}
+
+export function agentFinishReasonToJSON(object: AgentFinishReason): string {
+  switch (object) {
+    case AgentFinishReason.AGENT_FINISH_REASON_UNSPECIFIED:
+      return "AGENT_FINISH_REASON_UNSPECIFIED";
+    case AgentFinishReason.AGENT_FINISH_REASON_DONE:
+      return "AGENT_FINISH_REASON_DONE";
+    case AgentFinishReason.AGENT_FINISH_REASON_INTERRUPTED:
+      return "AGENT_FINISH_REASON_INTERRUPTED";
+    case AgentFinishReason.AGENT_FINISH_REASON_TIMEOUT:
+      return "AGENT_FINISH_REASON_TIMEOUT";
+    case AgentFinishReason.AGENT_FINISH_REASON_MAX_STEPS:
+      return "AGENT_FINISH_REASON_MAX_STEPS";
+    case AgentFinishReason.AGENT_FINISH_REASON_MAX_TOKENS:
+      return "AGENT_FINISH_REASON_MAX_TOKENS";
+    case AgentFinishReason.AGENT_FINISH_REASON_REFUSED:
+      return "AGENT_FINISH_REASON_REFUSED";
+    case AgentFinishReason.AGENT_FINISH_REASON_FAILED:
+      return "AGENT_FINISH_REASON_FAILED";
+    case AgentFinishReason.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
 /**
  * VM configuration — all fields use 0/empty as "use default".
  *
@@ -2160,6 +2485,261 @@ export interface FsRealpathRequest {
 export interface FsRealpathResponse {
   /** absolute, without symlinks, `.` or `..` */
   path: Uint8Array;
+}
+
+/** A coding agent a machine can run. */
+export interface Harness {
+  /** `claude-code`, `codex` or `opencode`. */
+  id: string;
+  /** The version installed on the machine; empty when it isn't installed. */
+  version: string;
+  /**
+   * Whether a message can join a turn while it runs (`AGENT_SEND_WHEN_NOW`).
+   * Without it such a message waits for the next turn.
+   */
+  midTurnInput: boolean;
+  /**
+   * Models the agent accepts in `StartAgentSessionRequest.model`; empty when
+   * the agent doesn't list them.
+   */
+  models: string[];
+}
+
+export interface ListHarnessesRequest {
+  /** machine name or id */
+  vmId: string;
+}
+
+export interface ListHarnessesResponse {
+  harnesses: Harness[];
+}
+
+export interface StartAgentSessionRequest {
+  /** machine name or id */
+  vmId: string;
+  /** `claude-code`, `codex` or `opencode` (ListHarnesses). */
+  harness: string;
+  /** Empty: the agent's own default. */
+  model: string;
+  /**
+   * The directory the agent works in. Empty: the home directory of the
+   * machine's user.
+   */
+  cwd: string;
+  /** Added to the agent's own system prompt, never replacing it. */
+  instructions: string;
+  /**
+   * Environment variables for this session's agent, on top of the machine's
+   * own variables and secrets.
+   */
+  env: { [key: string]: string };
+}
+
+export interface StartAgentSessionRequest_EnvEntry {
+  key: string;
+  value: string;
+}
+
+export interface AgentSession {
+  id: string;
+  /** the machine's id */
+  vmId: string;
+  harness: string;
+  /**
+   * The agent version this session runs. It doesn't change during the
+   * session, even if the machine's agent is updated meanwhile.
+   */
+  harnessVersion: string;
+  model: string;
+  cwd: string;
+  state: AgentSessionState;
+  /** The turn running now, or the last one; 0 before the first. */
+  turn: number;
+  /** Messages waiting for the running turn to end, each its own turn. */
+  queued: number;
+  /** The latest event's `seq`; 0 before the first. */
+  lastSeq: number;
+  createdAtMs: number;
+  /** For a failed session: what went wrong and what to do about it. */
+  error: string;
+}
+
+export interface SendToAgentRequest {
+  /** machine name or id */
+  vmId: string;
+  sessionId: string;
+  text: string;
+  when: AgentSendWhen;
+  /**
+   * For a turn this message starts: interrupt it after this many seconds,
+   * or after this many agent steps: calls to the model for Claude Code,
+   * tool calls for Codex (which reports no model calls). 0: no limit. They
+   * don't apply to a running turn the message joins.
+   */
+  timeoutSecs: number;
+  maxSteps: number;
+}
+
+export interface SendToAgentResponse {
+  /** The turn the message started or joined, or the one it will start. */
+  turn: number;
+  delivery: AgentDelivery;
+}
+
+export interface InterruptAgentRequest {
+  /** machine name or id */
+  vmId: string;
+  sessionId: string;
+  /**
+   * Also drop the messages waiting for the next turns. Without it, the next
+   * waiting message starts its turn once the interrupted one has ended.
+   */
+  clearQueue: boolean;
+}
+
+export interface InterruptAgentResponse {
+  /** The turn that was interrupted; 0 when none was running. */
+  turn: number;
+}
+
+export interface CloseAgentSessionRequest {
+  /** machine name or id */
+  vmId: string;
+  sessionId: string;
+}
+
+export interface CloseAgentSessionResponse {
+}
+
+export interface GetAgentSessionRequest {
+  /** machine name or id */
+  vmId: string;
+  sessionId: string;
+}
+
+export interface ListAgentSessionsRequest {
+  /** machine name or id */
+  vmId: string;
+  /** Include closed and failed sessions. */
+  all: boolean;
+}
+
+export interface ListAgentSessionsResponse {
+  sessions: AgentSession[];
+}
+
+export interface AgentEventsRequest {
+  /** machine name or id */
+  vmId: string;
+  sessionId: string;
+  /** Start after this event; 0: from the session's first event. */
+  afterSeq: number;
+  /** Keep the stream open and carry new events as they happen. */
+  follow: boolean;
+}
+
+/**
+ * What happened in a session, in order. A session's events are numbered 1,
+ * 2, 3… (`seq`), so a client that reconnects asks for `after_seq` = the last
+ * one it saw and misses nothing. Their kinds are typed and look the same for
+ * every agent. New kinds may be added later: a client skips the ones it
+ * doesn't know.
+ */
+export interface AgentEvent {
+  seq: number;
+  /** The turn it belongs to. */
+  turn: number;
+  timeMs: number;
+  turnStarted?: AgentTurnStarted | undefined;
+  userMessage?: AgentUserMessage | undefined;
+  messageDelta?: AgentMessageDelta | undefined;
+  message?: AgentMessage | undefined;
+  thinkingDelta?: AgentThinkingDelta | undefined;
+  toolStarted?: AgentToolStarted | undefined;
+  toolOutput?: AgentToolOutput | undefined;
+  toolFinished?: AgentToolFinished | undefined;
+  plan?: AgentPlan | undefined;
+  usage?: AgentUsage | undefined;
+  turnFinished?: AgentTurnFinished | undefined;
+}
+
+export interface AgentTurnStarted {
+}
+
+/**
+ * A message the turn received: the one that started it, or one that joined
+ * it while it ran.
+ */
+export interface AgentUserMessage {
+  text: string;
+  delivery: AgentDelivery;
+}
+
+/** The next piece of the agent's reply, as it is written. */
+export interface AgentMessageDelta {
+  text: string;
+}
+
+/** One whole reply, once written: what its deltas add up to. */
+export interface AgentMessage {
+  text: string;
+}
+
+/** The next piece of the agent's reasoning, for agents that show it. */
+export interface AgentThinkingDelta {
+  text: string;
+}
+
+export interface AgentToolStarted {
+  /** Ties the call's output and end to it. */
+  callId: string;
+  kind: AgentToolKind;
+  /** The agent's own name for the tool (`Bash`, `shell`, …). */
+  name: string;
+  /** The call's input as the agent sent it, as JSON. */
+  inputJson: string;
+}
+
+/** Output a tool call produces while it runs, such as a command's output. */
+export interface AgentToolOutput {
+  callId: string;
+  text: string;
+}
+
+export interface AgentToolFinished {
+  callId: string;
+  isError: boolean;
+  /** The result as the agent received it; long results may be cut short. */
+  result: string;
+}
+
+/** The agent's to-do list for the turn, whole each time it changes. */
+export interface AgentPlan {
+  items: AgentPlanItem[];
+}
+
+export interface AgentPlanItem {
+  text: string;
+  /** `pending`, `in_progress` or `done`. */
+  status: string;
+}
+
+/**
+ * Tokens the turn has used so far, as the agent reports them; sent at least
+ * once per turn, before it finishes.
+ */
+export interface AgentUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+/** The last event of every turn. */
+export interface AgentTurnFinished {
+  reason: AgentFinishReason;
+  /** For FAILED: what went wrong and what to do about it. */
+  error: string;
 }
 
 export interface CreateSnapshotRequest {
@@ -20498,6 +21078,2885 @@ export const FsRealpathResponse: MessageFns<FsRealpathResponse> = {
   },
 };
 
+function createBaseHarness(): Harness {
+  return { id: "", version: "", midTurnInput: false, models: [] };
+}
+
+export const Harness: MessageFns<Harness> = {
+  encode(message: Harness, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.id !== "") {
+      writer.uint32(10).string(message.id);
+    }
+    if (message.version !== "") {
+      writer.uint32(18).string(message.version);
+    }
+    if (message.midTurnInput !== false) {
+      writer.uint32(24).bool(message.midTurnInput);
+    }
+    for (const v of message.models) {
+      writer.uint32(34).string(v!);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): Harness {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseHarness();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.id = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.version = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.midTurnInput = reader.bool();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.models.push(reader.string());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): Harness {
+    return {
+      id: isSet(object.id) ? globalThis.String(object.id) : "",
+      version: isSet(object.version) ? globalThis.String(object.version) : "",
+      midTurnInput: isSet(object.midTurnInput)
+        ? globalThis.Boolean(object.midTurnInput)
+        : isSet(object.mid_turn_input)
+        ? globalThis.Boolean(object.mid_turn_input)
+        : false,
+      models: globalThis.Array.isArray(object?.models) ? object.models.map((e: any) => globalThis.String(e)) : [],
+    };
+  },
+
+  toJSON(message: Harness): unknown {
+    const obj: any = {};
+    if (message.id !== "") {
+      obj.id = message.id;
+    }
+    if (message.version !== "") {
+      obj.version = message.version;
+    }
+    if (message.midTurnInput !== false) {
+      obj.midTurnInput = message.midTurnInput;
+    }
+    if (message.models?.length) {
+      obj.models = message.models;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<Harness>): Harness {
+    return Harness.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<Harness>): Harness {
+    const message = createBaseHarness();
+    message.id = object.id ?? "";
+    message.version = object.version ?? "";
+    message.midTurnInput = object.midTurnInput ?? false;
+    message.models = object.models?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseListHarnessesRequest(): ListHarnessesRequest {
+  return { vmId: "" };
+}
+
+export const ListHarnessesRequest: MessageFns<ListHarnessesRequest> = {
+  encode(message: ListHarnessesRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ListHarnessesRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseListHarnessesRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ListHarnessesRequest {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+    };
+  },
+
+  toJSON(message: ListHarnessesRequest): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ListHarnessesRequest>): ListHarnessesRequest {
+    return ListHarnessesRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ListHarnessesRequest>): ListHarnessesRequest {
+    const message = createBaseListHarnessesRequest();
+    message.vmId = object.vmId ?? "";
+    return message;
+  },
+};
+
+function createBaseListHarnessesResponse(): ListHarnessesResponse {
+  return { harnesses: [] };
+}
+
+export const ListHarnessesResponse: MessageFns<ListHarnessesResponse> = {
+  encode(message: ListHarnessesResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    for (const v of message.harnesses) {
+      Harness.encode(v!, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ListHarnessesResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseListHarnessesResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.harnesses.push(Harness.decode(reader, reader.uint32()));
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ListHarnessesResponse {
+    return {
+      harnesses: globalThis.Array.isArray(object?.harnesses)
+        ? object.harnesses.map((e: any) => Harness.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ListHarnessesResponse): unknown {
+    const obj: any = {};
+    if (message.harnesses?.length) {
+      obj.harnesses = message.harnesses.map((e) => Harness.toJSON(e));
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ListHarnessesResponse>): ListHarnessesResponse {
+    return ListHarnessesResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ListHarnessesResponse>): ListHarnessesResponse {
+    const message = createBaseListHarnessesResponse();
+    message.harnesses = object.harnesses?.map((e) => Harness.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseStartAgentSessionRequest(): StartAgentSessionRequest {
+  return { vmId: "", harness: "", model: "", cwd: "", instructions: "", env: {} };
+}
+
+export const StartAgentSessionRequest: MessageFns<StartAgentSessionRequest> = {
+  encode(message: StartAgentSessionRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    if (message.harness !== "") {
+      writer.uint32(18).string(message.harness);
+    }
+    if (message.model !== "") {
+      writer.uint32(26).string(message.model);
+    }
+    if (message.cwd !== "") {
+      writer.uint32(34).string(message.cwd);
+    }
+    if (message.instructions !== "") {
+      writer.uint32(42).string(message.instructions);
+    }
+    globalThis.Object.entries(message.env).forEach(([key, value]: [string, string]) => {
+      StartAgentSessionRequest_EnvEntry.encode({ key: key as any, value }, writer.uint32(50).fork()).join();
+    });
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): StartAgentSessionRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseStartAgentSessionRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.harness = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.model = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.cwd = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.instructions = reader.string();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          const entry6 = StartAgentSessionRequest_EnvEntry.decode(reader, reader.uint32());
+          if (entry6.value !== undefined) {
+            message.env[entry6.key] = entry6.value;
+          }
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): StartAgentSessionRequest {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      harness: isSet(object.harness) ? globalThis.String(object.harness) : "",
+      model: isSet(object.model) ? globalThis.String(object.model) : "",
+      cwd: isSet(object.cwd) ? globalThis.String(object.cwd) : "",
+      instructions: isSet(object.instructions) ? globalThis.String(object.instructions) : "",
+      env: isObject(object.env)
+        ? (globalThis.Object.entries(object.env) as [string, any][]).reduce(
+          (acc: { [key: string]: string }, [key, value]: [string, any]) => {
+            acc[key] = globalThis.String(value);
+            return acc;
+          },
+          {},
+        )
+        : {},
+    };
+  },
+
+  toJSON(message: StartAgentSessionRequest): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.harness !== "") {
+      obj.harness = message.harness;
+    }
+    if (message.model !== "") {
+      obj.model = message.model;
+    }
+    if (message.cwd !== "") {
+      obj.cwd = message.cwd;
+    }
+    if (message.instructions !== "") {
+      obj.instructions = message.instructions;
+    }
+    if (message.env) {
+      const entries = globalThis.Object.entries(message.env) as [string, string][];
+      if (entries.length > 0) {
+        obj.env = {};
+        entries.forEach(([k, v]) => {
+          obj.env[k] = v;
+        });
+      }
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<StartAgentSessionRequest>): StartAgentSessionRequest {
+    return StartAgentSessionRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<StartAgentSessionRequest>): StartAgentSessionRequest {
+    const message = createBaseStartAgentSessionRequest();
+    message.vmId = object.vmId ?? "";
+    message.harness = object.harness ?? "";
+    message.model = object.model ?? "";
+    message.cwd = object.cwd ?? "";
+    message.instructions = object.instructions ?? "";
+    message.env = (globalThis.Object.entries(object.env ?? {}) as [string, string][]).reduce(
+      (acc: { [key: string]: string }, [key, value]: [string, string]) => {
+        if (value !== undefined) {
+          acc[key] = globalThis.String(value);
+        }
+        return acc;
+      },
+      {},
+    );
+    return message;
+  },
+};
+
+function createBaseStartAgentSessionRequest_EnvEntry(): StartAgentSessionRequest_EnvEntry {
+  return { key: "", value: "" };
+}
+
+export const StartAgentSessionRequest_EnvEntry: MessageFns<StartAgentSessionRequest_EnvEntry> = {
+  encode(message: StartAgentSessionRequest_EnvEntry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.key !== "") {
+      writer.uint32(10).string(message.key);
+    }
+    if (message.value !== "") {
+      writer.uint32(18).string(message.value);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): StartAgentSessionRequest_EnvEntry {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseStartAgentSessionRequest_EnvEntry();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.key = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.value = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): StartAgentSessionRequest_EnvEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? globalThis.String(object.value) : "",
+    };
+  },
+
+  toJSON(message: StartAgentSessionRequest_EnvEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== "") {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<StartAgentSessionRequest_EnvEntry>): StartAgentSessionRequest_EnvEntry {
+    return StartAgentSessionRequest_EnvEntry.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<StartAgentSessionRequest_EnvEntry>): StartAgentSessionRequest_EnvEntry {
+    const message = createBaseStartAgentSessionRequest_EnvEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
+    return message;
+  },
+};
+
+function createBaseAgentSession(): AgentSession {
+  return {
+    id: "",
+    vmId: "",
+    harness: "",
+    harnessVersion: "",
+    model: "",
+    cwd: "",
+    state: 0,
+    turn: 0,
+    queued: 0,
+    lastSeq: 0,
+    createdAtMs: 0,
+    error: "",
+  };
+}
+
+export const AgentSession: MessageFns<AgentSession> = {
+  encode(message: AgentSession, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.id !== "") {
+      writer.uint32(10).string(message.id);
+    }
+    if (message.vmId !== "") {
+      writer.uint32(18).string(message.vmId);
+    }
+    if (message.harness !== "") {
+      writer.uint32(26).string(message.harness);
+    }
+    if (message.harnessVersion !== "") {
+      writer.uint32(34).string(message.harnessVersion);
+    }
+    if (message.model !== "") {
+      writer.uint32(42).string(message.model);
+    }
+    if (message.cwd !== "") {
+      writer.uint32(50).string(message.cwd);
+    }
+    if (message.state !== 0) {
+      writer.uint32(56).int32(message.state);
+    }
+    if (message.turn !== 0) {
+      writer.uint32(64).uint64(message.turn);
+    }
+    if (message.queued !== 0) {
+      writer.uint32(72).uint32(message.queued);
+    }
+    if (message.lastSeq !== 0) {
+      writer.uint32(80).uint64(message.lastSeq);
+    }
+    if (message.createdAtMs !== 0) {
+      writer.uint32(88).int64(message.createdAtMs);
+    }
+    if (message.error !== "") {
+      writer.uint32(98).string(message.error);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentSession {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentSession();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.id = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.harness = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.harnessVersion = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.model = reader.string();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.cwd = reader.string();
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.state = reader.int32() as any;
+          continue;
+        }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.turn = longToNumber(reader.uint64());
+          continue;
+        }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.queued = reader.uint32();
+          continue;
+        }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.lastSeq = longToNumber(reader.uint64());
+          continue;
+        }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.createdAtMs = longToNumber(reader.int64());
+          continue;
+        }
+        case 12: {
+          if (tag !== 98) {
+            break;
+          }
+
+          message.error = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentSession {
+    return {
+      id: isSet(object.id) ? globalThis.String(object.id) : "",
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      harness: isSet(object.harness) ? globalThis.String(object.harness) : "",
+      harnessVersion: isSet(object.harnessVersion)
+        ? globalThis.String(object.harnessVersion)
+        : isSet(object.harness_version)
+        ? globalThis.String(object.harness_version)
+        : "",
+      model: isSet(object.model) ? globalThis.String(object.model) : "",
+      cwd: isSet(object.cwd) ? globalThis.String(object.cwd) : "",
+      state: isSet(object.state) ? agentSessionStateFromJSON(object.state) : 0,
+      turn: isSet(object.turn) ? globalThis.Number(object.turn) : 0,
+      queued: isSet(object.queued) ? globalThis.Number(object.queued) : 0,
+      lastSeq: isSet(object.lastSeq)
+        ? globalThis.Number(object.lastSeq)
+        : isSet(object.last_seq)
+        ? globalThis.Number(object.last_seq)
+        : 0,
+      createdAtMs: isSet(object.createdAtMs)
+        ? globalThis.Number(object.createdAtMs)
+        : isSet(object.created_at_ms)
+        ? globalThis.Number(object.created_at_ms)
+        : 0,
+      error: isSet(object.error) ? globalThis.String(object.error) : "",
+    };
+  },
+
+  toJSON(message: AgentSession): unknown {
+    const obj: any = {};
+    if (message.id !== "") {
+      obj.id = message.id;
+    }
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.harness !== "") {
+      obj.harness = message.harness;
+    }
+    if (message.harnessVersion !== "") {
+      obj.harnessVersion = message.harnessVersion;
+    }
+    if (message.model !== "") {
+      obj.model = message.model;
+    }
+    if (message.cwd !== "") {
+      obj.cwd = message.cwd;
+    }
+    if (message.state !== 0) {
+      obj.state = agentSessionStateToJSON(message.state);
+    }
+    if (message.turn !== 0) {
+      obj.turn = Math.round(message.turn);
+    }
+    if (message.queued !== 0) {
+      obj.queued = Math.round(message.queued);
+    }
+    if (message.lastSeq !== 0) {
+      obj.lastSeq = Math.round(message.lastSeq);
+    }
+    if (message.createdAtMs !== 0) {
+      obj.createdAtMs = Math.round(message.createdAtMs);
+    }
+    if (message.error !== "") {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentSession>): AgentSession {
+    return AgentSession.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentSession>): AgentSession {
+    const message = createBaseAgentSession();
+    message.id = object.id ?? "";
+    message.vmId = object.vmId ?? "";
+    message.harness = object.harness ?? "";
+    message.harnessVersion = object.harnessVersion ?? "";
+    message.model = object.model ?? "";
+    message.cwd = object.cwd ?? "";
+    message.state = object.state ?? 0;
+    message.turn = object.turn ?? 0;
+    message.queued = object.queued ?? 0;
+    message.lastSeq = object.lastSeq ?? 0;
+    message.createdAtMs = object.createdAtMs ?? 0;
+    message.error = object.error ?? "";
+    return message;
+  },
+};
+
+function createBaseSendToAgentRequest(): SendToAgentRequest {
+  return { vmId: "", sessionId: "", text: "", when: 0, timeoutSecs: 0, maxSteps: 0 };
+}
+
+export const SendToAgentRequest: MessageFns<SendToAgentRequest> = {
+  encode(message: SendToAgentRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(18).string(message.sessionId);
+    }
+    if (message.text !== "") {
+      writer.uint32(26).string(message.text);
+    }
+    if (message.when !== 0) {
+      writer.uint32(32).int32(message.when);
+    }
+    if (message.timeoutSecs !== 0) {
+      writer.uint32(40).uint32(message.timeoutSecs);
+    }
+    if (message.maxSteps !== 0) {
+      writer.uint32(48).uint32(message.maxSteps);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SendToAgentRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSendToAgentRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.sessionId = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.text = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.when = reader.int32() as any;
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.timeoutSecs = reader.uint32();
+          continue;
+        }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.maxSteps = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SendToAgentRequest {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
+      text: isSet(object.text) ? globalThis.String(object.text) : "",
+      when: isSet(object.when) ? agentSendWhenFromJSON(object.when) : 0,
+      timeoutSecs: isSet(object.timeoutSecs)
+        ? globalThis.Number(object.timeoutSecs)
+        : isSet(object.timeout_secs)
+        ? globalThis.Number(object.timeout_secs)
+        : 0,
+      maxSteps: isSet(object.maxSteps)
+        ? globalThis.Number(object.maxSteps)
+        : isSet(object.max_steps)
+        ? globalThis.Number(object.max_steps)
+        : 0,
+    };
+  },
+
+  toJSON(message: SendToAgentRequest): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.sessionId !== "") {
+      obj.sessionId = message.sessionId;
+    }
+    if (message.text !== "") {
+      obj.text = message.text;
+    }
+    if (message.when !== 0) {
+      obj.when = agentSendWhenToJSON(message.when);
+    }
+    if (message.timeoutSecs !== 0) {
+      obj.timeoutSecs = Math.round(message.timeoutSecs);
+    }
+    if (message.maxSteps !== 0) {
+      obj.maxSteps = Math.round(message.maxSteps);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<SendToAgentRequest>): SendToAgentRequest {
+    return SendToAgentRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<SendToAgentRequest>): SendToAgentRequest {
+    const message = createBaseSendToAgentRequest();
+    message.vmId = object.vmId ?? "";
+    message.sessionId = object.sessionId ?? "";
+    message.text = object.text ?? "";
+    message.when = object.when ?? 0;
+    message.timeoutSecs = object.timeoutSecs ?? 0;
+    message.maxSteps = object.maxSteps ?? 0;
+    return message;
+  },
+};
+
+function createBaseSendToAgentResponse(): SendToAgentResponse {
+  return { turn: 0, delivery: 0 };
+}
+
+export const SendToAgentResponse: MessageFns<SendToAgentResponse> = {
+  encode(message: SendToAgentResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.turn !== 0) {
+      writer.uint32(8).uint64(message.turn);
+    }
+    if (message.delivery !== 0) {
+      writer.uint32(16).int32(message.delivery);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SendToAgentResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSendToAgentResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.turn = longToNumber(reader.uint64());
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.delivery = reader.int32() as any;
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SendToAgentResponse {
+    return {
+      turn: isSet(object.turn) ? globalThis.Number(object.turn) : 0,
+      delivery: isSet(object.delivery) ? agentDeliveryFromJSON(object.delivery) : 0,
+    };
+  },
+
+  toJSON(message: SendToAgentResponse): unknown {
+    const obj: any = {};
+    if (message.turn !== 0) {
+      obj.turn = Math.round(message.turn);
+    }
+    if (message.delivery !== 0) {
+      obj.delivery = agentDeliveryToJSON(message.delivery);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<SendToAgentResponse>): SendToAgentResponse {
+    return SendToAgentResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<SendToAgentResponse>): SendToAgentResponse {
+    const message = createBaseSendToAgentResponse();
+    message.turn = object.turn ?? 0;
+    message.delivery = object.delivery ?? 0;
+    return message;
+  },
+};
+
+function createBaseInterruptAgentRequest(): InterruptAgentRequest {
+  return { vmId: "", sessionId: "", clearQueue: false };
+}
+
+export const InterruptAgentRequest: MessageFns<InterruptAgentRequest> = {
+  encode(message: InterruptAgentRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(18).string(message.sessionId);
+    }
+    if (message.clearQueue !== false) {
+      writer.uint32(24).bool(message.clearQueue);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): InterruptAgentRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseInterruptAgentRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.sessionId = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.clearQueue = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): InterruptAgentRequest {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
+      clearQueue: isSet(object.clearQueue)
+        ? globalThis.Boolean(object.clearQueue)
+        : isSet(object.clear_queue)
+        ? globalThis.Boolean(object.clear_queue)
+        : false,
+    };
+  },
+
+  toJSON(message: InterruptAgentRequest): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.sessionId !== "") {
+      obj.sessionId = message.sessionId;
+    }
+    if (message.clearQueue !== false) {
+      obj.clearQueue = message.clearQueue;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<InterruptAgentRequest>): InterruptAgentRequest {
+    return InterruptAgentRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<InterruptAgentRequest>): InterruptAgentRequest {
+    const message = createBaseInterruptAgentRequest();
+    message.vmId = object.vmId ?? "";
+    message.sessionId = object.sessionId ?? "";
+    message.clearQueue = object.clearQueue ?? false;
+    return message;
+  },
+};
+
+function createBaseInterruptAgentResponse(): InterruptAgentResponse {
+  return { turn: 0 };
+}
+
+export const InterruptAgentResponse: MessageFns<InterruptAgentResponse> = {
+  encode(message: InterruptAgentResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.turn !== 0) {
+      writer.uint32(8).uint64(message.turn);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): InterruptAgentResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseInterruptAgentResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.turn = longToNumber(reader.uint64());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): InterruptAgentResponse {
+    return { turn: isSet(object.turn) ? globalThis.Number(object.turn) : 0 };
+  },
+
+  toJSON(message: InterruptAgentResponse): unknown {
+    const obj: any = {};
+    if (message.turn !== 0) {
+      obj.turn = Math.round(message.turn);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<InterruptAgentResponse>): InterruptAgentResponse {
+    return InterruptAgentResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<InterruptAgentResponse>): InterruptAgentResponse {
+    const message = createBaseInterruptAgentResponse();
+    message.turn = object.turn ?? 0;
+    return message;
+  },
+};
+
+function createBaseCloseAgentSessionRequest(): CloseAgentSessionRequest {
+  return { vmId: "", sessionId: "" };
+}
+
+export const CloseAgentSessionRequest: MessageFns<CloseAgentSessionRequest> = {
+  encode(message: CloseAgentSessionRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(18).string(message.sessionId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): CloseAgentSessionRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseCloseAgentSessionRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.sessionId = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): CloseAgentSessionRequest {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
+    };
+  },
+
+  toJSON(message: CloseAgentSessionRequest): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.sessionId !== "") {
+      obj.sessionId = message.sessionId;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<CloseAgentSessionRequest>): CloseAgentSessionRequest {
+    return CloseAgentSessionRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<CloseAgentSessionRequest>): CloseAgentSessionRequest {
+    const message = createBaseCloseAgentSessionRequest();
+    message.vmId = object.vmId ?? "";
+    message.sessionId = object.sessionId ?? "";
+    return message;
+  },
+};
+
+function createBaseCloseAgentSessionResponse(): CloseAgentSessionResponse {
+  return {};
+}
+
+export const CloseAgentSessionResponse: MessageFns<CloseAgentSessionResponse> = {
+  encode(_: CloseAgentSessionResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): CloseAgentSessionResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseCloseAgentSessionResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(_: any): CloseAgentSessionResponse {
+    return {};
+  },
+
+  toJSON(_: CloseAgentSessionResponse): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create(base?: DeepPartial<CloseAgentSessionResponse>): CloseAgentSessionResponse {
+    return CloseAgentSessionResponse.fromPartial(base ?? {});
+  },
+  fromPartial(_: DeepPartial<CloseAgentSessionResponse>): CloseAgentSessionResponse {
+    const message = createBaseCloseAgentSessionResponse();
+    return message;
+  },
+};
+
+function createBaseGetAgentSessionRequest(): GetAgentSessionRequest {
+  return { vmId: "", sessionId: "" };
+}
+
+export const GetAgentSessionRequest: MessageFns<GetAgentSessionRequest> = {
+  encode(message: GetAgentSessionRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(18).string(message.sessionId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GetAgentSessionRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseGetAgentSessionRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.sessionId = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): GetAgentSessionRequest {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
+    };
+  },
+
+  toJSON(message: GetAgentSessionRequest): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.sessionId !== "") {
+      obj.sessionId = message.sessionId;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<GetAgentSessionRequest>): GetAgentSessionRequest {
+    return GetAgentSessionRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<GetAgentSessionRequest>): GetAgentSessionRequest {
+    const message = createBaseGetAgentSessionRequest();
+    message.vmId = object.vmId ?? "";
+    message.sessionId = object.sessionId ?? "";
+    return message;
+  },
+};
+
+function createBaseListAgentSessionsRequest(): ListAgentSessionsRequest {
+  return { vmId: "", all: false };
+}
+
+export const ListAgentSessionsRequest: MessageFns<ListAgentSessionsRequest> = {
+  encode(message: ListAgentSessionsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    if (message.all !== false) {
+      writer.uint32(16).bool(message.all);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ListAgentSessionsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseListAgentSessionsRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.all = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ListAgentSessionsRequest {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      all: isSet(object.all) ? globalThis.Boolean(object.all) : false,
+    };
+  },
+
+  toJSON(message: ListAgentSessionsRequest): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.all !== false) {
+      obj.all = message.all;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ListAgentSessionsRequest>): ListAgentSessionsRequest {
+    return ListAgentSessionsRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ListAgentSessionsRequest>): ListAgentSessionsRequest {
+    const message = createBaseListAgentSessionsRequest();
+    message.vmId = object.vmId ?? "";
+    message.all = object.all ?? false;
+    return message;
+  },
+};
+
+function createBaseListAgentSessionsResponse(): ListAgentSessionsResponse {
+  return { sessions: [] };
+}
+
+export const ListAgentSessionsResponse: MessageFns<ListAgentSessionsResponse> = {
+  encode(message: ListAgentSessionsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    for (const v of message.sessions) {
+      AgentSession.encode(v!, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ListAgentSessionsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseListAgentSessionsResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.sessions.push(AgentSession.decode(reader, reader.uint32()));
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ListAgentSessionsResponse {
+    return {
+      sessions: globalThis.Array.isArray(object?.sessions)
+        ? object.sessions.map((e: any) => AgentSession.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ListAgentSessionsResponse): unknown {
+    const obj: any = {};
+    if (message.sessions?.length) {
+      obj.sessions = message.sessions.map((e) => AgentSession.toJSON(e));
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ListAgentSessionsResponse>): ListAgentSessionsResponse {
+    return ListAgentSessionsResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ListAgentSessionsResponse>): ListAgentSessionsResponse {
+    const message = createBaseListAgentSessionsResponse();
+    message.sessions = object.sessions?.map((e) => AgentSession.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseAgentEventsRequest(): AgentEventsRequest {
+  return { vmId: "", sessionId: "", afterSeq: 0, follow: false };
+}
+
+export const AgentEventsRequest: MessageFns<AgentEventsRequest> = {
+  encode(message: AgentEventsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(18).string(message.sessionId);
+    }
+    if (message.afterSeq !== 0) {
+      writer.uint32(24).uint64(message.afterSeq);
+    }
+    if (message.follow !== false) {
+      writer.uint32(32).bool(message.follow);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentEventsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentEventsRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.sessionId = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.afterSeq = longToNumber(reader.uint64());
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.follow = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentEventsRequest {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
+      afterSeq: isSet(object.afterSeq)
+        ? globalThis.Number(object.afterSeq)
+        : isSet(object.after_seq)
+        ? globalThis.Number(object.after_seq)
+        : 0,
+      follow: isSet(object.follow) ? globalThis.Boolean(object.follow) : false,
+    };
+  },
+
+  toJSON(message: AgentEventsRequest): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.sessionId !== "") {
+      obj.sessionId = message.sessionId;
+    }
+    if (message.afterSeq !== 0) {
+      obj.afterSeq = Math.round(message.afterSeq);
+    }
+    if (message.follow !== false) {
+      obj.follow = message.follow;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentEventsRequest>): AgentEventsRequest {
+    return AgentEventsRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentEventsRequest>): AgentEventsRequest {
+    const message = createBaseAgentEventsRequest();
+    message.vmId = object.vmId ?? "";
+    message.sessionId = object.sessionId ?? "";
+    message.afterSeq = object.afterSeq ?? 0;
+    message.follow = object.follow ?? false;
+    return message;
+  },
+};
+
+function createBaseAgentEvent(): AgentEvent {
+  return {
+    seq: 0,
+    turn: 0,
+    timeMs: 0,
+    turnStarted: undefined,
+    userMessage: undefined,
+    messageDelta: undefined,
+    message: undefined,
+    thinkingDelta: undefined,
+    toolStarted: undefined,
+    toolOutput: undefined,
+    toolFinished: undefined,
+    plan: undefined,
+    usage: undefined,
+    turnFinished: undefined,
+  };
+}
+
+export const AgentEvent: MessageFns<AgentEvent> = {
+  encode(message: AgentEvent, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.seq !== 0) {
+      writer.uint32(8).uint64(message.seq);
+    }
+    if (message.turn !== 0) {
+      writer.uint32(16).uint64(message.turn);
+    }
+    if (message.timeMs !== 0) {
+      writer.uint32(24).int64(message.timeMs);
+    }
+    if (message.turnStarted !== undefined) {
+      AgentTurnStarted.encode(message.turnStarted, writer.uint32(82).fork()).join();
+    }
+    if (message.userMessage !== undefined) {
+      AgentUserMessage.encode(message.userMessage, writer.uint32(90).fork()).join();
+    }
+    if (message.messageDelta !== undefined) {
+      AgentMessageDelta.encode(message.messageDelta, writer.uint32(98).fork()).join();
+    }
+    if (message.message !== undefined) {
+      AgentMessage.encode(message.message, writer.uint32(106).fork()).join();
+    }
+    if (message.thinkingDelta !== undefined) {
+      AgentThinkingDelta.encode(message.thinkingDelta, writer.uint32(114).fork()).join();
+    }
+    if (message.toolStarted !== undefined) {
+      AgentToolStarted.encode(message.toolStarted, writer.uint32(122).fork()).join();
+    }
+    if (message.toolOutput !== undefined) {
+      AgentToolOutput.encode(message.toolOutput, writer.uint32(130).fork()).join();
+    }
+    if (message.toolFinished !== undefined) {
+      AgentToolFinished.encode(message.toolFinished, writer.uint32(138).fork()).join();
+    }
+    if (message.plan !== undefined) {
+      AgentPlan.encode(message.plan, writer.uint32(146).fork()).join();
+    }
+    if (message.usage !== undefined) {
+      AgentUsage.encode(message.usage, writer.uint32(154).fork()).join();
+    }
+    if (message.turnFinished !== undefined) {
+      AgentTurnFinished.encode(message.turnFinished, writer.uint32(162).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentEvent {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentEvent();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.seq = longToNumber(reader.uint64());
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.turn = longToNumber(reader.uint64());
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.timeMs = longToNumber(reader.int64());
+          continue;
+        }
+        case 10: {
+          if (tag !== 82) {
+            break;
+          }
+
+          message.turnStarted = AgentTurnStarted.decode(reader, reader.uint32());
+          continue;
+        }
+        case 11: {
+          if (tag !== 90) {
+            break;
+          }
+
+          message.userMessage = AgentUserMessage.decode(reader, reader.uint32());
+          continue;
+        }
+        case 12: {
+          if (tag !== 98) {
+            break;
+          }
+
+          message.messageDelta = AgentMessageDelta.decode(reader, reader.uint32());
+          continue;
+        }
+        case 13: {
+          if (tag !== 106) {
+            break;
+          }
+
+          message.message = AgentMessage.decode(reader, reader.uint32());
+          continue;
+        }
+        case 14: {
+          if (tag !== 114) {
+            break;
+          }
+
+          message.thinkingDelta = AgentThinkingDelta.decode(reader, reader.uint32());
+          continue;
+        }
+        case 15: {
+          if (tag !== 122) {
+            break;
+          }
+
+          message.toolStarted = AgentToolStarted.decode(reader, reader.uint32());
+          continue;
+        }
+        case 16: {
+          if (tag !== 130) {
+            break;
+          }
+
+          message.toolOutput = AgentToolOutput.decode(reader, reader.uint32());
+          continue;
+        }
+        case 17: {
+          if (tag !== 138) {
+            break;
+          }
+
+          message.toolFinished = AgentToolFinished.decode(reader, reader.uint32());
+          continue;
+        }
+        case 18: {
+          if (tag !== 146) {
+            break;
+          }
+
+          message.plan = AgentPlan.decode(reader, reader.uint32());
+          continue;
+        }
+        case 19: {
+          if (tag !== 154) {
+            break;
+          }
+
+          message.usage = AgentUsage.decode(reader, reader.uint32());
+          continue;
+        }
+        case 20: {
+          if (tag !== 162) {
+            break;
+          }
+
+          message.turnFinished = AgentTurnFinished.decode(reader, reader.uint32());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentEvent {
+    return {
+      seq: isSet(object.seq) ? globalThis.Number(object.seq) : 0,
+      turn: isSet(object.turn) ? globalThis.Number(object.turn) : 0,
+      timeMs: isSet(object.timeMs)
+        ? globalThis.Number(object.timeMs)
+        : isSet(object.time_ms)
+        ? globalThis.Number(object.time_ms)
+        : 0,
+      turnStarted: isSet(object.turnStarted)
+        ? AgentTurnStarted.fromJSON(object.turnStarted)
+        : isSet(object.turn_started)
+        ? AgentTurnStarted.fromJSON(object.turn_started)
+        : undefined,
+      userMessage: isSet(object.userMessage)
+        ? AgentUserMessage.fromJSON(object.userMessage)
+        : isSet(object.user_message)
+        ? AgentUserMessage.fromJSON(object.user_message)
+        : undefined,
+      messageDelta: isSet(object.messageDelta)
+        ? AgentMessageDelta.fromJSON(object.messageDelta)
+        : isSet(object.message_delta)
+        ? AgentMessageDelta.fromJSON(object.message_delta)
+        : undefined,
+      message: isSet(object.message) ? AgentMessage.fromJSON(object.message) : undefined,
+      thinkingDelta: isSet(object.thinkingDelta)
+        ? AgentThinkingDelta.fromJSON(object.thinkingDelta)
+        : isSet(object.thinking_delta)
+        ? AgentThinkingDelta.fromJSON(object.thinking_delta)
+        : undefined,
+      toolStarted: isSet(object.toolStarted)
+        ? AgentToolStarted.fromJSON(object.toolStarted)
+        : isSet(object.tool_started)
+        ? AgentToolStarted.fromJSON(object.tool_started)
+        : undefined,
+      toolOutput: isSet(object.toolOutput)
+        ? AgentToolOutput.fromJSON(object.toolOutput)
+        : isSet(object.tool_output)
+        ? AgentToolOutput.fromJSON(object.tool_output)
+        : undefined,
+      toolFinished: isSet(object.toolFinished)
+        ? AgentToolFinished.fromJSON(object.toolFinished)
+        : isSet(object.tool_finished)
+        ? AgentToolFinished.fromJSON(object.tool_finished)
+        : undefined,
+      plan: isSet(object.plan) ? AgentPlan.fromJSON(object.plan) : undefined,
+      usage: isSet(object.usage) ? AgentUsage.fromJSON(object.usage) : undefined,
+      turnFinished: isSet(object.turnFinished)
+        ? AgentTurnFinished.fromJSON(object.turnFinished)
+        : isSet(object.turn_finished)
+        ? AgentTurnFinished.fromJSON(object.turn_finished)
+        : undefined,
+    };
+  },
+
+  toJSON(message: AgentEvent): unknown {
+    const obj: any = {};
+    if (message.seq !== 0) {
+      obj.seq = Math.round(message.seq);
+    }
+    if (message.turn !== 0) {
+      obj.turn = Math.round(message.turn);
+    }
+    if (message.timeMs !== 0) {
+      obj.timeMs = Math.round(message.timeMs);
+    }
+    if (message.turnStarted !== undefined) {
+      obj.turnStarted = AgentTurnStarted.toJSON(message.turnStarted);
+    }
+    if (message.userMessage !== undefined) {
+      obj.userMessage = AgentUserMessage.toJSON(message.userMessage);
+    }
+    if (message.messageDelta !== undefined) {
+      obj.messageDelta = AgentMessageDelta.toJSON(message.messageDelta);
+    }
+    if (message.message !== undefined) {
+      obj.message = AgentMessage.toJSON(message.message);
+    }
+    if (message.thinkingDelta !== undefined) {
+      obj.thinkingDelta = AgentThinkingDelta.toJSON(message.thinkingDelta);
+    }
+    if (message.toolStarted !== undefined) {
+      obj.toolStarted = AgentToolStarted.toJSON(message.toolStarted);
+    }
+    if (message.toolOutput !== undefined) {
+      obj.toolOutput = AgentToolOutput.toJSON(message.toolOutput);
+    }
+    if (message.toolFinished !== undefined) {
+      obj.toolFinished = AgentToolFinished.toJSON(message.toolFinished);
+    }
+    if (message.plan !== undefined) {
+      obj.plan = AgentPlan.toJSON(message.plan);
+    }
+    if (message.usage !== undefined) {
+      obj.usage = AgentUsage.toJSON(message.usage);
+    }
+    if (message.turnFinished !== undefined) {
+      obj.turnFinished = AgentTurnFinished.toJSON(message.turnFinished);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentEvent>): AgentEvent {
+    return AgentEvent.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentEvent>): AgentEvent {
+    const message = createBaseAgentEvent();
+    message.seq = object.seq ?? 0;
+    message.turn = object.turn ?? 0;
+    message.timeMs = object.timeMs ?? 0;
+    message.turnStarted = (object.turnStarted !== undefined && object.turnStarted !== null)
+      ? AgentTurnStarted.fromPartial(object.turnStarted)
+      : undefined;
+    message.userMessage = (object.userMessage !== undefined && object.userMessage !== null)
+      ? AgentUserMessage.fromPartial(object.userMessage)
+      : undefined;
+    message.messageDelta = (object.messageDelta !== undefined && object.messageDelta !== null)
+      ? AgentMessageDelta.fromPartial(object.messageDelta)
+      : undefined;
+    message.message = (object.message !== undefined && object.message !== null)
+      ? AgentMessage.fromPartial(object.message)
+      : undefined;
+    message.thinkingDelta = (object.thinkingDelta !== undefined && object.thinkingDelta !== null)
+      ? AgentThinkingDelta.fromPartial(object.thinkingDelta)
+      : undefined;
+    message.toolStarted = (object.toolStarted !== undefined && object.toolStarted !== null)
+      ? AgentToolStarted.fromPartial(object.toolStarted)
+      : undefined;
+    message.toolOutput = (object.toolOutput !== undefined && object.toolOutput !== null)
+      ? AgentToolOutput.fromPartial(object.toolOutput)
+      : undefined;
+    message.toolFinished = (object.toolFinished !== undefined && object.toolFinished !== null)
+      ? AgentToolFinished.fromPartial(object.toolFinished)
+      : undefined;
+    message.plan = (object.plan !== undefined && object.plan !== null) ? AgentPlan.fromPartial(object.plan) : undefined;
+    message.usage = (object.usage !== undefined && object.usage !== null)
+      ? AgentUsage.fromPartial(object.usage)
+      : undefined;
+    message.turnFinished = (object.turnFinished !== undefined && object.turnFinished !== null)
+      ? AgentTurnFinished.fromPartial(object.turnFinished)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseAgentTurnStarted(): AgentTurnStarted {
+  return {};
+}
+
+export const AgentTurnStarted: MessageFns<AgentTurnStarted> = {
+  encode(_: AgentTurnStarted, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentTurnStarted {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentTurnStarted();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(_: any): AgentTurnStarted {
+    return {};
+  },
+
+  toJSON(_: AgentTurnStarted): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentTurnStarted>): AgentTurnStarted {
+    return AgentTurnStarted.fromPartial(base ?? {});
+  },
+  fromPartial(_: DeepPartial<AgentTurnStarted>): AgentTurnStarted {
+    const message = createBaseAgentTurnStarted();
+    return message;
+  },
+};
+
+function createBaseAgentUserMessage(): AgentUserMessage {
+  return { text: "", delivery: 0 };
+}
+
+export const AgentUserMessage: MessageFns<AgentUserMessage> = {
+  encode(message: AgentUserMessage, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.text !== "") {
+      writer.uint32(10).string(message.text);
+    }
+    if (message.delivery !== 0) {
+      writer.uint32(16).int32(message.delivery);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentUserMessage {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentUserMessage();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.text = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.delivery = reader.int32() as any;
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentUserMessage {
+    return {
+      text: isSet(object.text) ? globalThis.String(object.text) : "",
+      delivery: isSet(object.delivery) ? agentDeliveryFromJSON(object.delivery) : 0,
+    };
+  },
+
+  toJSON(message: AgentUserMessage): unknown {
+    const obj: any = {};
+    if (message.text !== "") {
+      obj.text = message.text;
+    }
+    if (message.delivery !== 0) {
+      obj.delivery = agentDeliveryToJSON(message.delivery);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentUserMessage>): AgentUserMessage {
+    return AgentUserMessage.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentUserMessage>): AgentUserMessage {
+    const message = createBaseAgentUserMessage();
+    message.text = object.text ?? "";
+    message.delivery = object.delivery ?? 0;
+    return message;
+  },
+};
+
+function createBaseAgentMessageDelta(): AgentMessageDelta {
+  return { text: "" };
+}
+
+export const AgentMessageDelta: MessageFns<AgentMessageDelta> = {
+  encode(message: AgentMessageDelta, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.text !== "") {
+      writer.uint32(10).string(message.text);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentMessageDelta {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentMessageDelta();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.text = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentMessageDelta {
+    return { text: isSet(object.text) ? globalThis.String(object.text) : "" };
+  },
+
+  toJSON(message: AgentMessageDelta): unknown {
+    const obj: any = {};
+    if (message.text !== "") {
+      obj.text = message.text;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentMessageDelta>): AgentMessageDelta {
+    return AgentMessageDelta.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentMessageDelta>): AgentMessageDelta {
+    const message = createBaseAgentMessageDelta();
+    message.text = object.text ?? "";
+    return message;
+  },
+};
+
+function createBaseAgentMessage(): AgentMessage {
+  return { text: "" };
+}
+
+export const AgentMessage: MessageFns<AgentMessage> = {
+  encode(message: AgentMessage, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.text !== "") {
+      writer.uint32(10).string(message.text);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentMessage {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentMessage();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.text = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentMessage {
+    return { text: isSet(object.text) ? globalThis.String(object.text) : "" };
+  },
+
+  toJSON(message: AgentMessage): unknown {
+    const obj: any = {};
+    if (message.text !== "") {
+      obj.text = message.text;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentMessage>): AgentMessage {
+    return AgentMessage.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentMessage>): AgentMessage {
+    const message = createBaseAgentMessage();
+    message.text = object.text ?? "";
+    return message;
+  },
+};
+
+function createBaseAgentThinkingDelta(): AgentThinkingDelta {
+  return { text: "" };
+}
+
+export const AgentThinkingDelta: MessageFns<AgentThinkingDelta> = {
+  encode(message: AgentThinkingDelta, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.text !== "") {
+      writer.uint32(10).string(message.text);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentThinkingDelta {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentThinkingDelta();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.text = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentThinkingDelta {
+    return { text: isSet(object.text) ? globalThis.String(object.text) : "" };
+  },
+
+  toJSON(message: AgentThinkingDelta): unknown {
+    const obj: any = {};
+    if (message.text !== "") {
+      obj.text = message.text;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentThinkingDelta>): AgentThinkingDelta {
+    return AgentThinkingDelta.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentThinkingDelta>): AgentThinkingDelta {
+    const message = createBaseAgentThinkingDelta();
+    message.text = object.text ?? "";
+    return message;
+  },
+};
+
+function createBaseAgentToolStarted(): AgentToolStarted {
+  return { callId: "", kind: 0, name: "", inputJson: "" };
+}
+
+export const AgentToolStarted: MessageFns<AgentToolStarted> = {
+  encode(message: AgentToolStarted, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.callId !== "") {
+      writer.uint32(10).string(message.callId);
+    }
+    if (message.kind !== 0) {
+      writer.uint32(16).int32(message.kind);
+    }
+    if (message.name !== "") {
+      writer.uint32(26).string(message.name);
+    }
+    if (message.inputJson !== "") {
+      writer.uint32(34).string(message.inputJson);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentToolStarted {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentToolStarted();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.callId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.kind = reader.int32() as any;
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.name = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.inputJson = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentToolStarted {
+    return {
+      callId: isSet(object.callId)
+        ? globalThis.String(object.callId)
+        : isSet(object.call_id)
+        ? globalThis.String(object.call_id)
+        : "",
+      kind: isSet(object.kind) ? agentToolKindFromJSON(object.kind) : 0,
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      inputJson: isSet(object.inputJson)
+        ? globalThis.String(object.inputJson)
+        : isSet(object.input_json)
+        ? globalThis.String(object.input_json)
+        : "",
+    };
+  },
+
+  toJSON(message: AgentToolStarted): unknown {
+    const obj: any = {};
+    if (message.callId !== "") {
+      obj.callId = message.callId;
+    }
+    if (message.kind !== 0) {
+      obj.kind = agentToolKindToJSON(message.kind);
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.inputJson !== "") {
+      obj.inputJson = message.inputJson;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentToolStarted>): AgentToolStarted {
+    return AgentToolStarted.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentToolStarted>): AgentToolStarted {
+    const message = createBaseAgentToolStarted();
+    message.callId = object.callId ?? "";
+    message.kind = object.kind ?? 0;
+    message.name = object.name ?? "";
+    message.inputJson = object.inputJson ?? "";
+    return message;
+  },
+};
+
+function createBaseAgentToolOutput(): AgentToolOutput {
+  return { callId: "", text: "" };
+}
+
+export const AgentToolOutput: MessageFns<AgentToolOutput> = {
+  encode(message: AgentToolOutput, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.callId !== "") {
+      writer.uint32(10).string(message.callId);
+    }
+    if (message.text !== "") {
+      writer.uint32(18).string(message.text);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentToolOutput {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentToolOutput();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.callId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.text = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentToolOutput {
+    return {
+      callId: isSet(object.callId)
+        ? globalThis.String(object.callId)
+        : isSet(object.call_id)
+        ? globalThis.String(object.call_id)
+        : "",
+      text: isSet(object.text) ? globalThis.String(object.text) : "",
+    };
+  },
+
+  toJSON(message: AgentToolOutput): unknown {
+    const obj: any = {};
+    if (message.callId !== "") {
+      obj.callId = message.callId;
+    }
+    if (message.text !== "") {
+      obj.text = message.text;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentToolOutput>): AgentToolOutput {
+    return AgentToolOutput.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentToolOutput>): AgentToolOutput {
+    const message = createBaseAgentToolOutput();
+    message.callId = object.callId ?? "";
+    message.text = object.text ?? "";
+    return message;
+  },
+};
+
+function createBaseAgentToolFinished(): AgentToolFinished {
+  return { callId: "", isError: false, result: "" };
+}
+
+export const AgentToolFinished: MessageFns<AgentToolFinished> = {
+  encode(message: AgentToolFinished, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.callId !== "") {
+      writer.uint32(10).string(message.callId);
+    }
+    if (message.isError !== false) {
+      writer.uint32(16).bool(message.isError);
+    }
+    if (message.result !== "") {
+      writer.uint32(26).string(message.result);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentToolFinished {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentToolFinished();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.callId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.isError = reader.bool();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.result = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentToolFinished {
+    return {
+      callId: isSet(object.callId)
+        ? globalThis.String(object.callId)
+        : isSet(object.call_id)
+        ? globalThis.String(object.call_id)
+        : "",
+      isError: isSet(object.isError)
+        ? globalThis.Boolean(object.isError)
+        : isSet(object.is_error)
+        ? globalThis.Boolean(object.is_error)
+        : false,
+      result: isSet(object.result) ? globalThis.String(object.result) : "",
+    };
+  },
+
+  toJSON(message: AgentToolFinished): unknown {
+    const obj: any = {};
+    if (message.callId !== "") {
+      obj.callId = message.callId;
+    }
+    if (message.isError !== false) {
+      obj.isError = message.isError;
+    }
+    if (message.result !== "") {
+      obj.result = message.result;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentToolFinished>): AgentToolFinished {
+    return AgentToolFinished.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentToolFinished>): AgentToolFinished {
+    const message = createBaseAgentToolFinished();
+    message.callId = object.callId ?? "";
+    message.isError = object.isError ?? false;
+    message.result = object.result ?? "";
+    return message;
+  },
+};
+
+function createBaseAgentPlan(): AgentPlan {
+  return { items: [] };
+}
+
+export const AgentPlan: MessageFns<AgentPlan> = {
+  encode(message: AgentPlan, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    for (const v of message.items) {
+      AgentPlanItem.encode(v!, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentPlan {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentPlan();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.items.push(AgentPlanItem.decode(reader, reader.uint32()));
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentPlan {
+    return {
+      items: globalThis.Array.isArray(object?.items) ? object.items.map((e: any) => AgentPlanItem.fromJSON(e)) : [],
+    };
+  },
+
+  toJSON(message: AgentPlan): unknown {
+    const obj: any = {};
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => AgentPlanItem.toJSON(e));
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentPlan>): AgentPlan {
+    return AgentPlan.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentPlan>): AgentPlan {
+    const message = createBaseAgentPlan();
+    message.items = object.items?.map((e) => AgentPlanItem.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseAgentPlanItem(): AgentPlanItem {
+  return { text: "", status: "" };
+}
+
+export const AgentPlanItem: MessageFns<AgentPlanItem> = {
+  encode(message: AgentPlanItem, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.text !== "") {
+      writer.uint32(10).string(message.text);
+    }
+    if (message.status !== "") {
+      writer.uint32(18).string(message.status);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentPlanItem {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentPlanItem();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.text = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.status = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentPlanItem {
+    return {
+      text: isSet(object.text) ? globalThis.String(object.text) : "",
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+    };
+  },
+
+  toJSON(message: AgentPlanItem): unknown {
+    const obj: any = {};
+    if (message.text !== "") {
+      obj.text = message.text;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentPlanItem>): AgentPlanItem {
+    return AgentPlanItem.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentPlanItem>): AgentPlanItem {
+    const message = createBaseAgentPlanItem();
+    message.text = object.text ?? "";
+    message.status = object.status ?? "";
+    return message;
+  },
+};
+
+function createBaseAgentUsage(): AgentUsage {
+  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+}
+
+export const AgentUsage: MessageFns<AgentUsage> = {
+  encode(message: AgentUsage, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.inputTokens !== 0) {
+      writer.uint32(8).uint64(message.inputTokens);
+    }
+    if (message.outputTokens !== 0) {
+      writer.uint32(16).uint64(message.outputTokens);
+    }
+    if (message.cacheReadTokens !== 0) {
+      writer.uint32(24).uint64(message.cacheReadTokens);
+    }
+    if (message.cacheWriteTokens !== 0) {
+      writer.uint32(32).uint64(message.cacheWriteTokens);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentUsage {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentUsage();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.inputTokens = longToNumber(reader.uint64());
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.outputTokens = longToNumber(reader.uint64());
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.cacheReadTokens = longToNumber(reader.uint64());
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.cacheWriteTokens = longToNumber(reader.uint64());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentUsage {
+    return {
+      inputTokens: isSet(object.inputTokens)
+        ? globalThis.Number(object.inputTokens)
+        : isSet(object.input_tokens)
+        ? globalThis.Number(object.input_tokens)
+        : 0,
+      outputTokens: isSet(object.outputTokens)
+        ? globalThis.Number(object.outputTokens)
+        : isSet(object.output_tokens)
+        ? globalThis.Number(object.output_tokens)
+        : 0,
+      cacheReadTokens: isSet(object.cacheReadTokens)
+        ? globalThis.Number(object.cacheReadTokens)
+        : isSet(object.cache_read_tokens)
+        ? globalThis.Number(object.cache_read_tokens)
+        : 0,
+      cacheWriteTokens: isSet(object.cacheWriteTokens)
+        ? globalThis.Number(object.cacheWriteTokens)
+        : isSet(object.cache_write_tokens)
+        ? globalThis.Number(object.cache_write_tokens)
+        : 0,
+    };
+  },
+
+  toJSON(message: AgentUsage): unknown {
+    const obj: any = {};
+    if (message.inputTokens !== 0) {
+      obj.inputTokens = Math.round(message.inputTokens);
+    }
+    if (message.outputTokens !== 0) {
+      obj.outputTokens = Math.round(message.outputTokens);
+    }
+    if (message.cacheReadTokens !== 0) {
+      obj.cacheReadTokens = Math.round(message.cacheReadTokens);
+    }
+    if (message.cacheWriteTokens !== 0) {
+      obj.cacheWriteTokens = Math.round(message.cacheWriteTokens);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentUsage>): AgentUsage {
+    return AgentUsage.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentUsage>): AgentUsage {
+    const message = createBaseAgentUsage();
+    message.inputTokens = object.inputTokens ?? 0;
+    message.outputTokens = object.outputTokens ?? 0;
+    message.cacheReadTokens = object.cacheReadTokens ?? 0;
+    message.cacheWriteTokens = object.cacheWriteTokens ?? 0;
+    return message;
+  },
+};
+
+function createBaseAgentTurnFinished(): AgentTurnFinished {
+  return { reason: 0, error: "" };
+}
+
+export const AgentTurnFinished: MessageFns<AgentTurnFinished> = {
+  encode(message: AgentTurnFinished, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.reason !== 0) {
+      writer.uint32(8).int32(message.reason);
+    }
+    if (message.error !== "") {
+      writer.uint32(18).string(message.error);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentTurnFinished {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentTurnFinished();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.reason = reader.int32() as any;
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.error = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentTurnFinished {
+    return {
+      reason: isSet(object.reason) ? agentFinishReasonFromJSON(object.reason) : 0,
+      error: isSet(object.error) ? globalThis.String(object.error) : "",
+    };
+  },
+
+  toJSON(message: AgentTurnFinished): unknown {
+    const obj: any = {};
+    if (message.reason !== 0) {
+      obj.reason = agentFinishReasonToJSON(message.reason);
+    }
+    if (message.error !== "") {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentTurnFinished>): AgentTurnFinished {
+    return AgentTurnFinished.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentTurnFinished>): AgentTurnFinished {
+    const message = createBaseAgentTurnFinished();
+    message.reason = object.reason ?? 0;
+    message.error = object.error ?? "";
+    return message;
+  },
+};
+
 function createBaseCreateSnapshotRequest(): CreateSnapshotRequest {
   return { vm: "", name: "" };
 }
@@ -35226,6 +38685,94 @@ export const BoxdApiDefinition = {
       requestStream: false,
       responseType: ComputerActionResponse as typeof ComputerActionResponse,
       responseStream: false,
+      options: {},
+    },
+    /**
+     * Coding agents: drive Claude Code, Codex or OpenCode inside a machine the
+     * same way, through sessions, turns and one typed event stream. The agent
+     * runs in the machine and keeps working when the caller disconnects; the
+     * caller catches up with AgentEvents from the last `seq` it saw.
+     *
+     * A session is one conversation with one agent. A message sent to it starts
+     * a turn, joins the running turn, or waits for it to end (SendToAgent
+     * `when`). A session runs one turn at a time; a machine's sessions run side
+     * by side.
+     */
+    listHarnesses: {
+      name: "ListHarnesses",
+      requestType: ListHarnessesRequest as typeof ListHarnessesRequest,
+      requestStream: false,
+      responseType: ListHarnessesResponse as typeof ListHarnessesResponse,
+      responseStream: false,
+      options: {},
+    },
+    startAgentSession: {
+      name: "StartAgentSession",
+      requestType: StartAgentSessionRequest as typeof StartAgentSessionRequest,
+      requestStream: false,
+      responseType: AgentSession as typeof AgentSession,
+      responseStream: false,
+      options: {},
+    },
+    sendToAgent: {
+      name: "SendToAgent",
+      requestType: SendToAgentRequest as typeof SendToAgentRequest,
+      requestStream: false,
+      responseType: SendToAgentResponse as typeof SendToAgentResponse,
+      responseStream: false,
+      options: {},
+    },
+    /**
+     * Stops one session's running turn; the machine's other sessions keep
+     * going. A no-op when nothing is running.
+     */
+    interruptAgent: {
+      name: "InterruptAgent",
+      requestType: InterruptAgentRequest as typeof InterruptAgentRequest,
+      requestStream: false,
+      responseType: InterruptAgentResponse as typeof InterruptAgentResponse,
+      responseStream: false,
+      options: {},
+    },
+    /**
+     * Ends a session: interrupts its running turn, drops the messages waiting
+     * for it and stops its agent. Its events stay readable.
+     */
+    closeAgentSession: {
+      name: "CloseAgentSession",
+      requestType: CloseAgentSessionRequest as typeof CloseAgentSessionRequest,
+      requestStream: false,
+      responseType: CloseAgentSessionResponse as typeof CloseAgentSessionResponse,
+      responseStream: false,
+      options: {},
+    },
+    getAgentSession: {
+      name: "GetAgentSession",
+      requestType: GetAgentSessionRequest as typeof GetAgentSessionRequest,
+      requestStream: false,
+      responseType: AgentSession as typeof AgentSession,
+      responseStream: false,
+      options: {},
+    },
+    listAgentSessions: {
+      name: "ListAgentSessions",
+      requestType: ListAgentSessionsRequest as typeof ListAgentSessionsRequest,
+      requestStream: false,
+      responseType: ListAgentSessionsResponse as typeof ListAgentSessionsResponse,
+      responseStream: false,
+      options: {},
+    },
+    /**
+     * Streams a session's events in order, starting after `after_seq` (0: from
+     * its first event). With `follow` the stream stays open and carries new
+     * events as they happen; without it, it ends after the latest one.
+     */
+    agentEvents: {
+      name: "AgentEvents",
+      requestType: AgentEventsRequest as typeof AgentEventsRequest,
+      requestStream: false,
+      responseType: AgentEvent as typeof AgentEvent,
+      responseStream: true,
       options: {},
     },
     createNetwork: {

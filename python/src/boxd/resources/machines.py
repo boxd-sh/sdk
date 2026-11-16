@@ -51,6 +51,7 @@ from ..models import (
 )
 from ..spec import MachineSpec, MachineSpecBuilder, MachineSpecPatch
 from . import Namespace
+from .agents import Agents, AsyncAgents
 from .computer import AsyncComputer, Computer
 from .fs import AsyncFs, Fs
 
@@ -576,6 +577,7 @@ class Machines(Namespace):
         self.proxies = Proxies(transport)
         self.checkpoints = Checkpoints(transport)
         self.backups = Backups(transport)
+        self.agents = Agents(transport)
         self.rdp = Rdp(transport)
         # Each machine's OS as this client has seen it, by (region, id or
         # name): what `exec` builds its command line for. It never changes.
@@ -1963,6 +1965,7 @@ class AsyncMachines(Namespace):
         self.proxies = AsyncProxies(transport)
         self.checkpoints = AsyncCheckpoints(transport)
         self.backups = AsyncBackups(transport)
+        self.agents = AsyncAgents(transport)
         self.rdp = AsyncRdp(transport)
         # See `Machines.__init__`.
         self._os_seen: dict[tuple[str | None, str], str] = {}

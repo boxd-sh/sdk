@@ -74,6 +74,30 @@ service BoxdApi {
   // `ComputerScreenshotOptions.max_width`/`max_height` is smaller than the
   // screen, and the caller scales the coordinates it gets back up.
   rpc ComputerAction(ComputerActionRequest) returns (ComputerActionResponse);
+  // Coding agents: drive Claude Code, Codex or OpenCode inside a machine the
+  // same way, through sessions, turns and one typed event stream. The agent
+  // runs in the machine and keeps working when the caller disconnects; the
+  // caller catches up with AgentEvents from the last `seq` it saw.
+  //
+  // A session is one conversation with one agent. A message sent to it starts
+  // a turn, joins the running turn, or waits for it to end (SendToAgent
+  // `when`). A session runs one turn at a time; a machine's sessions run side
+  // by side.
+  rpc ListHarnesses(ListHarnessesRequest)          returns (ListHarnessesResponse);
+  rpc StartAgentSession(StartAgentSessionRequest)  returns (AgentSession);
+  rpc SendToAgent(SendToAgentRequest)              returns (SendToAgentResponse);
+  // Stops one session's running turn; the machine's other sessions keep
+  // going. A no-op when nothing is running.
+  rpc InterruptAgent(InterruptAgentRequest)        returns (InterruptAgentResponse);
+  // Ends a session: interrupts its running turn, drops the messages waiting
+  // for it and stops its agent. Its events stay readable.
+  rpc CloseAgentSession(CloseAgentSessionRequest)  returns (CloseAgentSessionResponse);
+  rpc GetAgentSession(GetAgentSessionRequest)      returns (AgentSession);
+  rpc ListAgentSessions(ListAgentSessionsRequest)  returns (ListAgentSessionsResponse);
+  // Streams a session's events in order, starting after `after_seq` (0: from
+  // its first event). With `follow` the stream stays open and carries new
+  // events as they happen; without it, it ends after the latest one.
+  rpc AgentEvents(AgentEventsRequest)              returns (stream AgentEvent);
   rpc CreateNetwork(CreateNetworkRequest)   returns (CreateNetworkResponse);
   rpc ListNetworks(ListNetworksRequest)     returns (ListNetworksResponse);
   // Per-VM custom domains (one domain -> one VM). AddCustomDomain creates a
@@ -1976,6 +2000,285 @@ message FsRealpathRequest {
 }
 message FsRealpathResponse {
   bytes path = 1;  // absolute, without symlinks, `.` or `..`
+}
+
+// --- Coding agents (machines.agents) ---
+
+// A coding agent a machine can run.
+message Harness {
+  // `claude-code`, `codex` or `opencode`.
+  string id = 1;
+  // The version installed on the machine; empty when it isn't installed.
+  string version = 2;
+  // Whether a message can join a turn while it runs (`AGENT_SEND_WHEN_NOW`).
+  // Without it such a message waits for the next turn.
+  bool mid_turn_input = 3;
+  // Models the agent accepts in `StartAgentSessionRequest.model`; empty when
+  // the agent doesn't list them.
+  repeated string models = 4;
+}
+
+message ListHarnessesRequest {
+  string vm_id = 1;  // machine name or id
+}
+
+message ListHarnessesResponse {
+  repeated Harness harnesses = 1;
+}
+
+message StartAgentSessionRequest {
+  string vm_id   = 1;  // machine name or id
+  // `claude-code`, `codex` or `opencode` (ListHarnesses).
+  string harness = 2;
+  // Empty: the agent's own default.
+  string model   = 3;
+  // The directory the agent works in. Empty: the home directory of the
+  // machine's user.
+  string cwd     = 4;
+  // Added to the agent's own system prompt, never replacing it.
+  string instructions = 5;
+  // Environment variables for this session's agent, on top of the machine's
+  // own variables and secrets.
+  map<string, string> env = 6;
+}
+
+enum AgentSessionState {
+  AGENT_SESSION_STATE_UNSPECIFIED = 0;
+  AGENT_SESSION_STATE_IDLE        = 1;  // waiting for a message
+  AGENT_SESSION_STATE_RUNNING     = 2;  // a turn is running
+  AGENT_SESSION_STATE_CLOSED      = 3;  // ended with CloseAgentSession
+  AGENT_SESSION_STATE_FAILED      = 4;  // the agent can't go on; see `error`
+}
+
+message AgentSession {
+  string id      = 1;
+  string vm_id   = 2;  // the machine's id
+  string harness = 3;
+  // The agent version this session runs. It doesn't change during the
+  // session, even if the machine's agent is updated meanwhile.
+  string harness_version = 4;
+  string model   = 5;
+  string cwd     = 6;
+  AgentSessionState state = 7;
+  // The turn running now, or the last one; 0 before the first.
+  uint64 turn    = 8;
+  // Messages waiting for the running turn to end, each its own turn.
+  uint32 queued  = 9;
+  // The latest event's `seq`; 0 before the first.
+  uint64 last_seq = 10;
+  int64  created_at_ms = 11;
+  // For a failed session: what went wrong and what to do about it.
+  string error   = 12;
+}
+
+enum AgentSendWhen {
+  AGENT_SEND_WHEN_UNSPECIFIED = 0;  // the same as NEXT
+  // A turn of its own: at once when the session is idle, else after the
+  // running turn and any messages already waiting.
+  AGENT_SEND_WHEN_NEXT        = 1;
+  // Into the running turn, for the agent to take into account before the
+  // turn ends. An agent that can't take input mid-turn queues it for the
+  // next turn instead (`AGENT_DELIVERY_QUEUED_FALLBACK`); an idle session
+  // starts a turn with it.
+  AGENT_SEND_WHEN_NOW         = 2;
+}
+
+message SendToAgentRequest {
+  string vm_id      = 1;  // machine name or id
+  string session_id = 2;
+  string text       = 3;
+  AgentSendWhen when = 4;
+  // For a turn this message starts: interrupt it after this many seconds,
+  // or after this many agent steps: calls to the model for Claude Code,
+  // tool calls for Codex (which reports no model calls). 0: no limit. They
+  // don't apply to a running turn the message joins.
+  uint32 timeout_secs = 5;
+  uint32 max_steps    = 6;
+}
+
+enum AgentDelivery {
+  AGENT_DELIVERY_UNSPECIFIED     = 0;
+  AGENT_DELIVERY_STARTED         = 1;  // started a turn
+  AGENT_DELIVERY_QUEUED          = 2;  // starts a turn once the running one ends
+  AGENT_DELIVERY_JOINED          = 3;  // joined the running turn
+  // Asked to join the running turn, but the agent can't take input mid-turn:
+  // queued for the next turn instead.
+  AGENT_DELIVERY_QUEUED_FALLBACK = 4;
+}
+
+message SendToAgentResponse {
+  // The turn the message started or joined, or the one it will start.
+  uint64 turn = 1;
+  AgentDelivery delivery = 2;
+}
+
+message InterruptAgentRequest {
+  string vm_id      = 1;  // machine name or id
+  string session_id = 2;
+  // Also drop the messages waiting for the next turns. Without it, the next
+  // waiting message starts its turn once the interrupted one has ended.
+  bool clear_queue  = 3;
+}
+
+message InterruptAgentResponse {
+  // The turn that was interrupted; 0 when none was running.
+  uint64 turn = 1;
+}
+
+message CloseAgentSessionRequest {
+  string vm_id      = 1;  // machine name or id
+  string session_id = 2;
+}
+
+message CloseAgentSessionResponse {}
+
+message GetAgentSessionRequest {
+  string vm_id      = 1;  // machine name or id
+  string session_id = 2;
+}
+
+message ListAgentSessionsRequest {
+  string vm_id = 1;  // machine name or id
+  // Include closed and failed sessions.
+  bool all     = 2;
+}
+
+message ListAgentSessionsResponse {
+  repeated AgentSession sessions = 1;
+}
+
+message AgentEventsRequest {
+  string vm_id      = 1;  // machine name or id
+  string session_id = 2;
+  // Start after this event; 0: from the session's first event.
+  uint64 after_seq  = 3;
+  // Keep the stream open and carry new events as they happen.
+  bool   follow     = 4;
+}
+
+// What happened in a session, in order. A session's events are numbered 1,
+// 2, 3… (`seq`), so a client that reconnects asks for `after_seq` = the last
+// one it saw and misses nothing. Their kinds are typed and look the same for
+// every agent. New kinds may be added later: a client skips the ones it
+// doesn't know.
+message AgentEvent {
+  uint64 seq     = 1;
+  // The turn it belongs to.
+  uint64 turn    = 2;
+  int64  time_ms = 3;
+  oneof kind {
+    AgentTurnStarted   turn_started   = 10;
+    AgentUserMessage   user_message   = 11;
+    AgentMessageDelta  message_delta  = 12;
+    AgentMessage       message        = 13;
+    AgentThinkingDelta thinking_delta = 14;
+    AgentToolStarted   tool_started   = 15;
+    AgentToolOutput    tool_output    = 16;
+    AgentToolFinished  tool_finished  = 17;
+    AgentPlan          plan           = 18;
+    AgentUsage         usage          = 19;
+    AgentTurnFinished  turn_finished  = 20;
+  }
+}
+
+message AgentTurnStarted {}
+
+// A message the turn received: the one that started it, or one that joined
+// it while it ran.
+message AgentUserMessage {
+  string text = 1;
+  AgentDelivery delivery = 2;
+}
+
+// The next piece of the agent's reply, as it is written.
+message AgentMessageDelta {
+  string text = 1;
+}
+
+// One whole reply, once written: what its deltas add up to.
+message AgentMessage {
+  string text = 1;
+}
+
+// The next piece of the agent's reasoning, for agents that show it.
+message AgentThinkingDelta {
+  string text = 1;
+}
+
+// What a tool call does, the same for every agent; the agent's own tool
+// name is in `AgentToolStarted.name`.
+enum AgentToolKind {
+  AGENT_TOOL_KIND_UNSPECIFIED = 0;
+  AGENT_TOOL_KIND_SHELL       = 1;  // runs a command
+  AGENT_TOOL_KIND_EDIT        = 2;  // writes or changes a file
+  AGENT_TOOL_KIND_READ        = 3;  // reads a file
+  AGENT_TOOL_KIND_SEARCH      = 4;  // searches files or code
+  AGENT_TOOL_KIND_WEB         = 5;  // fetches or searches the web
+  AGENT_TOOL_KIND_MCP         = 6;  // calls an MCP server's tool
+  AGENT_TOOL_KIND_COMPUTER    = 7;  // uses the desktop
+  AGENT_TOOL_KIND_OTHER       = 8;
+}
+
+message AgentToolStarted {
+  // Ties the call's output and end to it.
+  string call_id    = 1;
+  AgentToolKind kind = 2;
+  // The agent's own name for the tool (`Bash`, `shell`, …).
+  string name       = 3;
+  // The call's input as the agent sent it, as JSON.
+  string input_json = 4;
+}
+
+// Output a tool call produces while it runs, such as a command's output.
+message AgentToolOutput {
+  string call_id = 1;
+  string text    = 2;
+}
+
+message AgentToolFinished {
+  string call_id = 1;
+  bool   is_error = 2;
+  // The result as the agent received it; long results may be cut short.
+  string result  = 3;
+}
+
+// The agent's to-do list for the turn, whole each time it changes.
+message AgentPlan {
+  repeated AgentPlanItem items = 1;
+}
+
+message AgentPlanItem {
+  string text   = 1;
+  // `pending`, `in_progress` or `done`.
+  string status = 2;
+}
+
+// Tokens the turn has used so far, as the agent reports them; sent at least
+// once per turn, before it finishes.
+message AgentUsage {
+  uint64 input_tokens       = 1;
+  uint64 output_tokens      = 2;
+  uint64 cache_read_tokens  = 3;
+  uint64 cache_write_tokens = 4;
+}
+
+enum AgentFinishReason {
+  AGENT_FINISH_REASON_UNSPECIFIED = 0;
+  AGENT_FINISH_REASON_DONE        = 1;  // the agent finished its reply
+  // InterruptAgent, CloseAgentSession, or the machine stopped.
+  AGENT_FINISH_REASON_INTERRUPTED = 2;
+  AGENT_FINISH_REASON_TIMEOUT     = 3;  // `timeout_secs` ran out
+  AGENT_FINISH_REASON_MAX_STEPS   = 4;  // `max_steps` ran out
+  AGENT_FINISH_REASON_MAX_TOKENS  = 5;  // the model reached its output limit
+  AGENT_FINISH_REASON_REFUSED     = 6;  // the model declined
+  AGENT_FINISH_REASON_FAILED      = 7;  // see `error`
+}
+
+// The last event of every turn.
+message AgentTurnFinished {
+  AgentFinishReason reason = 1;
+  // For FAILED: what went wrong and what to do about it.
+  string error = 2;
 }
 
 // --- Snapshots ---

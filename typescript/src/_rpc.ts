@@ -41,6 +41,12 @@ export interface ReadableCall<Out> {
    *  emitted after it. Optional: without it the rest of the stream is read
    *  and dropped. */
   cancel?(): void;
+  /** Stop emitting `"data"` until `resume()`: a reader that has more than
+   *  it can take. The transport stops reading, so the server's flow control
+   *  holds the rest back instead of it piling up in memory. Optional:
+   *  without it a slow reader buffers. */
+  pause?(): void;
+  resume?(): void;
 }
 
 export interface WritableCall<In> {

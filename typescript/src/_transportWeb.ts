@@ -171,6 +171,8 @@ function anySignal(a?: AbortSignal, b?: AbortSignal): AbortSignal | undefined {
 async function pumpGrpcWebResponse(
   resp: Response,
   onData: (payload: Uint8Array) => void,
+  /** Awaited before each read: a paused reader's (`ReadableCall.pause`). */
+  ready?: () => Promise<void>,
 ): Promise<{ status: number; message: string; reason?: string }> {
   if (!resp.ok || !resp.body) {
     throw new APIConnectionError(`unexpected HTTP status ${resp.status}`);
@@ -181,6 +183,7 @@ async function pumpGrpcWebResponse(
   let trailerMessage = "";
   let trailerReason: string | undefined;
   for (;;) {
+    if (ready) await ready();
     const { done, value } = await reader.read();
     if (value) buf = concatBytes(buf, value);
     for (;;) {
@@ -382,6 +385,9 @@ export class WebTransport implements ITransport {
     const handlers: Record<string, ((arg: unknown) => void)[]> = {};
     const abort = new AbortController();
     let cancelled = false;
+    // While paused, the next read waits for this; the body stays unread and
+    // the connection's flow control holds the rest back.
+    let paused: { wait: Promise<void>; go: () => void } | undefined;
     const proxy: ReadableCall<Resp> = {
       on(event, fn) {
         (handlers[event] ??= []).push(fn as (arg: unknown) => void);
@@ -389,6 +395,18 @@ export class WebTransport implements ITransport {
       cancel() {
         cancelled = true;
         abort.abort();
+        proxy.resume?.();
+      },
+      pause() {
+        if (paused) return;
+        let go = () => {};
+        const wait = new Promise<void>((resolve) => (go = resolve));
+        paused = { wait, go };
+      },
+      resume() {
+        const p = paused;
+        paused = undefined;
+        p?.go();
       },
     };
     void (async () => {
@@ -399,9 +417,15 @@ export class WebTransport implements ITransport {
         maybeNotifyUpdate(resp.headers.get(VERSION_RESPONSE_HEADER) ?? undefined);
         const rejected = headerError(resp);
         if (rejected) throw rejected;
-        const { status, message, reason } = await pumpGrpcWebResponse(resp, (payload) => {
-          if (!cancelled) emit(handlers, "data", method.responseType.decode(payload));
-        });
+        const { status, message, reason } = await pumpGrpcWebResponse(
+          resp,
+          (payload) => {
+            if (!cancelled) emit(handlers, "data", method.responseType.decode(payload));
+          },
+          async () => {
+            while (paused) await paused.wait;
+          },
+        );
         if (cancelled) return;
         if (status !== 0) {
           emit(handlers, "error", statusError(status, message, reason));

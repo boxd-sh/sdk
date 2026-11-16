@@ -11,12 +11,34 @@ Every function here is pure — the sync and async clients share all of it.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from typing import Any
 
 from . import spec as _spec
 
 from .models import (
     Account,
+    AgentDelivery,
+    AgentEvent,
+    AgentFinishReason,
+    AgentInterruptResult,
+    AgentMessage,
+    AgentMessageDelta,
+    AgentPlan,
+    AgentPlanItem,
+    AgentSendResult,
+    AgentSession,
+    AgentSessionState,
+    AgentThinkingDelta,
+    AgentToolFinished,
+    AgentToolKind,
+    AgentToolOutput,
+    AgentToolStarted,
+    AgentTurnFinished,
+    AgentTurnStarted,
+    AgentUsage,
+    AgentUserMessage,
     ApiKey,
     Backup,
     BackupSchedule,
@@ -41,6 +63,7 @@ from .models import (
     ExposedPort,
     FsEntry,
     FsEntryType,
+    Harness,
     BillingActivityEntry,
     BillingActivityPage,
     Machine,
@@ -572,6 +595,160 @@ def computer_action_result(msg) -> ComputerActionResult:
         if shot is not None
         else None,
     )
+
+
+# ── Coding agents ────────────────────────────────────────────────────
+
+# The proto's enum numbers, by name. A number this SDK doesn't know (a value a
+# newer server added) maps to "unknown", or to "other" for a tool kind, never
+# to an error.
+_AGENT_SESSION_STATES: dict[int, AgentSessionState] = {
+    1: "idle",
+    2: "running",
+    3: "closed",
+    4: "failed",
+}
+_AGENT_DELIVERIES: dict[int, AgentDelivery] = {
+    1: "started",
+    2: "queued",
+    3: "joined",
+    4: "queued_fallback",
+}
+_AGENT_TOOL_KINDS: dict[int, AgentToolKind] = {
+    1: "shell",
+    2: "edit",
+    3: "read",
+    4: "search",
+    5: "web",
+    6: "mcp",
+    7: "computer",
+    8: "other",
+}
+_AGENT_FINISH_REASONS: dict[int, AgentFinishReason] = {
+    1: "done",
+    2: "interrupted",
+    3: "timeout",
+    4: "max_steps",
+    5: "max_tokens",
+    6: "refused",
+    7: "failed",
+}
+
+
+def agent_delivery(value: int) -> AgentDelivery:
+    return _AGENT_DELIVERIES.get(value, "unknown")
+
+
+def harness(msg) -> Harness:
+    return Harness(
+        id=msg.id,
+        version=_text(msg.version),
+        mid_turn_input=msg.mid_turn_input,
+        models=list(msg.models),
+    )
+
+
+def agent_session(msg) -> AgentSession:
+    return AgentSession(
+        id=msg.id,
+        machine_id=msg.vm_id,
+        harness=msg.harness,
+        harness_version=msg.harness_version,
+        model=_text(msg.model),
+        cwd=msg.cwd,
+        state=_AGENT_SESSION_STATES.get(msg.state, "unknown"),
+        turn=msg.turn,
+        queued=msg.queued,
+        last_seq=msg.last_seq,
+        created_at=_epoch_ms_always(msg.created_at_ms),
+        error=_text(msg.error),
+    )
+
+
+def agent_send_result(msg) -> AgentSendResult:
+    return AgentSendResult(turn=msg.turn, delivery=agent_delivery(msg.delivery))
+
+
+def agent_interrupt_result(msg) -> AgentInterruptResult:
+    # Turns are numbered from 1: 0 is "nothing was running".
+    return AgentInterruptResult(turn=msg.turn or None)
+
+
+def _tool_input(raw: str) -> Any:
+    """A tool call's `input_json`: the JSON parsed, the text as it is when it
+    isn't JSON, None when the agent sent none."""
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return raw
+
+
+def agent_event(msg) -> AgentEvent | None:
+    """An `AgentEvent`, or None for one whose kind this SDK doesn't know (a
+    newer server's) or that has none: callers skip it."""
+    kind = msg.WhichOneof("kind")
+    base: dict[str, Any] = {
+        "seq": msg.seq,
+        "turn": msg.turn,
+        "time": _epoch_ms_always(msg.time_ms),
+    }
+    if kind == "turn_started":
+        return AgentTurnStarted(**base)
+    if kind == "user_message":
+        ev = msg.user_message
+        return AgentUserMessage(
+            **base, text=ev.text, delivery=agent_delivery(ev.delivery)
+        )
+    if kind == "message_delta":
+        return AgentMessageDelta(**base, text=msg.message_delta.text)
+    if kind == "message":
+        return AgentMessage(**base, text=msg.message.text)
+    if kind == "thinking_delta":
+        return AgentThinkingDelta(**base, text=msg.thinking_delta.text)
+    if kind == "tool_started":
+        ev = msg.tool_started
+        return AgentToolStarted(
+            **base,
+            call_id=ev.call_id,
+            kind=_AGENT_TOOL_KINDS.get(ev.kind, "other"),
+            name=ev.name,
+            input=_tool_input(ev.input_json),
+        )
+    if kind == "tool_output":
+        ev = msg.tool_output
+        return AgentToolOutput(**base, call_id=ev.call_id, text=ev.text)
+    if kind == "tool_finished":
+        ev = msg.tool_finished
+        return AgentToolFinished(
+            **base, call_id=ev.call_id, is_error=ev.is_error, result=ev.result
+        )
+    if kind == "plan":
+        return AgentPlan(
+            **base,
+            items=[
+                AgentPlanItem(text=item.text, status=item.status)
+                for item in msg.plan.items
+            ],
+        )
+    if kind == "usage":
+        ev = msg.usage
+        return AgentUsage(
+            **base,
+            input_tokens=ev.input_tokens,
+            output_tokens=ev.output_tokens,
+            cache_read_tokens=ev.cache_read_tokens,
+            cache_write_tokens=ev.cache_write_tokens,
+        )
+    if kind == "turn_finished":
+        ev = msg.turn_finished
+        return AgentTurnFinished(
+            **base,
+            reason=_AGENT_FINISH_REASONS.get(ev.reason, "unknown"),
+            error=_text(ev.error),
+        )
+    return None
 
 
 def org_domain(msg) -> OrgDomain:

@@ -459,6 +459,32 @@ describe("WebTransport: server-streaming (grpc-web)", () => {
     const text = new TextDecoder().decode(chunks[0]!.data);
     expect(text).toBe("contents of /etc/hostname");
   });
+
+  it("a paused stream reads nothing until it's resumed", async () => {
+    proxy = startMockProxy();
+    const t = transportAgainst(proxy);
+    const call = t.serverStream(
+      BoxdApiDefinition.methods.downloadFileStream,
+      DownloadFileRequest.fromPartial({ vmId: "alpha", path: "/etc/hostname" }),
+    );
+    call.pause?.();
+    const chunks: DownloadFileChunk[] = [];
+    let ended = false;
+    const done = new Promise<void>((resolve, reject) => {
+      call.on("data", (c) => chunks.push(c));
+      call.on("error", reject);
+      call.on("end", () => {
+        ended = true;
+        resolve();
+      });
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(chunks).toHaveLength(0);
+    expect(ended).toBe(false);
+    call.resume?.();
+    await done;
+    expect(chunks).toHaveLength(1);
+  });
 });
 
 describe("WebTransport: Exec / UploadFileStream over grpc-web, half-duplex", () => {

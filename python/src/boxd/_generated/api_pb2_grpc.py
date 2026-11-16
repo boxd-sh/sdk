@@ -149,6 +149,46 @@ class BoxdApiStub(object):
                 request_serializer=api__pb2.ComputerActionRequest.SerializeToString,
                 response_deserializer=api__pb2.ComputerActionResponse.FromString,
                 _registered_method=True)
+        self.ListHarnesses = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/ListHarnesses',
+                request_serializer=api__pb2.ListHarnessesRequest.SerializeToString,
+                response_deserializer=api__pb2.ListHarnessesResponse.FromString,
+                _registered_method=True)
+        self.StartAgentSession = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/StartAgentSession',
+                request_serializer=api__pb2.StartAgentSessionRequest.SerializeToString,
+                response_deserializer=api__pb2.AgentSession.FromString,
+                _registered_method=True)
+        self.SendToAgent = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/SendToAgent',
+                request_serializer=api__pb2.SendToAgentRequest.SerializeToString,
+                response_deserializer=api__pb2.SendToAgentResponse.FromString,
+                _registered_method=True)
+        self.InterruptAgent = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/InterruptAgent',
+                request_serializer=api__pb2.InterruptAgentRequest.SerializeToString,
+                response_deserializer=api__pb2.InterruptAgentResponse.FromString,
+                _registered_method=True)
+        self.CloseAgentSession = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/CloseAgentSession',
+                request_serializer=api__pb2.CloseAgentSessionRequest.SerializeToString,
+                response_deserializer=api__pb2.CloseAgentSessionResponse.FromString,
+                _registered_method=True)
+        self.GetAgentSession = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/GetAgentSession',
+                request_serializer=api__pb2.GetAgentSessionRequest.SerializeToString,
+                response_deserializer=api__pb2.AgentSession.FromString,
+                _registered_method=True)
+        self.ListAgentSessions = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/ListAgentSessions',
+                request_serializer=api__pb2.ListAgentSessionsRequest.SerializeToString,
+                response_deserializer=api__pb2.ListAgentSessionsResponse.FromString,
+                _registered_method=True)
+        self.AgentEvents = channel.unary_stream(
+                '/boxd.api.v1.BoxdApi/AgentEvents',
+                request_serializer=api__pb2.AgentEventsRequest.SerializeToString,
+                response_deserializer=api__pb2.AgentEvent.FromString,
+                _registered_method=True)
         self.CreateNetwork = channel.unary_unary(
                 '/boxd.api.v1.BoxdApi/CreateNetwork',
                 request_serializer=api__pb2.CreateNetworkRequest.SerializeToString,
@@ -916,6 +956,70 @@ class BoxdApiServicer(object):
         response carries the screen's size. A screenshot scaled down with
         `ComputerScreenshotOptions.max_width`/`max_height` is smaller than the
         screen, and the caller scales the coordinates it gets back up.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListHarnesses(self, request, context):
+        """Coding agents: drive Claude Code, Codex or OpenCode inside a machine the
+        same way, through sessions, turns and one typed event stream. The agent
+        runs in the machine and keeps working when the caller disconnects; the
+        caller catches up with AgentEvents from the last `seq` it saw.
+
+        A session is one conversation with one agent. A message sent to it starts
+        a turn, joins the running turn, or waits for it to end (SendToAgent
+        `when`). A session runs one turn at a time; a machine's sessions run side
+        by side.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def StartAgentSession(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SendToAgent(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def InterruptAgent(self, request, context):
+        """Stops one session's running turn; the machine's other sessions keep
+        going. A no-op when nothing is running.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CloseAgentSession(self, request, context):
+        """Ends a session: interrupts its running turn, drops the messages waiting
+        for it and stops its agent. Its events stay readable.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetAgentSession(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListAgentSessions(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def AgentEvents(self, request, context):
+        """Streams a session's events in order, starting after `after_seq` (0: from
+        its first event). With `follow` the stream stays open and carries new
+        events as they happen; without it, it ends after the latest one.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -1932,6 +2036,46 @@ def add_BoxdApiServicer_to_server(servicer, server):
                     servicer.ComputerAction,
                     request_deserializer=api__pb2.ComputerActionRequest.FromString,
                     response_serializer=api__pb2.ComputerActionResponse.SerializeToString,
+            ),
+            'ListHarnesses': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListHarnesses,
+                    request_deserializer=api__pb2.ListHarnessesRequest.FromString,
+                    response_serializer=api__pb2.ListHarnessesResponse.SerializeToString,
+            ),
+            'StartAgentSession': grpc.unary_unary_rpc_method_handler(
+                    servicer.StartAgentSession,
+                    request_deserializer=api__pb2.StartAgentSessionRequest.FromString,
+                    response_serializer=api__pb2.AgentSession.SerializeToString,
+            ),
+            'SendToAgent': grpc.unary_unary_rpc_method_handler(
+                    servicer.SendToAgent,
+                    request_deserializer=api__pb2.SendToAgentRequest.FromString,
+                    response_serializer=api__pb2.SendToAgentResponse.SerializeToString,
+            ),
+            'InterruptAgent': grpc.unary_unary_rpc_method_handler(
+                    servicer.InterruptAgent,
+                    request_deserializer=api__pb2.InterruptAgentRequest.FromString,
+                    response_serializer=api__pb2.InterruptAgentResponse.SerializeToString,
+            ),
+            'CloseAgentSession': grpc.unary_unary_rpc_method_handler(
+                    servicer.CloseAgentSession,
+                    request_deserializer=api__pb2.CloseAgentSessionRequest.FromString,
+                    response_serializer=api__pb2.CloseAgentSessionResponse.SerializeToString,
+            ),
+            'GetAgentSession': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetAgentSession,
+                    request_deserializer=api__pb2.GetAgentSessionRequest.FromString,
+                    response_serializer=api__pb2.AgentSession.SerializeToString,
+            ),
+            'ListAgentSessions': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListAgentSessions,
+                    request_deserializer=api__pb2.ListAgentSessionsRequest.FromString,
+                    response_serializer=api__pb2.ListAgentSessionsResponse.SerializeToString,
+            ),
+            'AgentEvents': grpc.unary_stream_rpc_method_handler(
+                    servicer.AgentEvents,
+                    request_deserializer=api__pb2.AgentEventsRequest.FromString,
+                    response_serializer=api__pb2.AgentEvent.SerializeToString,
             ),
             'CreateNetwork': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateNetwork,
@@ -3135,6 +3279,222 @@ class BoxdApi(object):
             '/boxd.api.v1.BoxdApi/ComputerAction',
             api__pb2.ComputerActionRequest.SerializeToString,
             api__pb2.ComputerActionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListHarnesses(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/ListHarnesses',
+            api__pb2.ListHarnessesRequest.SerializeToString,
+            api__pb2.ListHarnessesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StartAgentSession(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/StartAgentSession',
+            api__pb2.StartAgentSessionRequest.SerializeToString,
+            api__pb2.AgentSession.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SendToAgent(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/SendToAgent',
+            api__pb2.SendToAgentRequest.SerializeToString,
+            api__pb2.SendToAgentResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def InterruptAgent(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/InterruptAgent',
+            api__pb2.InterruptAgentRequest.SerializeToString,
+            api__pb2.InterruptAgentResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CloseAgentSession(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/CloseAgentSession',
+            api__pb2.CloseAgentSessionRequest.SerializeToString,
+            api__pb2.CloseAgentSessionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetAgentSession(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/GetAgentSession',
+            api__pb2.GetAgentSessionRequest.SerializeToString,
+            api__pb2.AgentSession.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListAgentSessions(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/ListAgentSessions',
+            api__pb2.ListAgentSessionsRequest.SerializeToString,
+            api__pb2.ListAgentSessionsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def AgentEvents(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/AgentEvents',
+            api__pb2.AgentEventsRequest.SerializeToString,
+            api__pb2.AgentEvent.FromString,
             options,
             channel_credentials,
             insecure,

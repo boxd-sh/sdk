@@ -42,6 +42,7 @@ import {
   type SelfDeleteResult,
 } from "./models.js";
 import { MachineBackups } from "./backups.js";
+import { MachineAgents } from "./agents.js";
 import { MachineCheckpoints } from "./checkpoints.js";
 import { MachineComputer } from "./computer.js";
 import { MachineFiles } from "./files.js";
@@ -681,6 +682,9 @@ export class Machines {
   readonly proxies: MachineProxies;
   readonly checkpoints: MachineCheckpoints;
   readonly backups: MachineBackups;
+  /** Coding agents (Claude Code, Codex, OpenCode) running in a machine:
+   *  sessions, messages and their events. */
+  readonly agents: MachineAgents;
   /** A Windows machine's RDP password: `machines.rdp.resetPassword(id)`. */
   readonly rdp: MachineRdpNamespace;
 
@@ -703,6 +707,7 @@ export class Machines {
     this.proxies = new MachineProxies(transport);
     this.checkpoints = new MachineCheckpoints(transport);
     this.backups = new MachineBackups(transport);
+    this.agents = new MachineAgents(transport);
     this.rdp = new MachineRdpNamespace(transport);
   }
 

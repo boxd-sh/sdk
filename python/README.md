@@ -1003,6 +1003,60 @@ The model does whatever it decides to on the machine, as the machine's user:
 give it a machine of its own. A complete Claude agent:
 [`examples/claude_computer_use.py`](https://github.com/boxd-sh/sdk/blob/main/python/examples/claude_computer_use.py).
 
+### Coding agents
+
+`machines.agents` runs Claude Code or Codex inside a machine through one API.
+A session is one conversation with one agent; each message you send runs as a
+turn, one at a time, and everything the turn does comes back as typed events,
+numbered by `seq`. The agent keeps working if you disconnect: pass the last
+`seq` you saw as `after_seq` to pick up where you left off.
+
+```python
+agents = boxd.machines.agents
+
+session = agents.start("my-box", "claude-code", cwd="/home/boxd/app")
+sent = agents.send("my-box", session.id, "Add a /health endpoint and a test for it")
+for event in agents.events("my-box", session.id, follow=True):
+    if event.type == "message.delta":
+        print(event.text, end="", flush=True)
+    elif event.type == "tool.started":
+        print(f"\n▸ {event.name} {event.input}")
+    elif event.type == "turn.finished" and event.turn == sent.turn:
+        print(f"\n[{event.reason}]")
+        break
+agents.close("my-box", session.id)
+```
+
+`send` returns once the message is delivered, not when the turn ends:
+`sent.turn` is the turn it started, joined or will start, and `sent.delivery`
+says how (`"started"`, `"queued"`, `"joined"`, `"queued_fallback"`). A message
+sent while a turn runs waits as a turn of its own; `send(..., when="now")` adds
+it to the running turn instead. `timeout_secs=` and `max_steps=` interrupt a
+turn the message starts after that many seconds or steps (model calls for
+Claude Code, tool calls for Codex). `interrupt()` stops the running turn
+(`clear_queue=True` also drops the waiting messages), `close()` ends the
+session, and `list(machine, all=True)` also shows closed and failed sessions.
+`harnesses()` lists the agents a machine can run.
+
+The events are `AgentTurnStarted`, `AgentUserMessage`, `AgentMessageDelta`,
+`AgentMessage`, `AgentThinkingDelta`, `AgentToolStarted`, `AgentToolOutput`,
+`AgentToolFinished`, `AgentPlan`, `AgentUsage` and `AgentTurnFinished`, told
+apart by `type`; every turn ends with `turn.finished` and its `reason`
+(`"done"`, `"interrupted"`, `"timeout"`, `"max_steps"`, `"max_tokens"`,
+`"refused"`, `"failed"`). An event of a type this SDK doesn't know is skipped.
+Without `follow`, `events()` ends after the latest event; with it, it has no
+deadline and stops when you stop iterating.
+
+The agent runs as the machine's user without asking before it acts, with the
+machine's env vars and secrets (`env=` adds more). Give it a key as a secret
+(`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, bound to its provider's host so the
+machine only holds a placeholder), or sign Claude Code or Codex in once and
+boxd serves the login to your private machines. The machine stays awake while
+a turn runs. `start`, `send` and `interrupt` are sent once: a lost answer is
+not retried, since that could start a second session or deliver a message
+twice. `AsyncBoxd` has the same methods, awaited, and `events()` there is an
+async iterator. More: [Coding agent sessions](https://docs.boxd.sh/guides/coding-agents).
+
 ### Ports and proxies
 
 ```python

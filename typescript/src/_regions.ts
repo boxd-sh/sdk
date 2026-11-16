@@ -191,6 +191,11 @@ const LOOKUP: ReadonlyMap<string, [Kind, string[]]> = new Map<string, [Kind, str
     "FsRemove",
     "FsRename",
     "FsRealpath",
+    // Agent calls that name only the machine. The ones on a session are
+    // left out: their not-found may be about the session.
+    "ListHarnesses",
+    "StartAgentSession",
+    "ListAgentSessions",
   ].map((m): [string, [Kind, string[]]] => [m, ["machine", MACHINE_FIELDS]]),
   ["GetSnapshot", ["snapshot", ["name"]]],
   ["DeleteSnapshot", ["snapshot", ["name"]]],

@@ -179,6 +179,11 @@ _LOOKUP: dict[str, tuple[str, tuple[str, ...]]] = {
             "FsRemove",
             "FsRename",
             "FsRealpath",
+            # Agent calls that name only the machine. The ones on a session
+            # are left out: their not-found may be about the session.
+            "ListHarnesses",
+            "StartAgentSession",
+            "ListAgentSessions",
         )
     },
     "GetSnapshot": ("snapshot", ("name",)),

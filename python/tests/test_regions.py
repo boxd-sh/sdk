@@ -604,6 +604,44 @@ def test_a_sub_resource_not_found_is_not_looked_up():
     assert home.methods() == ["DeleteCheckpoint"]
 
 
+def test_an_agent_call_on_the_machine_says_where_the_machine_is():
+    router, _, _ = make(
+        {
+            "ListAgentSessions": NotFoundError("machine not found: foo"),
+            "StartAgentSession": NotFoundError("machine not found: foo"),
+            "FindElsewhere": elsewhere(exact=[("nyc", "foo")]),
+        }
+    )
+    with pytest.raises(NotFoundError, match='pass region="nyc"'):
+        Machines(router).agents.list("foo")
+    with pytest.raises(NotFoundError, match='pass region="nyc"'):
+        router.call(
+            "StartAgentSession",
+            api_pb2.StartAgentSessionRequest(vm_id="foo", harness="codex"),
+        )
+
+
+def test_an_agent_session_not_found_is_not_looked_up():
+    # The session may be what is missing, not the machine.
+    router, home, _ = make({"GetAgentSession": NotFoundError("no session s-1")})
+    with pytest.raises(NotFoundError):
+        Machines(router).agents.get("foo", "s-1")
+    assert home.methods() == ["GetAgentSession"]
+
+
+def test_agent_calls_go_to_the_machines_region():
+    router, home, made = make(
+        {"ListRegions": listing()},
+        {NYC: {"ListHarnesses": api_pb2.ListHarnessesResponse(), "AgentEvents": [[]]}},
+        region="nyc",
+    )
+    agents = Machines(router).agents
+    agents.harnesses("alpha")
+    list(agents.events("alpha", "s-1"))
+    assert home.methods() == ["ListRegions"]
+    assert made[NYC].methods() == ["ListHarnesses", "AgentEvents"]
+
+
 def test_the_lookup_asks_the_region_that_said_not_found():
     router, home, made = make(
         {"ListRegions": listing()},
