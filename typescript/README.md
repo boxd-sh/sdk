@@ -1096,6 +1096,24 @@ running a step again.
 SDK doesn't know is skipped. Without `follow`, `events()` ends after the latest
 event; with it, it has no deadline, and a `break` ends the call.
 
+`runs()` reads how finished turns went from the platform's run history, newest
+first, across the machines you can see:
+
+```typescript
+const page = await agents.runs({ machine: "my-box", since: new Date(Date.now() - 86_400_000) });
+for (const r of page.runs) console.log(r.sessionId, r.turn, r.reason, r.error ?? "");
+// page.nextPageToken, passed as pageToken, reads the next, older page;
+// runsIter() reads every page for you.
+```
+
+Each `AgentRun` has the machine, the session, the turn, the agent and its
+version, how the turn started and ended (`reason`, `error`), when, its steps and
+its tokens, but no prompts or output. Filter by `machine`, `session` and `since`;
+`limit` is 50 by default, at most 500. Reading the history never wakes a
+machine, and it keeps 30 days of runs, also after a machine is deleted. A
+cluster that doesn't keep run history (some self-hosted ones) answers with a
+`ConflictError`.
+
 The agent runs as the machine's user without asking before it acts, with the
 machine's env vars and secrets (`env` adds more). Give it a key as a secret
 (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, bound to its provider's host so the

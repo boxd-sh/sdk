@@ -2663,6 +2663,62 @@ export interface ListAgentSessionsResponse {
   sessions: AgentSession[];
 }
 
+export interface ListAgentRunsRequest {
+  /**
+   * The organization, by name or id. Empty: your current one. You see the
+   * runs on its machines you can see, and on your own deleted ones.
+   */
+  org: string;
+  /** Only this machine's runs (name or id). */
+  vmId: string;
+  /** Only this session's runs. */
+  sessionId: string;
+  /**
+   * Only runs that ended at or after this time (ms since the epoch). 0: all
+   * that's kept (30 days).
+   */
+  sinceMs: number;
+  /** At most this many. 0: 50; at most 500. */
+  limit: number;
+  /** `next_page_token` from the previous page. */
+  pageToken: string;
+}
+
+/** One finished turn. */
+export interface AgentRun {
+  /** the machine's id */
+  vmId: string;
+  vmName: string;
+  sessionId: string;
+  harness: string;
+  harnessVersion: string;
+  model: string;
+  turn: number;
+  /**
+   * `message` (a message started it), `queued` (it waited for the turn
+   * before it) or `by_agent` (the agent started it, as Claude Code does to
+   * report a background command's end).
+   */
+  startedBy: string;
+  reason: AgentFinishReason;
+  /**
+   * For FAILED and some INTERRUPTED: what went wrong, its first 500
+   * characters.
+   */
+  error: string;
+  startedAtMs: number;
+  endedAtMs: number;
+  /** Model calls (Claude Code) or tool calls (Codex) in the turn. */
+  steps: number;
+  usage?: AgentUsage | undefined;
+}
+
+export interface ListAgentRunsResponse {
+  runs: AgentRun[];
+  /** Pass it as `page_token` for the next, older page; empty on the last. */
+  nextPageToken: string;
+}
+
 export interface AgentEventsRequest {
   /** machine name or id */
   vmId: string;
@@ -22648,6 +22704,555 @@ export const ListAgentSessionsResponse: MessageFns<ListAgentSessionsResponse> = 
   },
 };
 
+function createBaseListAgentRunsRequest(): ListAgentRunsRequest {
+  return { org: "", vmId: "", sessionId: "", sinceMs: 0, limit: 0, pageToken: "" };
+}
+
+export const ListAgentRunsRequest: MessageFns<ListAgentRunsRequest> = {
+  encode(message: ListAgentRunsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.org !== "") {
+      writer.uint32(10).string(message.org);
+    }
+    if (message.vmId !== "") {
+      writer.uint32(18).string(message.vmId);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(26).string(message.sessionId);
+    }
+    if (message.sinceMs !== 0) {
+      writer.uint32(32).int64(message.sinceMs);
+    }
+    if (message.limit !== 0) {
+      writer.uint32(40).uint32(message.limit);
+    }
+    if (message.pageToken !== "") {
+      writer.uint32(50).string(message.pageToken);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ListAgentRunsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseListAgentRunsRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.org = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.sessionId = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.sinceMs = longToNumber(reader.int64());
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.limit = reader.uint32();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.pageToken = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ListAgentRunsRequest {
+    return {
+      org: isSet(object.org) ? globalThis.String(object.org) : "",
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
+      sinceMs: isSet(object.sinceMs)
+        ? globalThis.Number(object.sinceMs)
+        : isSet(object.since_ms)
+        ? globalThis.Number(object.since_ms)
+        : 0,
+      limit: isSet(object.limit) ? globalThis.Number(object.limit) : 0,
+      pageToken: isSet(object.pageToken)
+        ? globalThis.String(object.pageToken)
+        : isSet(object.page_token)
+        ? globalThis.String(object.page_token)
+        : "",
+    };
+  },
+
+  toJSON(message: ListAgentRunsRequest): unknown {
+    const obj: any = {};
+    if (message.org !== "") {
+      obj.org = message.org;
+    }
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.sessionId !== "") {
+      obj.sessionId = message.sessionId;
+    }
+    if (message.sinceMs !== 0) {
+      obj.sinceMs = Math.round(message.sinceMs);
+    }
+    if (message.limit !== 0) {
+      obj.limit = Math.round(message.limit);
+    }
+    if (message.pageToken !== "") {
+      obj.pageToken = message.pageToken;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ListAgentRunsRequest>): ListAgentRunsRequest {
+    return ListAgentRunsRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ListAgentRunsRequest>): ListAgentRunsRequest {
+    const message = createBaseListAgentRunsRequest();
+    message.org = object.org ?? "";
+    message.vmId = object.vmId ?? "";
+    message.sessionId = object.sessionId ?? "";
+    message.sinceMs = object.sinceMs ?? 0;
+    message.limit = object.limit ?? 0;
+    message.pageToken = object.pageToken ?? "";
+    return message;
+  },
+};
+
+function createBaseAgentRun(): AgentRun {
+  return {
+    vmId: "",
+    vmName: "",
+    sessionId: "",
+    harness: "",
+    harnessVersion: "",
+    model: "",
+    turn: 0,
+    startedBy: "",
+    reason: 0,
+    error: "",
+    startedAtMs: 0,
+    endedAtMs: 0,
+    steps: 0,
+    usage: undefined,
+  };
+}
+
+export const AgentRun: MessageFns<AgentRun> = {
+  encode(message: AgentRun, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    if (message.vmName !== "") {
+      writer.uint32(18).string(message.vmName);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(26).string(message.sessionId);
+    }
+    if (message.harness !== "") {
+      writer.uint32(34).string(message.harness);
+    }
+    if (message.harnessVersion !== "") {
+      writer.uint32(42).string(message.harnessVersion);
+    }
+    if (message.model !== "") {
+      writer.uint32(50).string(message.model);
+    }
+    if (message.turn !== 0) {
+      writer.uint32(56).uint64(message.turn);
+    }
+    if (message.startedBy !== "") {
+      writer.uint32(66).string(message.startedBy);
+    }
+    if (message.reason !== 0) {
+      writer.uint32(72).int32(message.reason);
+    }
+    if (message.error !== "") {
+      writer.uint32(82).string(message.error);
+    }
+    if (message.startedAtMs !== 0) {
+      writer.uint32(88).int64(message.startedAtMs);
+    }
+    if (message.endedAtMs !== 0) {
+      writer.uint32(96).int64(message.endedAtMs);
+    }
+    if (message.steps !== 0) {
+      writer.uint32(104).uint32(message.steps);
+    }
+    if (message.usage !== undefined) {
+      AgentUsage.encode(message.usage, writer.uint32(114).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentRun {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentRun();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.vmName = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.sessionId = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.harness = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.harnessVersion = reader.string();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.model = reader.string();
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.turn = longToNumber(reader.uint64());
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.startedBy = reader.string();
+          continue;
+        }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.reason = reader.int32() as any;
+          continue;
+        }
+        case 10: {
+          if (tag !== 82) {
+            break;
+          }
+
+          message.error = reader.string();
+          continue;
+        }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.startedAtMs = longToNumber(reader.int64());
+          continue;
+        }
+        case 12: {
+          if (tag !== 96) {
+            break;
+          }
+
+          message.endedAtMs = longToNumber(reader.int64());
+          continue;
+        }
+        case 13: {
+          if (tag !== 104) {
+            break;
+          }
+
+          message.steps = reader.uint32();
+          continue;
+        }
+        case 14: {
+          if (tag !== 114) {
+            break;
+          }
+
+          message.usage = AgentUsage.decode(reader, reader.uint32());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentRun {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      vmName: isSet(object.vmName)
+        ? globalThis.String(object.vmName)
+        : isSet(object.vm_name)
+        ? globalThis.String(object.vm_name)
+        : "",
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
+      harness: isSet(object.harness) ? globalThis.String(object.harness) : "",
+      harnessVersion: isSet(object.harnessVersion)
+        ? globalThis.String(object.harnessVersion)
+        : isSet(object.harness_version)
+        ? globalThis.String(object.harness_version)
+        : "",
+      model: isSet(object.model) ? globalThis.String(object.model) : "",
+      turn: isSet(object.turn) ? globalThis.Number(object.turn) : 0,
+      startedBy: isSet(object.startedBy)
+        ? globalThis.String(object.startedBy)
+        : isSet(object.started_by)
+        ? globalThis.String(object.started_by)
+        : "",
+      reason: isSet(object.reason) ? agentFinishReasonFromJSON(object.reason) : 0,
+      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      startedAtMs: isSet(object.startedAtMs)
+        ? globalThis.Number(object.startedAtMs)
+        : isSet(object.started_at_ms)
+        ? globalThis.Number(object.started_at_ms)
+        : 0,
+      endedAtMs: isSet(object.endedAtMs)
+        ? globalThis.Number(object.endedAtMs)
+        : isSet(object.ended_at_ms)
+        ? globalThis.Number(object.ended_at_ms)
+        : 0,
+      steps: isSet(object.steps) ? globalThis.Number(object.steps) : 0,
+      usage: isSet(object.usage) ? AgentUsage.fromJSON(object.usage) : undefined,
+    };
+  },
+
+  toJSON(message: AgentRun): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.vmName !== "") {
+      obj.vmName = message.vmName;
+    }
+    if (message.sessionId !== "") {
+      obj.sessionId = message.sessionId;
+    }
+    if (message.harness !== "") {
+      obj.harness = message.harness;
+    }
+    if (message.harnessVersion !== "") {
+      obj.harnessVersion = message.harnessVersion;
+    }
+    if (message.model !== "") {
+      obj.model = message.model;
+    }
+    if (message.turn !== 0) {
+      obj.turn = Math.round(message.turn);
+    }
+    if (message.startedBy !== "") {
+      obj.startedBy = message.startedBy;
+    }
+    if (message.reason !== 0) {
+      obj.reason = agentFinishReasonToJSON(message.reason);
+    }
+    if (message.error !== "") {
+      obj.error = message.error;
+    }
+    if (message.startedAtMs !== 0) {
+      obj.startedAtMs = Math.round(message.startedAtMs);
+    }
+    if (message.endedAtMs !== 0) {
+      obj.endedAtMs = Math.round(message.endedAtMs);
+    }
+    if (message.steps !== 0) {
+      obj.steps = Math.round(message.steps);
+    }
+    if (message.usage !== undefined) {
+      obj.usage = AgentUsage.toJSON(message.usage);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentRun>): AgentRun {
+    return AgentRun.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentRun>): AgentRun {
+    const message = createBaseAgentRun();
+    message.vmId = object.vmId ?? "";
+    message.vmName = object.vmName ?? "";
+    message.sessionId = object.sessionId ?? "";
+    message.harness = object.harness ?? "";
+    message.harnessVersion = object.harnessVersion ?? "";
+    message.model = object.model ?? "";
+    message.turn = object.turn ?? 0;
+    message.startedBy = object.startedBy ?? "";
+    message.reason = object.reason ?? 0;
+    message.error = object.error ?? "";
+    message.startedAtMs = object.startedAtMs ?? 0;
+    message.endedAtMs = object.endedAtMs ?? 0;
+    message.steps = object.steps ?? 0;
+    message.usage = (object.usage !== undefined && object.usage !== null)
+      ? AgentUsage.fromPartial(object.usage)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseListAgentRunsResponse(): ListAgentRunsResponse {
+  return { runs: [], nextPageToken: "" };
+}
+
+export const ListAgentRunsResponse: MessageFns<ListAgentRunsResponse> = {
+  encode(message: ListAgentRunsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    for (const v of message.runs) {
+      AgentRun.encode(v!, writer.uint32(10).fork()).join();
+    }
+    if (message.nextPageToken !== "") {
+      writer.uint32(18).string(message.nextPageToken);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ListAgentRunsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseListAgentRunsResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.runs.push(AgentRun.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.nextPageToken = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ListAgentRunsResponse {
+    return {
+      runs: globalThis.Array.isArray(object?.runs) ? object.runs.map((e: any) => AgentRun.fromJSON(e)) : [],
+      nextPageToken: isSet(object.nextPageToken)
+        ? globalThis.String(object.nextPageToken)
+        : isSet(object.next_page_token)
+        ? globalThis.String(object.next_page_token)
+        : "",
+    };
+  },
+
+  toJSON(message: ListAgentRunsResponse): unknown {
+    const obj: any = {};
+    if (message.runs?.length) {
+      obj.runs = message.runs.map((e) => AgentRun.toJSON(e));
+    }
+    if (message.nextPageToken !== "") {
+      obj.nextPageToken = message.nextPageToken;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ListAgentRunsResponse>): ListAgentRunsResponse {
+    return ListAgentRunsResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ListAgentRunsResponse>): ListAgentRunsResponse {
+    const message = createBaseListAgentRunsResponse();
+    message.runs = object.runs?.map((e) => AgentRun.fromPartial(e)) || [];
+    message.nextPageToken = object.nextPageToken ?? "";
+    return message;
+  },
+};
+
 function createBaseAgentEventsRequest(): AgentEventsRequest {
   return { vmId: "", sessionId: "", afterSeq: 0, follow: false };
 }
@@ -38899,6 +39504,22 @@ export const BoxdApiService = {
     responseSerialize: (value: AgentEvent): Buffer => Buffer.from(AgentEvent.encode(value).finish()),
     responseDeserialize: (value: Buffer): AgentEvent => AgentEvent.decode(value),
   },
+  /**
+   * Finished turns across your machines, newest first, from the platform's
+   * run history: it never wakes a machine, and keeps a machine's runs for 30
+   * days, also after it's deleted. No prompts or output, only how each turn
+   * went (AgentEvents has the transcript, from the machine itself).
+   */
+  listAgentRuns: {
+    path: "/boxd.api.v1.BoxdApi/ListAgentRuns" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: ListAgentRunsRequest): Buffer => Buffer.from(ListAgentRunsRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): ListAgentRunsRequest => ListAgentRunsRequest.decode(value),
+    responseSerialize: (value: ListAgentRunsResponse): Buffer =>
+      Buffer.from(ListAgentRunsResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): ListAgentRunsResponse => ListAgentRunsResponse.decode(value),
+  },
   createNetwork: {
     path: "/boxd.api.v1.BoxdApi/CreateNetwork" as const,
     requestStream: false as const,
@@ -40453,6 +41074,13 @@ export interface BoxdApiServer extends UntypedServiceImplementation {
    * events as they happen; without it, it ends after the latest one.
    */
   agentEvents: handleServerStreamingCall<AgentEventsRequest, AgentEvent>;
+  /**
+   * Finished turns across your machines, newest first, from the platform's
+   * run history: it never wakes a machine, and keeps a machine's runs for 30
+   * days, also after it's deleted. No prompts or output, only how each turn
+   * went (AgentEvents has the transcript, from the machine itself).
+   */
+  listAgentRuns: handleUnaryCall<ListAgentRunsRequest, ListAgentRunsResponse>;
   createNetwork: handleUnaryCall<CreateNetworkRequest, CreateNetworkResponse>;
   listNetworks: handleUnaryCall<ListNetworksRequest, ListNetworksResponse>;
   /**
@@ -41356,6 +41984,27 @@ export interface BoxdApiClient extends Client {
     metadata?: Metadata,
     options?: Partial<CallOptions>,
   ): ClientReadableStream<AgentEvent>;
+  /**
+   * Finished turns across your machines, newest first, from the platform's
+   * run history: it never wakes a machine, and keeps a machine's runs for 30
+   * days, also after it's deleted. No prompts or output, only how each turn
+   * went (AgentEvents has the transcript, from the machine itself).
+   */
+  listAgentRuns(
+    request: ListAgentRunsRequest,
+    callback: (error: ServiceError | null, response: ListAgentRunsResponse) => void,
+  ): ClientUnaryCall;
+  listAgentRuns(
+    request: ListAgentRunsRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: ListAgentRunsResponse) => void,
+  ): ClientUnaryCall;
+  listAgentRuns(
+    request: ListAgentRunsRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: ListAgentRunsResponse) => void,
+  ): ClientUnaryCall;
   createNetwork(
     request: CreateNetworkRequest,
     callback: (error: ServiceError | null, response: CreateNetworkResponse) => void,

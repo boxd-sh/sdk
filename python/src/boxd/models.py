@@ -941,6 +941,61 @@ class AgentTurnFinished(AgentEventBase):
     otherwise."""
 
 
+AgentRunStartedBy = Literal["message", "queued", "by_agent", "unknown"]
+"""What started a turn. ``"message"``: a message sent to the session.
+``"queued"``: a message that waited for the turn before it to end.
+``"by_agent"``: the agent itself, as Claude Code does to report that a
+background command ended. ``"unknown"``: a value this SDK doesn't know yet."""
+
+
+class AgentRunUsage(BaseModel):
+    """Tokens a turn used, as the agent reported them."""
+
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+
+
+class AgentRun(BaseModel):
+    """One finished turn, from the platform's run history
+    (``machines.agents.runs``). It says how the turn went, not what was said:
+    no prompts and no output. ``machines.agents.events`` has the transcript,
+    read from the machine."""
+
+    machine_id: str
+    """The machine's id."""
+    machine_name: str
+    session_id: str
+    harness: str
+    """``"claude-code"``, ``"codex"`` or ``"opencode"``."""
+    harness_version: str
+    """The agent version the session ran."""
+    model: str
+    """The model the session asked for; ``""`` when it used the agent's own
+    default."""
+    turn: int
+    started_by: AgentRunStartedBy
+    reason: AgentFinishReason
+    error: str | None
+    """For ``"failed"`` and some ``"interrupted"`` turns: what went wrong, its
+    first 500 characters. None otherwise."""
+    started_at: datetime
+    ended_at: datetime
+    steps: int
+    """Calls to the model (Claude Code) or tool calls (Codex) in the turn."""
+    usage: AgentRunUsage
+
+
+class AgentRunsPage(BaseModel):
+    """One page of ``machines.agents.runs``, newest first."""
+
+    runs: list[AgentRun]
+    next_page_token: str | None
+    """Pass it as ``page_token`` for the next, older page. None: this was the
+    last."""
+
+
 AgentEvent = Union[
     AgentTurnStarted,
     AgentUserMessage,

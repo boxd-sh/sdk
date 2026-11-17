@@ -27,6 +27,10 @@ from .models import (
     AgentMessageDelta,
     AgentPlan,
     AgentPlanItem,
+    AgentRun,
+    AgentRunStartedBy,
+    AgentRunUsage,
+    AgentRunsPage,
     AgentSendResult,
     AgentSession,
     AgentSessionState,
@@ -662,6 +666,47 @@ def agent_session(msg) -> AgentSession:
         last_seq=msg.last_seq,
         created_at=_epoch_ms_always(msg.created_at_ms),
         error=_text(msg.error),
+    )
+
+
+# A string on the wire; one this SDK doesn't know (a newer server's) is
+# "unknown".
+_AGENT_RUN_STARTED_BY: dict[str, AgentRunStartedBy] = {
+    "message": "message",
+    "queued": "queued",
+    "by_agent": "by_agent",
+}
+
+
+def agent_run(msg) -> AgentRun:
+    usage = msg.usage
+    return AgentRun(
+        machine_id=msg.vm_id,
+        machine_name=msg.vm_name,
+        session_id=msg.session_id,
+        harness=msg.harness,
+        harness_version=msg.harness_version,
+        model=msg.model,
+        turn=msg.turn,
+        started_by=_AGENT_RUN_STARTED_BY.get(msg.started_by, "unknown"),
+        reason=_AGENT_FINISH_REASONS.get(msg.reason, "unknown"),
+        error=_text(msg.error),
+        started_at=_epoch_ms_always(msg.started_at_ms),
+        ended_at=_epoch_ms_always(msg.ended_at_ms),
+        steps=msg.steps,
+        usage=AgentRunUsage(
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            cache_write_tokens=usage.cache_write_tokens,
+        ),
+    )
+
+
+def agent_runs_page(msg) -> AgentRunsPage:
+    return AgentRunsPage(
+        runs=[agent_run(r) for r in msg.runs],
+        next_page_token=msg.next_page_token or None,
     )
 
 

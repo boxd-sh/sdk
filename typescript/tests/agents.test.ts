@@ -1,7 +1,8 @@
 /**
  * `machines.agents`: the right RPC and request for each call, the models out,
- * and the event stream (every kind, unknown kinds skipped, no deadline on a
- * follow stream, the call ended when the reader stops early).
+ * the event stream (every kind, unknown kinds skipped, no deadline on a
+ * follow stream, the call ended when the reader stops early), and the run
+ * history (`runs`, its pages and their iterator).
  */
 import { describe, expect, it } from "bun:test";
 import {
@@ -15,7 +16,7 @@ import {
 import type { CallOptions, MethodDef, Transport, UnaryOptions } from "../src/_rpc.js";
 import { withRetries } from "../src/_retry.js";
 import { APIConnectionError } from "../src/errors.js";
-import { toAgentEvent } from "../src/agents.js";
+import { toAgentEvent, toAgentRun } from "../src/agents.js";
 import { MachineAgents, Machines, type AgentEvent } from "../src/index.js";
 
 interface Recorded {
@@ -129,6 +130,24 @@ const aSession = (fields: Record<string, unknown> = {}) => ({
   lastSeq: 0,
   createdAtMs: 1_700_000_000_000,
   error: "",
+  ...fields,
+});
+
+const aRun = (fields: Record<string, unknown> = {}) => ({
+  vmId: "vm-1",
+  vmName: "box",
+  sessionId: "s-1",
+  harness: "claude-code",
+  harnessVersion: "2.1.317",
+  model: "",
+  turn: 1,
+  startedBy: "message",
+  reason: AgentFinishReason.AGENT_FINISH_REASON_DONE,
+  error: "",
+  startedAtMs: 1_700_000_000_000,
+  endedAtMs: 1_700_000_042_000,
+  steps: 3,
+  usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 300, cacheWriteTokens: 4 },
   ...fields,
 });
 
@@ -489,5 +508,118 @@ describe("machines.agents", () => {
       })(),
     ).rejects.toThrow("machine went away");
     expect(seen).toEqual([1]);
+  });
+});
+
+describe("machines.agents.runs", () => {
+  it("sends empty filters by default, with the normal retry policy", async () => {
+    const t = new FakeTransport([{ runs: [aRun()], nextPageToken: "" }]);
+    const page = await agents(t).runs();
+    expect(t.calls).toEqual([
+      {
+        method: "ListAgentRuns",
+        req: { org: "", vmId: "", sessionId: "", sinceMs: 0, limit: 0, pageToken: "" },
+        opts: { region: undefined },
+      },
+    ]);
+    // The last page has no token at all.
+    expect(page).toEqual({
+      runs: [
+        {
+          machineId: "vm-1",
+          machineName: "box",
+          sessionId: "s-1",
+          harness: "claude-code",
+          harnessVersion: "2.1.317",
+          model: "",
+          turn: 1,
+          startedBy: "message",
+          reason: "done",
+          startedAt: new Date(1_700_000_000_000),
+          endedAt: new Date(1_700_000_042_000),
+          steps: 3,
+          usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 300, cacheWriteTokens: 4 },
+        },
+      ],
+    });
+    expect("nextPageToken" in page).toBe(false);
+    expect("error" in page.runs[0]!).toBe(false);
+  });
+
+  it("sends every filter: since as a Date or unix seconds, in ms", async () => {
+    const t = new FakeTransport([{ runs: [], nextPageToken: "p2" }, { runs: [] }]);
+    const page = await agents(t).runs({
+      machine: "box",
+      session: "s-1",
+      org: "acme",
+      since: new Date(1_700_000_000_123),
+      limit: 10,
+      pageToken: "p1",
+      region: "nyc",
+    });
+    expect(t.calls[0]).toEqual({
+      method: "ListAgentRuns",
+      req: {
+        org: "acme",
+        vmId: "box",
+        sessionId: "s-1",
+        sinceMs: 1_700_000_000_123,
+        limit: 10,
+        pageToken: "p1",
+      },
+      opts: { region: "nyc" },
+    });
+    expect(page).toEqual({ runs: [], nextPageToken: "p2" });
+    await agents(t).runs({ since: 1_700_000_000 });
+    expect(t.calls[1]!.req.sinceMs).toBe(1_700_000_000_000);
+  });
+
+  it("is retried after a lost connection: it only reads", async () => {
+    const t = new FlakyTransport([{ runs: [aRun()] }]);
+    expect((await agents(t).runs({ machine: "box" })).runs).toHaveLength(1);
+    expect(t.calls.map((c) => c.method)).toEqual(["ListAgentRuns", "ListAgentRuns"]);
+  });
+
+  it("maps an error, the reasons and how a turn started, unknown ones too", () => {
+    const failed = toAgentRun(
+      aRun({ reason: AgentFinishReason.AGENT_FINISH_REASON_FAILED, error: "overloaded", startedBy: "by_agent" }),
+    );
+    expect([failed.reason, failed.error, failed.startedBy]).toEqual(["failed", "overloaded", "by_agent"]);
+    expect(toAgentRun(aRun({ startedBy: "queued" })).startedBy).toBe("queued");
+    // From a newer server.
+    expect(toAgentRun(aRun({ startedBy: "schedule" })).startedBy).toBe("unknown");
+    expect(toAgentRun(aRun({ reason: 99 })).reason).toBe("unknown");
+    // No usage on the wire: zeros.
+    expect(toAgentRun(aRun({ usage: undefined })).usage).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+  });
+
+  it("runsIter reads page after page with the token, and stops on the last", async () => {
+    const t = new FakeTransport([
+      { runs: [aRun({ turn: 3 }), aRun({ turn: 2 })], nextPageToken: "p2" },
+      { runs: [aRun({ turn: 1 })], nextPageToken: "" },
+    ]);
+    const turns: number[] = [];
+    for await (const r of agents(t).runsIter({ machine: "box", limit: 2 })) turns.push(r.turn);
+    expect(turns).toEqual([3, 2, 1]);
+    expect(t.calls.map((c) => [c.req.vmId, c.req.limit, c.req.pageToken])).toEqual([
+      ["box", 2, ""],
+      ["box", 2, "p2"],
+    ]);
+  });
+
+  it("runsIter reads no further than the caller", async () => {
+    const t = new FakeTransport([
+      { runs: [aRun({ turn: 3 }), aRun({ turn: 2 })], nextPageToken: "p2" },
+      { runs: [aRun({ turn: 1 })] },
+    ]);
+    for await (const r of agents(t).runsIter()) {
+      if (r.turn === 3) break;
+    }
+    expect(t.calls).toHaveLength(1);
   });
 });

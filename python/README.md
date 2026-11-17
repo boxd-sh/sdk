@@ -1053,6 +1053,27 @@ apart by `type`; every turn ends with `turn.finished` and its `reason`
 Without `follow`, `events()` ends after the latest event; with it, it has no
 deadline and stops when you stop iterating.
 
+`runs()` reads how finished turns went from the platform's run history, newest
+first, across the machines you can see:
+
+```python
+from datetime import datetime, timedelta, timezone
+
+page = agents.runs(machine="my-box", since=datetime.now(timezone.utc) - timedelta(days=1))
+for run in page.runs:
+    print(run.session_id, run.turn, run.reason, run.error or "")
+# page.next_page_token, passed as page_token=, reads the next, older page;
+# iter_runs() reads every page for you.
+```
+
+Each `AgentRun` has the machine, the session, the turn, the agent and its
+version, how the turn started and ended (`reason`, `error`), when, its steps and
+its tokens, but no prompts or output. Filter by `machine`, `session` and
+`since`; `limit` is 50 by default, at most 500. Reading the history never wakes
+a machine, and it keeps 30 days of runs, also after a machine is deleted. A
+cluster that doesn't keep run history (some self-hosted ones) answers with a
+`ConflictError`.
+
 The agent runs as the machine's user without asking before it acts, with the
 machine's env vars and secrets (`env=` adds more). Give it a key as a secret
 (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, bound to its provider's host so the

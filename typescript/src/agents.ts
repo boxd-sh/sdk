@@ -16,10 +16,14 @@
  *   if (ev.type === "turn.finished" && ev.turn === turn) break;
  * }
  * ```
+ *
+ * `runs()` reads how finished turns went, across your machines, from the
+ * platform's run history instead: it never wakes a machine.
  */
 import type { ReadableCall, Transport } from "./_rpc.js";
 import { BoxdError } from "./errors.js";
 import type { RegionOption } from "./regions.js";
+import type { TimeBound } from "./utils.js";
 import {
   AgentDelivery as PbAgentDelivery,
   AgentFinishReason as PbAgentFinishReason,
@@ -28,8 +32,10 @@ import {
   AgentToolKind as PbAgentToolKind,
   BoxdApiDefinition,
   type AgentEvent as PbAgentEvent,
+  type AgentRun as PbAgentRun,
   type AgentSession as PbAgentSession,
   type Harness as PbHarness,
+  type ListAgentRunsResponse as PbListAgentRunsResponse,
 } from "./_generated/definitions.js";
 
 // ─── Models ──────────────────────────────────────────────────────────────
@@ -229,6 +235,74 @@ export interface AgentEventsParams extends RegionOption {
    *  session: the loop finishes (nothing is thrown) and the call is
    *  cancelled. */
   signal?: AbortSignal;
+}
+
+/** What started a turn: a message sent to the session (`message`), a
+ *  message that waited for the turn before it to end (`queued`), or the
+ *  agent itself (`by_agent`), as Claude Code does to report that a
+ *  background command ended. */
+export type AgentRunStartedBy = "message" | "queued" | "by_agent" | "unknown";
+
+/** Tokens a turn used, as the agent reported them. */
+export interface AgentRunUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+/** One finished turn, from the platform's run history. It says how the turn
+ *  went, not what was said: no prompts and no output. `events()` has the
+ *  transcript, read from the machine. */
+export interface AgentRun {
+  /** The machine's id. */
+  machineId: string;
+  /** The machine's name. */
+  machineName: string;
+  sessionId: string;
+  /** `claude-code`, `codex` or `opencode`. */
+  harness: string;
+  /** The agent version the session ran. */
+  harnessVersion: string;
+  /** The model the session asked for; `""` when it used the agent's own
+   *  default. */
+  model: string;
+  turn: number;
+  startedBy: AgentRunStartedBy;
+  reason: AgentFinishReason;
+  /** For `failed` and some `interrupted` turns: what went wrong, its first
+   *  500 characters. */
+  error?: string;
+  startedAt: Date;
+  endedAt: Date;
+  /** Calls to the model (Claude Code) or tool calls (Codex) in the turn. */
+  steps: number;
+  usage: AgentRunUsage;
+}
+
+/** One page of `runs()`, newest first. */
+export interface AgentRunsPage {
+  runs: AgentRun[];
+  /** Pass it as `pageToken` for the next, older page; absent on the last. */
+  nextPageToken?: string;
+}
+
+export interface AgentRunsParams extends RegionOption {
+  /** Only this machine's runs (name or id). Default: every machine you can
+   *  see, and your own deleted ones. */
+  machine?: string;
+  /** Only this session's runs. */
+  session?: string;
+  /** The organization, by name or id. Default: your current one (with an
+   *  API key, the key's). */
+  org?: string;
+  /** Only runs that ended at or after this time: a `Date`, or unix seconds.
+   *  Default: everything that is kept (30 days). */
+  since?: TimeBound;
+  /** Runs per page. Default 50, at most 500. */
+  limit?: number;
+  /** `nextPageToken` from the page before. */
+  pageToken?: string;
 }
 
 const emptyToNull = (s: string): string | null => (s === "" ? null : s);
@@ -473,6 +547,47 @@ export function toAgentSession(s: PbAgentSession): AgentSession {
   };
 }
 
+function toStartedBy(s: string): AgentRunStartedBy {
+  return s === "message" || s === "queued" || s === "by_agent" ? s : "unknown";
+}
+
+export function toAgentRun(r: PbAgentRun): AgentRun {
+  const run: AgentRun = {
+    machineId: r.vmId,
+    machineName: r.vmName,
+    sessionId: r.sessionId,
+    harness: r.harness,
+    harnessVersion: r.harnessVersion,
+    model: r.model,
+    turn: r.turn,
+    startedBy: toStartedBy(r.startedBy),
+    reason: toFinishReason(r.reason),
+    startedAt: new Date(r.startedAtMs),
+    endedAt: new Date(r.endedAtMs),
+    steps: r.steps,
+    usage: {
+      inputTokens: r.usage?.inputTokens ?? 0,
+      outputTokens: r.usage?.outputTokens ?? 0,
+      cacheReadTokens: r.usage?.cacheReadTokens ?? 0,
+      cacheWriteTokens: r.usage?.cacheWriteTokens ?? 0,
+    },
+  };
+  if (r.error) run.error = r.error;
+  return run;
+}
+
+export function toAgentRunsPage(r: PbListAgentRunsResponse): AgentRunsPage {
+  const page: AgentRunsPage = { runs: (r.runs ?? []).map(toAgentRun) };
+  if (r.nextPageToken) page.nextPageToken = r.nextPageToken;
+  return page;
+}
+
+/** A time bound as ms since the epoch; 0 when absent (the server default). */
+function toEpochMs(t: TimeBound | undefined): number {
+  if (t === undefined) return 0;
+  return t instanceof Date ? t.getTime() : Math.floor(t * 1000);
+}
+
 /** A tool call's input: parsed JSON, else the raw text, `null` when empty. */
 function parseInput(json: string): unknown {
   if (json === "") return null;
@@ -693,5 +808,62 @@ export class MachineAgents {
       { region: params.region },
     );
     return (resp.sessions ?? []).map(toAgentSession);
+  }
+
+  /**
+   * One page of finished turns, newest first, from the platform's run
+   * history: across the machines you can see, or only `machine`'s or
+   * `session`'s. It never reaches into a machine, so it doesn't wake one,
+   * and a machine's runs are kept for 30 days, also after it's deleted.
+   * There are no prompts or output, only how each turn went: `events()` has
+   * the transcript.
+   *
+   * Pass the page's `nextPageToken` as `pageToken` for the next, older page,
+   * or iterate every run with {@link MachineAgents.runsIter}:
+   *
+   * ```ts
+   * const { runs } = await boxd.machines.agents.runs({ machine: "my-box", limit: 10 });
+   * for (const r of runs) console.log(r.sessionId, r.turn, r.reason, r.error ?? "");
+   * ```
+   *
+   * A cluster that doesn't keep run history (one without an analytics
+   * store, such as some self-hosted ones) refuses the call with a
+   * `ConflictError` saying so.
+   */
+  async runs(params: AgentRunsParams = {}): Promise<AgentRunsPage> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.listAgentRuns,
+      {
+        org: params.org ?? "",
+        vmId: params.machine ?? "",
+        sessionId: params.session ?? "",
+        sinceMs: toEpochMs(params.since),
+        limit: params.limit ?? 0,
+        pageToken: params.pageToken ?? "",
+      },
+      { region: params.region },
+    );
+    return toAgentRunsPage(resp);
+  }
+
+  /**
+   * Every run `runs()` would list, newest first, reading pages as you go
+   * (`limit` is the page size). Stop with `break` to read no further:
+   *
+   * ```ts
+   * for await (const r of boxd.machines.agents.runsIter({ since: new Date(Date.now() - 86_400_000) })) {
+   *   if (r.reason === "failed") console.log(r.machineName, r.sessionId, r.error);
+   * }
+   * ```
+   */
+  async *runsIter(
+    params: Omit<AgentRunsParams, "pageToken"> = {},
+  ): AsyncGenerator<AgentRun, void, undefined> {
+    let pageToken: string | undefined;
+    do {
+      const page = await this.runs({ ...params, pageToken });
+      yield* page.runs;
+      pageToken = page.nextPageToken;
+    } while (pageToken);
   }
 }

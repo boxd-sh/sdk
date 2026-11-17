@@ -1,6 +1,7 @@
 """`machines.agents`: what goes on the wire, what comes back, which calls are
-sent only once, and the events stream (skipped kinds, no deadline on a
-follow, ending cleanly)."""
+sent only once, the events stream (skipped kinds, no deadline on a
+follow, ending cleanly), and the run history (`runs`, its pages and
+`iter_runs`)."""
 
 from __future__ import annotations
 
@@ -13,6 +14,9 @@ import pytest
 
 from boxd import (
     AgentInterruptResult,
+    AgentRun,
+    AgentRunUsage,
+    AgentRunsPage,
     AgentMessage,
     AgentMessageDelta,
     AgentPlan,
@@ -336,6 +340,82 @@ def test_a_user_message_with_an_unknown_delivery():
     assert ev.delivery == "unknown"
 
 
+def a_run(**overrides):
+    fields = dict(
+        vm_id="vm-1",
+        vm_name="box",
+        session_id="s-1",
+        harness="claude-code",
+        harness_version="2.1.0",
+        model="",
+        turn=1,
+        started_by="message",
+        reason=api_pb2.AGENT_FINISH_REASON_DONE,
+        error="",
+        started_at_ms=T0,
+        ended_at_ms=T0 + 42_000,
+        steps=3,
+        usage=api_pb2.AgentUsage(
+            input_tokens=10, output_tokens=20, cache_read_tokens=300, cache_write_tokens=4
+        ),
+    )
+    fields.update(overrides)
+    return api_pb2.AgentRun(**fields)
+
+
+def test_run_maps_every_field():
+    run = m.agent_run(
+        a_run(
+            model="opus",
+            turn=4,
+            started_by="by_agent",
+            reason=api_pb2.AGENT_FINISH_REASON_FAILED,
+            error="the model is overloaded",
+        )
+    )
+    assert run == AgentRun(
+        machine_id="vm-1",
+        machine_name="box",
+        session_id="s-1",
+        harness="claude-code",
+        harness_version="2.1.0",
+        model="opus",
+        turn=4,
+        started_by="by_agent",
+        reason="failed",
+        error="the model is overloaded",
+        started_at=T0_DT,
+        ended_at=datetime(2026, 10, 14, 17, 47, 22, tzinfo=timezone.utc),
+        steps=3,
+        usage=AgentRunUsage(
+            input_tokens=10, output_tokens=20, cache_read_tokens=300, cache_write_tokens=4
+        ),
+    )
+
+
+def test_run_without_an_error_usage_or_known_values():
+    run = m.agent_run(a_run(usage=None, started_by="schedule", reason=99))
+    assert run.error is None
+    assert run.model == ""  # the agent's own default: kept as the server sent it
+    assert run.started_by == "unknown"  # a newer server's
+    assert run.reason == "unknown"
+    assert run.usage == AgentRunUsage(
+        input_tokens=0, output_tokens=0, cache_read_tokens=0, cache_write_tokens=0
+    )
+    assert m.agent_run(a_run(started_by="queued")).started_by == "queued"
+
+
+def test_runs_page_token():
+    page = m.agent_runs_page(
+        api_pb2.ListAgentRunsResponse(runs=[a_run()], next_page_token="p2")
+    )
+    assert isinstance(page, AgentRunsPage)
+    assert [r.turn for r in page.runs] == [1]
+    assert page.next_page_token == "p2"
+    # The last page.
+    assert m.agent_runs_page(api_pb2.ListAgentRunsResponse()).next_page_token is None
+
+
 # --- the namespace: what goes on the wire ---
 
 
@@ -548,6 +628,94 @@ async def test_async_twin_sends_the_same():
     assert UUID.match(requests[1].request_id) and UUID.match(requests[2].request_id)
     retry = [o.get("retry", True) for o in t.call_options]
     assert retry == [True, True, True, True, False, True, True, True]
+
+
+def test_runs_defaults_are_empty_on_the_wire_and_retried_like_a_read():
+    a, t = agents(api_pb2.ListAgentRunsResponse(runs=[a_run()]))
+    page = a.runs()
+    method, request = t.calls[0]
+    assert method == "ListAgentRuns"
+    assert request == api_pb2.ListAgentRunsRequest()
+    assert t.call_options == [{}]
+    assert t.regions == [None]
+    assert [r.session_id for r in page.runs] == ["s-1"]
+    assert page.next_page_token is None
+
+
+def test_runs_sends_every_filter():
+    a, t = agents(
+        api_pb2.ListAgentRunsResponse(next_page_token="p3"),
+        api_pb2.ListAgentRunsResponse(),
+        api_pb2.ListAgentRunsResponse(),
+    )
+    page = a.runs(
+        "box",
+        "s-1",
+        "acme",
+        datetime(2026, 10, 14, 17, 46, 40, 123000, tzinfo=timezone.utc),
+        10,
+        "p2",
+        region="nyc",
+    )
+    assert t.calls[0][1] == api_pb2.ListAgentRunsRequest(
+        org="acme",
+        vm_id="box",
+        session_id="s-1",
+        since_ms=T0 + 123,
+        limit=10,
+        page_token="p2",
+    )
+    assert t.regions == ["nyc"]
+    assert page.next_page_token == "p3"
+    # Unix seconds, and a naive datetime as UTC.
+    a.runs(machine="box", since=1_792_000_000)
+    a.runs(since=datetime(2026, 10, 14, 17, 46, 40))
+    assert t.calls[1][1].since_ms == T0
+    assert t.calls[2][1].since_ms == T0
+
+
+def test_iter_runs_reads_page_after_page_and_stops_on_the_last():
+    a, t = agents(
+        api_pb2.ListAgentRunsResponse(runs=[a_run(turn=3), a_run(turn=2)], next_page_token="p2"),
+        api_pb2.ListAgentRunsResponse(runs=[a_run(turn=1)]),
+    )
+    assert [r.turn for r in a.iter_runs(machine="box", limit=2)] == [3, 2, 1]
+    assert [c[1] for c in t.calls] == [
+        api_pb2.ListAgentRunsRequest(vm_id="box", limit=2),
+        api_pb2.ListAgentRunsRequest(vm_id="box", limit=2, page_token="p2"),
+    ]
+
+
+def test_iter_runs_reads_no_further_than_the_caller():
+    a, t = agents(
+        api_pb2.ListAgentRunsResponse(runs=[a_run(turn=3), a_run(turn=2)], next_page_token="p2"),
+        api_pb2.ListAgentRunsResponse(runs=[a_run(turn=1)]),
+    )
+    for run in a.iter_runs():
+        if run.turn == 3:
+            break
+    assert len(t.calls) == 1
+
+
+async def test_async_runs_and_iter_runs():
+    t = FakeAsyncTransport(
+        [
+            api_pb2.ListAgentRunsResponse(runs=[a_run()], next_page_token="p2"),
+            api_pb2.ListAgentRunsResponse(runs=[a_run(turn=2)], next_page_token="p2"),
+            api_pb2.ListAgentRunsResponse(runs=[a_run(turn=1)]),
+        ]
+    )
+    a = AsyncMachines(t).agents
+    page = await a.runs(session="s-1", org="acme", region="lon")
+    assert page.next_page_token == "p2"
+    assert t.calls[0] == (
+        "ListAgentRuns",
+        api_pb2.ListAgentRunsRequest(org="acme", session_id="s-1"),
+    )
+    assert t.regions == ["lon"]
+    assert [r.turn async for r in a.iter_runs(session="s-1")] == [2, 1]
+    assert [c[1].page_token for c in t.calls[1:]] == ["", "p2"]
+    assert t.call_options == [{}, {}, {}]
 
 
 async def test_async_send_refuses_an_unknown_when():

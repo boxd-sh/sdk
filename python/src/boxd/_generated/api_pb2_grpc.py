@@ -189,6 +189,11 @@ class BoxdApiStub(object):
                 request_serializer=api__pb2.AgentEventsRequest.SerializeToString,
                 response_deserializer=api__pb2.AgentEvent.FromString,
                 _registered_method=True)
+        self.ListAgentRuns = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/ListAgentRuns',
+                request_serializer=api__pb2.ListAgentRunsRequest.SerializeToString,
+                response_deserializer=api__pb2.ListAgentRunsResponse.FromString,
+                _registered_method=True)
         self.CreateNetwork = channel.unary_unary(
                 '/boxd.api.v1.BoxdApi/CreateNetwork',
                 request_serializer=api__pb2.CreateNetworkRequest.SerializeToString,
@@ -1020,6 +1025,16 @@ class BoxdApiServicer(object):
         """Streams a session's events in order, starting after `after_seq` (0: from
         its first event). With `follow` the stream stays open and carries new
         events as they happen; without it, it ends after the latest one.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListAgentRuns(self, request, context):
+        """Finished turns across your machines, newest first, from the platform's
+        run history: it never wakes a machine, and keeps a machine's runs for 30
+        days, also after it's deleted. No prompts or output, only how each turn
+        went (AgentEvents has the transcript, from the machine itself).
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -2076,6 +2091,11 @@ def add_BoxdApiServicer_to_server(servicer, server):
                     servicer.AgentEvents,
                     request_deserializer=api__pb2.AgentEventsRequest.FromString,
                     response_serializer=api__pb2.AgentEvent.SerializeToString,
+            ),
+            'ListAgentRuns': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListAgentRuns,
+                    request_deserializer=api__pb2.ListAgentRunsRequest.FromString,
+                    response_serializer=api__pb2.ListAgentRunsResponse.SerializeToString,
             ),
             'CreateNetwork': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateNetwork,
@@ -3495,6 +3515,33 @@ class BoxdApi(object):
             '/boxd.api.v1.BoxdApi/AgentEvents',
             api__pb2.AgentEventsRequest.SerializeToString,
             api__pb2.AgentEvent.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListAgentRuns(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/ListAgentRuns',
+            api__pb2.ListAgentRunsRequest.SerializeToString,
+            api__pb2.ListAgentRunsResponse.FromString,
             options,
             channel_credentials,
             insecure,

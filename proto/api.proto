@@ -98,6 +98,11 @@ service BoxdApi {
   // its first event). With `follow` the stream stays open and carries new
   // events as they happen; without it, it ends after the latest one.
   rpc AgentEvents(AgentEventsRequest)              returns (stream AgentEvent);
+  // Finished turns across your machines, newest first, from the platform's
+  // run history: it never wakes a machine, and keeps a machine's runs for 30
+  // days, also after it's deleted. No prompts or output, only how each turn
+  // went (AgentEvents has the transcript, from the machine itself).
+  rpc ListAgentRuns(ListAgentRunsRequest)          returns (ListAgentRunsResponse);
   rpc CreateNetwork(CreateNetworkRequest)   returns (CreateNetworkResponse);
   rpc ListNetworks(ListNetworksRequest)     returns (ListNetworksResponse);
   // Per-VM custom domains (one domain -> one VM). AddCustomDomain creates a
@@ -2158,6 +2163,53 @@ message ListAgentSessionsRequest {
 
 message ListAgentSessionsResponse {
   repeated AgentSession sessions = 1;
+}
+
+message ListAgentRunsRequest {
+  // The organization, by name or id. Empty: your current one. You see the
+  // runs on its machines you can see, and on your own deleted ones.
+  string org        = 1;
+  // Only this machine's runs (name or id).
+  string vm_id      = 2;
+  // Only this session's runs.
+  string session_id = 3;
+  // Only runs that ended at or after this time (ms since the epoch). 0: all
+  // that's kept (30 days).
+  int64  since_ms   = 4;
+  // At most this many. 0: 50; at most 500.
+  uint32 limit      = 5;
+  // `next_page_token` from the previous page.
+  string page_token = 6;
+}
+
+// One finished turn.
+message AgentRun {
+  string vm_id      = 1;  // the machine's id
+  string vm_name    = 2;
+  string session_id = 3;
+  string harness    = 4;
+  string harness_version = 5;
+  string model      = 6;
+  uint64 turn       = 7;
+  // `message` (a message started it), `queued` (it waited for the turn
+  // before it) or `by_agent` (the agent started it, as Claude Code does to
+  // report a background command's end).
+  string started_by = 8;
+  AgentFinishReason reason = 9;
+  // For FAILED and some INTERRUPTED: what went wrong, its first 500
+  // characters.
+  string error      = 10;
+  int64  started_at_ms = 11;
+  int64  ended_at_ms   = 12;
+  // Model calls (Claude Code) or tool calls (Codex) in the turn.
+  uint32 steps      = 13;
+  AgentUsage usage  = 14;
+}
+
+message ListAgentRunsResponse {
+  repeated AgentRun runs = 1;
+  // Pass it as `page_token` for the next, older page; empty on the last.
+  string next_page_token = 2;
 }
 
 message AgentEventsRequest {

@@ -624,6 +624,18 @@ def unix_seconds(t: datetime | int | float | None) -> int:
     return math.floor(t)
 
 
+def unix_ms(t: datetime | int | float | None) -> int:
+    """A time bound as ms since the epoch, from a datetime or unix seconds; 0
+    when absent (the server default). A naive datetime is taken as UTC."""
+    if t is None:
+        return 0
+    if isinstance(t, datetime):
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return math.floor(t.timestamp() * 1000)
+    return math.floor(t * 1000)
+
+
 def set_delete_after(machine_id: str, seconds: int, cron: str | None):
     """`SetDeleteAfter` for a duration or a cron expression. The
     server rejects both at once; here we catch it before the round trip."""

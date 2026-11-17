@@ -18,18 +18,29 @@ saw::
 
 The machine argument is a machine's name or id, as everywhere in
 ``machines``.
+
+``runs()`` reads how finished turns went, across your machines, from the
+platform's run history instead: it never wakes a machine::
+
+    page = boxd.machines.agents.runs(machine="my-box", limit=10)
+    for run in page.runs:
+        print(run.session_id, run.turn, run.reason, run.error or "")
 """
 
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncGenerator, Generator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator, Mapping
+from datetime import datetime
 
 from .. import _mappers as m
+from .. import _requests as req
 from .._generated import api_pb2
 from ..models import (
     AgentEvent,
     AgentInterruptResult,
+    AgentRun,
+    AgentRunsPage,
     AgentSendResult,
     AgentSendWhen,
     AgentSession,
@@ -100,6 +111,25 @@ def _events(
 ) -> api_pb2.AgentEventsRequest:
     return api_pb2.AgentEventsRequest(
         vm_id=machine_id, session_id=session_id, after_seq=after_seq, follow=follow
+    )
+
+
+def _runs(
+    *,
+    machine: str | None,
+    session: str | None,
+    org: str | None,
+    since: datetime | int | float | None,
+    limit: int | None,
+    page_token: str | None,
+) -> api_pb2.ListAgentRunsRequest:
+    return api_pb2.ListAgentRunsRequest(
+        org=org or "",
+        vm_id=machine or "",
+        session_id=session or "",
+        since_ms=req.unix_ms(since),
+        limit=limit or 0,
+        page_token=page_token or "",
     )
 
 
@@ -303,6 +333,85 @@ class Agents(Namespace):
         )
         return [m.agent_session(s) for s in resp.sessions]
 
+    def runs(
+        self,
+        machine: str | None = None,
+        session: str | None = None,
+        org: str | None = None,
+        since: datetime | int | float | None = None,
+        limit: int | None = None,
+        page_token: str | None = None,
+        *,
+        region: str | None = None,
+    ) -> AgentRunsPage:
+        """One page of finished turns, newest first, from the platform's run
+        history: across the machines you can see, or only `machine`'s (name
+        or id) or `session`'s. It never reaches into a machine, so it doesn't
+        wake one, and a machine's runs are kept for 30 days, also after it's
+        deleted. There are no prompts or output, only how each turn went:
+        :meth:`events` has the transcript.
+
+        `org`: by name or id; None is your current one (with an API key, the
+        key's). `since`: only runs that ended at or after this time, a
+        datetime (naive is UTC) or unix seconds; None is everything kept.
+        `limit`: runs per page, 50 by default, at most 500.
+
+        Pass the page's ``next_page_token`` as `page_token` for the next,
+        older page, or iterate every run with :meth:`iter_runs`.
+
+        A cluster that doesn't keep run history (one without an analytics
+        store, such as some self-hosted ones) refuses the call with a
+        :class:`~boxd.errors.ConflictError` saying so.
+        """
+        return m.agent_runs_page(
+            self._transport.call(
+                "ListAgentRuns",
+                _runs(
+                    machine=machine,
+                    session=session,
+                    org=org,
+                    since=since,
+                    limit=limit,
+                    page_token=page_token,
+                ),
+                region=region,
+            )
+        )
+
+    def iter_runs(
+        self,
+        machine: str | None = None,
+        session: str | None = None,
+        org: str | None = None,
+        since: datetime | int | float | None = None,
+        limit: int | None = None,
+        *,
+        region: str | None = None,
+    ) -> Iterator[AgentRun]:
+        """Every run :meth:`runs` would list, newest first, reading pages as
+        you go (`limit` is the page size). Stop iterating to read no
+        further::
+
+            for run in boxd.machines.agents.iter_runs(since=datetime(2026, 11, 1)):
+                if run.reason == "failed":
+                    print(run.machine_name, run.session_id, run.error)
+        """
+        token: str | None = None
+        while True:
+            page = self.runs(
+                machine,
+                session,
+                org,
+                since,
+                limit,
+                token,
+                region=region,
+            )
+            yield from page.runs
+            if not page.next_page_token:
+                return
+            token = page.next_page_token
+
 
 class AsyncAgents(Namespace):
     """Async twin of :class:`Agents`."""
@@ -448,3 +557,59 @@ class AsyncAgents(Namespace):
             region=region,
         )
         return [m.agent_session(s) for s in resp.sessions]
+
+    async def runs(
+        self,
+        machine: str | None = None,
+        session: str | None = None,
+        org: str | None = None,
+        since: datetime | int | float | None = None,
+        limit: int | None = None,
+        page_token: str | None = None,
+        *,
+        region: str | None = None,
+    ) -> AgentRunsPage:
+        """One page of finished turns, newest first. See :meth:`Agents.runs`."""
+        return m.agent_runs_page(
+            await self._transport.call(
+                "ListAgentRuns",
+                _runs(
+                    machine=machine,
+                    session=session,
+                    org=org,
+                    since=since,
+                    limit=limit,
+                    page_token=page_token,
+                ),
+                region=region,
+            )
+        )
+
+    async def iter_runs(
+        self,
+        machine: str | None = None,
+        session: str | None = None,
+        org: str | None = None,
+        since: datetime | int | float | None = None,
+        limit: int | None = None,
+        *,
+        region: str | None = None,
+    ) -> AsyncIterator[AgentRun]:
+        """Every run :meth:`runs` would list, newest first, reading pages as
+        you go (``async for run in boxd.machines.agents.iter_runs(): ...``)."""
+        token: str | None = None
+        while True:
+            page = await self.runs(
+                machine,
+                session,
+                org,
+                since,
+                limit,
+                token,
+                region=region,
+            )
+            for run in page.runs:
+                yield run
+            if not page.next_page_token:
+                return
+            token = page.next_page_token
