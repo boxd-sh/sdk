@@ -2,8 +2,9 @@
  * `machines.agents`: the right RPC and request for each call, the models out,
  * the event stream (every kind, unknown kinds skipped, no deadline on a
  * follow stream, the call ended when the reader stops early), the run
- * history (`runs`, its pages and their iterator), and signing an agent in
- * (`startLogin`, `completeLogin`, `waitForLogin`, `getLogin`, `logout`).
+ * history (`runs`, its pages and their iterator), signing an agent in
+ * (`startLogin`, `completeLogin`, `waitForLogin`, `getLogin`, `logout`), and
+ * one task start to reply (`run`: its session, its reply, abort, cleanup).
  */
 import { describe, expect, it } from "bun:test";
 import {
@@ -19,7 +20,7 @@ import type { CallOptions, MethodDef, Transport, UnaryOptions } from "../src/_rp
 import { withRetries } from "../src/_retry.js";
 import { APIConnectionError, BoxdError } from "../src/errors.js";
 import { toAgentEvent, toAgentLoginStart, toAgentRun } from "../src/agents.js";
-import { MachineAgents, Machines, type AgentEvent } from "../src/index.js";
+import { MachineAgents, Machines, type AgentEvent, type AgentRunParams } from "../src/index.js";
 
 interface Recorded {
   method: string;
@@ -821,5 +822,403 @@ describe("machines.agents logins", () => {
       agents(t).waitForLogin("box", "codex", { ...deviceStart(5), method: "unknown" }),
     ).rejects.toThrow("waitForLogin() waits on a device_code sign-in, not unknown");
     expect(t.calls).toHaveLength(0);
+  });
+});
+
+/** A transport whose server streams are scripted one call at a time (the
+ *  first `AgentEvents` call gets the first, a follow-again the next), and
+ *  whose queued unary answers that are errors are thrown. */
+class RunTransport extends FakeTransport {
+  constructor(
+    responses: unknown[],
+    private readonly scripted: { chunks: unknown[]; error?: unknown; stayOpen?: boolean }[],
+  ) {
+    super(responses);
+  }
+  override async unary<Req, Resp>(method: MethodDef<Req, Resp>, req: Req, opts?: UnaryOptions) {
+    const r = await super.unary(method, req, opts);
+    if (r instanceof Error) throw r;
+    return r;
+  }
+  override serverStream<Req>(
+    method: MethodDef<Req, unknown>,
+    req: Req,
+    opts?: CallOptions & { deadline?: boolean },
+  ) {
+    this.calls.push({ method: method.name, req: req as Record<string, unknown>, opts });
+    const next = this.scripted.shift() ?? { chunks: [] };
+    const s = new FakeStream(next.chunks, next.error, next.stayOpen);
+    this.streams.push(s);
+    return s;
+  }
+}
+
+const sent = (turn: number, delivery = AgentDelivery.AGENT_DELIVERY_STARTED) => ({
+  turn,
+  delivery,
+});
+const onTurn = (turn: number, e: PbAgentEvent): PbAgentEvent => ({ ...e, turn });
+const finished = (seq: number, reason = AgentFinishReason.AGENT_FINISH_REASON_DONE, error = "") =>
+  ev(seq, { turnFinished: { reason, error } });
+
+describe("machines.agents.run", () => {
+  it("starts a session, sends the task, follows its turn and closes the session", async () => {
+    const t = new RunTransport(
+      [aSession({ lastSeq: 0 }), sent(1), {}],
+      [
+        {
+          chunks: [
+            ev(1, { turnStarted: {} }),
+            ev(2, {
+              userMessage: { text: "fix it", delivery: AgentDelivery.AGENT_DELIVERY_STARTED },
+            }),
+            ev(3, { messageDelta: { text: "Look" } }),
+            ev(4, { message: { text: "Looking at it." } }),
+            ev(5, {
+              toolStarted: {
+                callId: "c",
+                kind: AgentToolKind.AGENT_TOOL_KIND_SHELL,
+                name: "Bash",
+                inputJson: "{}",
+              },
+            }),
+            ev(6, { message: { text: "Fixed: 2 tests." } }),
+            ev(7, {
+              usage: { inputTokens: 5, outputTokens: 7, cacheReadTokens: 100, cacheWriteTokens: 0 },
+            }),
+            finished(8),
+          ],
+          stayOpen: true,
+        },
+      ],
+    );
+    const seen: string[] = [];
+    const r = await agents(t).run("box", {
+      harness: "codex",
+      text: "fix it",
+      model: "gpt-5",
+      cwd: "/srv",
+      instructions: "be brief",
+      env: { A: "1" },
+      timeoutSecs: 600,
+      maxSteps: 20,
+      region: "nyc",
+      onEvent: (e) => seen.push(e.type),
+    });
+    expect(r).toEqual({
+      sessionId: "s-1",
+      machineId: "vm-1",
+      turn: 1,
+      reason: "done",
+      reply: "Fixed: 2 tests.",
+      usage: { inputTokens: 5, outputTokens: 7, cacheReadTokens: 100, cacheWriteTokens: 0 },
+      kept: false,
+    });
+    expect("error" in r).toBe(false);
+    expect(seen).toEqual([
+      "turn.started",
+      "user.message",
+      "message.delta",
+      "message",
+      "tool.started",
+      "message",
+      "usage",
+      "turn.finished",
+    ]);
+    expect(t.calls.map((c) => c.method)).toEqual([
+      "StartAgentSession",
+      "SendToAgent",
+      "AgentEvents",
+      "CloseAgentSession",
+    ]);
+    const [start, send, events, close] = t.calls;
+    expect(start!.req).toMatchObject({
+      vmId: "box",
+      harness: "codex",
+      model: "gpt-5",
+      cwd: "/srv",
+      instructions: "be brief",
+      env: { A: "1" },
+    });
+    expect(start!.req.requestId).toMatch(UUID);
+    expect(send!.req).toMatchObject({
+      vmId: "box",
+      sessionId: "s-1",
+      text: "fix it",
+      when: AgentSendWhen.AGENT_SEND_WHEN_NEXT,
+      timeoutSecs: 600,
+      maxSteps: 20,
+    });
+    expect(send!.req.requestId).toMatch(UUID);
+    expect(events!.req).toEqual({ vmId: "box", sessionId: "s-1", afterSeq: 0, follow: true });
+    expect(close!.req).toEqual({ vmId: "box", sessionId: "s-1" });
+    expect(t.calls.map((c) => c.opts?.region)).toEqual(["nyc", "nyc", "nyc", "nyc"]);
+    // The follow stream is ended once the turn has.
+    expect(t.streams[0]!.cancelled).toBe(true);
+  });
+
+  it("keep leaves the session it started open", async () => {
+    const t = new RunTransport([aSession(), sent(1)], [{ chunks: [finished(1)] }]);
+    const r = await agents(t).run("box", { harness: "claude-code", text: "hi", keep: true });
+    expect(r.kept).toBe(true);
+    expect(t.calls.map((c) => c.method)).toEqual([
+      "StartAgentSession",
+      "SendToAgent",
+      "AgentEvents",
+    ]);
+  });
+
+  it("session: an open one, from its last event, other turns ignored, left open", async () => {
+    const t = new RunTransport(
+      [
+        aSession({
+          id: "s-7",
+          harness: "codex",
+          state: AgentSessionState.AGENT_SESSION_STATE_RUNNING,
+          turn: 3,
+          lastSeq: 40,
+        }),
+        sent(4, AgentDelivery.AGENT_DELIVERY_QUEUED),
+      ],
+      [
+        {
+          chunks: [
+            onTurn(3, ev(41, { message: { text: "the turn before" } })),
+            onTurn(3, finished(42, AgentFinishReason.AGENT_FINISH_REASON_FAILED, "not ours")),
+            onTurn(4, ev(43, { message: { text: "ours" } })),
+            onTurn(4, finished(44)),
+          ],
+        },
+      ],
+    );
+    const seen: number[] = [];
+    const r = await agents(t).run("box", {
+      harness: "codex",
+      text: "and then this",
+      session: "s-7",
+      onEvent: (e) => seen.push(e.seq),
+    });
+    expect(r).toEqual({
+      sessionId: "s-7",
+      machineId: "vm-1",
+      turn: 4,
+      reason: "done",
+      reply: "ours",
+      kept: true,
+    });
+    expect(seen).toEqual([43, 44]);
+    expect(t.calls.map((c) => [c.method, c.req.afterSeq])).toEqual([
+      ["GetAgentSession", undefined],
+      ["SendToAgent", undefined],
+      ["AgentEvents", 40],
+    ]);
+    expect(t.calls[0]!.req).toEqual({ vmId: "box", sessionId: "s-7" });
+  });
+
+  it("session: refuses another agent's, a closed or failed one, new-session options", async () => {
+    const t = new RunTransport(
+      [
+        aSession({ harness: "claude-code" }),
+        aSession({ harness: "codex", state: AgentSessionState.AGENT_SESSION_STATE_CLOSED }),
+        aSession({ harness: "codex", state: AgentSessionState.AGENT_SESSION_STATE_FAILED }),
+      ],
+      [],
+    );
+    const a = agents(t);
+    const run = (more: Partial<AgentRunParams> = {}) =>
+      a.run("box", { harness: "codex", text: "x", session: "s-1", ...more });
+    await expect(run()).rejects.toThrow("session s-1 runs claude-code, not codex");
+    await expect(run()).rejects.toThrow(
+      "session s-1 is closed: leave out session to start a new one",
+    );
+    await expect(run()).rejects.toThrow("session s-1 is failed");
+    await expect(run({ cwd: "/srv" })).rejects.toThrow(
+      "model, cwd, instructions and env are for a new session: leave them out with session",
+    );
+    expect(t.calls.map((c) => c.method)).toEqual([
+      "GetAgentSession",
+      "GetAgentSession",
+      "GetAgentSession",
+    ]);
+  });
+
+  it("the reply: the last whole message, or what an only-streaming agent's add up to", async () => {
+    const reply = async (chunks: PbAgentEvent[]) => {
+      const t = new RunTransport(
+        [aSession(), sent(1), {}],
+        [{ chunks: [...chunks, finished(99)] }],
+      );
+      return (await agents(t).run("box", { harness: "codex", text: "x" })).reply;
+    };
+    expect(
+      await reply([
+        ev(1, { message: { text: "first" } }),
+        ev(2, { message: { text: "last" } }),
+        ev(3, { messageDelta: { text: "  " } }), // only whitespace since: the message stands
+      ]),
+    ).toBe("last");
+    expect(
+      await reply([
+        ev(1, { messageDelta: { text: "Hel" } }),
+        ev(2, { messageDelta: { text: "lo" } }),
+      ]),
+    ).toBe("Hello");
+    expect(
+      await reply([
+        ev(1, { message: { text: "earlier" } }),
+        ev(2, { messageDelta: { text: "and " } }),
+        ev(3, { messageDelta: { text: "later" } }),
+      ]),
+    ).toBe("and later");
+    expect(await reply([])).toBe("");
+  });
+
+  it("a failed turn resolves with its reason and error, and the session is closed", async () => {
+    const t = new RunTransport(
+      [aSession(), sent(1), {}],
+      [{ chunks: [finished(1, AgentFinishReason.AGENT_FINISH_REASON_FAILED, "overloaded")] }],
+    );
+    const r = await agents(t).run("box", { harness: "claude-code", text: "x" });
+    expect(r).toEqual({
+      sessionId: "s-1",
+      machineId: "vm-1",
+      turn: 1,
+      reason: "failed",
+      error: "overloaded",
+      reply: "",
+      kept: false,
+    });
+    expect("usage" in r).toBe(false);
+    expect(t.calls.at(-1)!.method).toBe("CloseAgentSession");
+  });
+
+  it("a session it can't close afterwards is kept, and the reply isn't lost", async () => {
+    const t = new RunTransport(
+      [aSession(), sent(1), new APIConnectionError("connection reset")],
+      [{ chunks: [ev(1, { message: { text: "done" } }), finished(2)] }],
+    );
+    const r = await agents(t).run("box", { harness: "claude-code", text: "x" });
+    expect([r.reply, r.kept]).toEqual(["done", true]);
+  });
+
+  it("an abort interrupts the turn, closes the session it started and rejects", async () => {
+    for (const keep of [false, true]) {
+      const t = new RunTransport(
+        [aSession(), sent(1), { turn: 1 }, {}],
+        [{ chunks: [ev(1, { turnStarted: {} })], stayOpen: true }],
+      );
+      const ctl = new AbortController();
+      const stop = new Error("stop");
+      const err = await agents(t)
+        .run("box", {
+          harness: "claude-code",
+          text: "x",
+          keep,
+          signal: ctl.signal,
+          onEvent: () => setTimeout(() => ctl.abort(stop), 5),
+        })
+        .catch((e) => e);
+      expect(err).toBe(stop);
+      expect(t.calls.map((c) => c.method)).toEqual([
+        "StartAgentSession",
+        "SendToAgent",
+        "AgentEvents",
+        "InterruptAgent",
+        ...(keep ? [] : ["CloseAgentSession"]),
+      ]);
+      expect(t.calls[3]!.req).toEqual({ vmId: "box", sessionId: "s-1", clearQueue: false });
+      expect(t.streams[0]!.cancelled).toBe(true);
+    }
+  });
+
+  it("an aborted signal starts nothing; an abort before the send closes the session", async () => {
+    const t = new RunTransport([], []);
+    const signal = AbortSignal.abort(new Error("never mind"));
+    await expect(
+      agents(t).run("box", { harness: "codex", text: "x", signal }),
+    ).rejects.toThrow("never mind");
+    expect(t.calls).toHaveLength(0);
+
+    const ctl = new AbortController();
+    const t2 = new RunTransport([aSession(), {}], []);
+    const a = agents(t2);
+    const started = a.start.bind(a);
+    a.start = async (m, p) => {
+      const s = await started(m, p);
+      ctl.abort(new Error("too late"));
+      return s;
+    };
+    await expect(a.run("box", { harness: "codex", text: "x", signal: ctl.signal })).rejects.toThrow(
+      "too late",
+    );
+    // Nothing was sent, so nothing to interrupt.
+    expect(t2.calls.map((c) => c.method)).toEqual(["StartAgentSession", "CloseAgentSession"]);
+  });
+
+  it("an error while following still closes the session; onEvent's isn't retried", async () => {
+    const t = new RunTransport(
+      [aSession(), sent(1), {}],
+      [{ chunks: [], error: new Error("machine went away") }],
+    );
+    await expect(agents(t).run("box", { harness: "codex", text: "x" })).rejects.toThrow(
+      "machine went away",
+    );
+    expect(t.calls.map((c) => c.method)).toEqual([
+      "StartAgentSession",
+      "SendToAgent",
+      "AgentEvents",
+      "CloseAgentSession",
+    ]);
+
+    const t2 = new RunTransport(
+      [aSession(), sent(1), {}],
+      [{ chunks: [ev(1, { turnStarted: {} }), finished(2)] }],
+    );
+    await expect(
+      agents(t2).run("box", {
+        harness: "codex",
+        text: "x",
+        onEvent: () => {
+          throw new Error("callback broke");
+        },
+      }),
+    ).rejects.toThrow("callback broke");
+    expect(t2.calls.map((c) => c.method)).toEqual([
+      "StartAgentSession",
+      "SendToAgent",
+      "AgentEvents",
+      "CloseAgentSession",
+    ]);
+  });
+
+  it("events that end before the turn finished reject, and the session is closed", async () => {
+    const t = new RunTransport(
+      [aSession(), sent(1), {}],
+      [{ chunks: [ev(1, { turnStarted: {} })] }],
+    );
+    await expect(agents(t).run("box", { harness: "codex", text: "x" })).rejects.toThrow(
+      "the session's events ended before turn 1 finished: it may have been closed",
+    );
+    expect(t.calls.at(-1)!.method).toBe("CloseAgentSession");
+  });
+
+  it("a stream that breaks is followed again from the last event seen", async () => {
+    const t = new RunTransport(
+      [aSession({ lastSeq: 3 }), sent(2), {}],
+      [
+        {
+          chunks: [
+            onTurn(2, ev(4, { turnStarted: {} })),
+            onTurn(2, ev(5, { messageDelta: { text: "Hel" } })),
+          ],
+          error: new BoxdError("stream reset"),
+        },
+        { chunks: [onTurn(2, ev(6, { messageDelta: { text: "lo" } })), onTurn(2, finished(7))] },
+      ],
+    );
+    const r = await agents(t).run("box", { harness: "codex", text: "x" });
+    expect([r.reply, r.reason]).toEqual(["Hello", "done"]);
+    const follows = t.calls.filter((c) => c.method === "AgentEvents");
+    expect(follows.map((c) => c.req.afterSeq)).toEqual([3, 5]);
   });
 });

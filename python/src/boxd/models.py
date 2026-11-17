@@ -996,6 +996,30 @@ class AgentRunsPage(BaseModel):
     last."""
 
 
+class AgentRunResult(BaseModel):
+    """What ``machines.agents.run`` did: the agent's last reply in the turn,
+    how the turn ended, and the session it ran in. (Not :class:`AgentRun`, a
+    finished turn in the run history.)"""
+
+    session_id: str
+    machine_id: str
+    """The machine's id."""
+    turn: int
+    reason: AgentFinishReason
+    """How the turn ended: anything but ``"done"`` means it didn't finish the
+    task, with ``error`` for ``"failed"``."""
+    error: str | None
+    """What went wrong; None when nothing did."""
+    reply: str
+    """The agent's last reply in the turn; ``""`` when it wrote none."""
+    usage: AgentRunUsage | None
+    """The tokens the turn used, as last reported; None when the agent
+    reported none."""
+    kept: bool
+    """Whether the session is still open: ``keep``, ``session``, or a
+    session this started that it couldn't close."""
+
+
 AgentLoginMethod = Literal["paste_code", "device_code", "unknown"]
 """How a sign-in goes. ``"paste_code"`` (Claude Code): open ``url``, approve,
 and pass the code the page then shows you to ``complete_login(code=...)``.

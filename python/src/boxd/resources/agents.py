@@ -16,6 +16,12 @@ saw::
         if event.type == "turn.finished" and event.turn == sent.turn:
             break
 
+``run()`` does all of that for one task in one call: start, send, wait for
+the turn to end, and return the agent's last reply and how it ended::
+
+    result = boxd.machines.agents.run("my-box", "claude-code", "Fix the failing test")
+    print(result.reply)
+
 The machine argument is a machine's name or id, as everywhere in
 ``machines``.
 
@@ -40,24 +46,38 @@ import asyncio
 import math
 import time
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator, Mapping
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Generator,
+    Iterator,
+    Mapping,
+)
 from datetime import datetime
 
 from .. import _mappers as m
 from .. import _requests as req
 from .._generated import api_pb2
-from ..errors import BoxdError
+from ..errors import APIConnectionError, BoxdError
 from ..models import (
     AgentEvent,
+    AgentFinishReason,
     AgentInterruptResult,
     AgentLogin,
     AgentLoginResult,
     AgentLoginStart,
+    AgentMessage,
+    AgentMessageDelta,
     AgentRun,
+    AgentRunResult,
+    AgentRunUsage,
     AgentRunsPage,
     AgentSendResult,
     AgentSendWhen,
     AgentSession,
+    AgentTurnFinished,
+    AgentUsage,
     Harness,
 )
 from . import Namespace
@@ -208,6 +228,114 @@ class _LoginWait:
         if result.login is None:
             raise BoxdError(f"the {self._harness} sign-in ended without a login")
         return result.login
+
+
+_RUN_RECONNECTS = 5
+"""How many times `run` follows its turn again after the event stream breaks
+(a network blip, a proxy restart), from the last event it saw."""
+
+
+def _check_run(
+    session: str | None,
+    *,
+    model: str | None,
+    cwd: str | None,
+    instructions: str | None,
+    env: Mapping[str, str] | None,
+) -> None:
+    if session is not None and any(
+        v is not None for v in (model, cwd, instructions, env)
+    ):
+        raise ValueError(
+            "model, cwd, instructions and env are for a new session: "
+            "leave them out with session="
+        )
+
+
+def _open_session(found: AgentSession, session_id: str, harness: str) -> AgentSession:
+    """`run(session=...)`: the open session, checked to run `harness`."""
+    if found.harness != harness:
+        raise BoxdError(f"session {session_id} runs {found.harness}, not {harness}")
+    if found.state in ("closed", "failed"):
+        raise BoxdError(
+            f"session {session_id} is {found.state}: leave out session= to start a new one"
+        )
+    return found
+
+
+class _TurnFollow:
+    """`run`'s wait, shared by both namespaces: where to follow the session's
+    events from, what its turn has come to (its last whole reply, or what an
+    only-streaming agent's pieces since add up to; its tokens; how it ended),
+    and whether to follow again after the stream breaks."""
+
+    def __init__(self, session: AgentSession, turn: int):
+        self.turn = turn
+        self._after = session.last_seq
+        self._reconnects = 0
+        self._carried = False
+        self._reply = ""
+        self._streamed = ""
+        self._usage: AgentRunUsage | None = None
+        self.reason: AgentFinishReason | None = None
+        self._error: str | None = None
+
+    def connect(self) -> int:
+        """A new stream: the ``seq`` to follow on from."""
+        self._carried = False
+        return self._after
+
+    def take(self, event: AgentEvent) -> bool:
+        """Note one event; True when it is the turn's own."""
+        self._carried = True
+        self._after = event.seq
+        if event.turn != self.turn:
+            return False
+        if isinstance(event, AgentMessageDelta):
+            self._streamed += event.text
+        elif isinstance(event, AgentMessage):
+            self._reply = event.text
+            self._streamed = ""
+        elif isinstance(event, AgentUsage):
+            self._usage = AgentRunUsage(
+                input_tokens=event.input_tokens,
+                output_tokens=event.output_tokens,
+                cache_read_tokens=event.cache_read_tokens,
+                cache_write_tokens=event.cache_write_tokens,
+            )
+        elif isinstance(event, AgentTurnFinished):
+            self.reason = event.reason
+            self._error = event.error
+        return True
+
+    def again(self, err: BoxdError) -> float | None:
+        """Seconds to wait before following again after `err`, or None to
+        raise it. A stream that failed to open is followed again only after
+        a lost connection; one that had carried events, after any failure."""
+        if self._reconnects >= _RUN_RECONNECTS:
+            return None
+        if not (self._carried or isinstance(err, APIConnectionError)):
+            return None
+        self._reconnects += 1
+        return float(self._reconnects)
+
+    def ended(self) -> BoxdError:
+        return BoxdError(
+            f"the session's events ended before turn {self.turn} finished: "
+            "it may have been closed"
+        )
+
+    def result(self, session: AgentSession, *, kept: bool) -> AgentRunResult:
+        return AgentRunResult(
+            session_id=session.id,
+            machine_id=session.machine_id,
+            turn=self.turn,
+            reason=self.reason or "unknown",
+            error=self._error,
+            reply=self._streamed if self._streamed.strip() else self._reply,
+            usage=self._usage,
+            kept=kept,
+        )
 
 
 def _cancel(stream) -> None:
@@ -409,6 +537,136 @@ class Agents(Namespace):
             region=region,
         )
         return [m.agent_session(s) for s in resp.sessions]
+
+    def run(
+        self,
+        machine_id: str,
+        harness: str,
+        text: str,
+        *,
+        model: str | None = None,
+        cwd: str | None = None,
+        instructions: str | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout_secs: int | None = None,
+        max_steps: int | None = None,
+        session: str | None = None,
+        keep: bool = False,
+        on_event: Callable[[AgentEvent], object] | None = None,
+        region: str | None = None,
+    ) -> AgentRunResult:
+        """Run one task, start to reply: start a session with `harness` (or
+        use the open `session`), send it `text`, wait for that turn to end,
+        and return the agent's last reply and how the turn ended. (Not
+        :meth:`runs`, the history of finished turns.)::
+
+            result = boxd.machines.agents.run(
+                "my-box", "claude-code", "Fix the failing test", cwd="/home/boxd/app"
+            )
+            print(result.reply)
+            if result.reason != "done":
+                print(f"[{result.reason}] {result.error or ''}")
+
+        `model`, `cwd`, `instructions` and `env` are for the session this
+        starts, as in :meth:`start`; `timeout_secs` and `max_steps` limit the
+        turn, as in :meth:`send`. `session`: send the task to this open
+        session, which must run `harness`, instead of starting one; it stays
+        open. `keep`: leave the session this starts open afterwards, to
+        :meth:`send` it more. `on_event` is called with each of the turn's
+        events as it happens, for progress.
+
+        A turn that ends other than ``"done"`` doesn't raise: ``reason`` (and
+        ``error``) says how it ended. A session this starts is closed
+        afterwards, also when following the turn fails, unless `keep`.
+        Ctrl-C (:class:`KeyboardInterrupt`) interrupts the turn, closes a
+        session this started (unless `keep`) and is raised again. The start
+        and the send are retried as :meth:`start` and :meth:`send` are, and
+        an event stream that breaks is followed again from the last event
+        seen, up to 5 times.
+        """
+        _check_run(session, model=model, cwd=cwd, instructions=instructions, env=env)
+        if session is None:
+            s = self.start(
+                machine_id,
+                harness,
+                model=model,
+                cwd=cwd,
+                instructions=instructions,
+                env=env,
+                region=region,
+            )
+        else:
+            s = _open_session(self.get(machine_id, session, region=region), session, harness)
+        close = session is None and not keep
+        sent: AgentSendResult | None = None
+        try:
+            sent = self.send(
+                machine_id,
+                s.id,
+                text,
+                timeout_secs=timeout_secs,
+                max_steps=max_steps,
+                region=region,
+            )
+            follow = _TurnFollow(s, sent.turn)
+            self._follow_turn(machine_id, s.id, follow, on_event, region)
+        except BaseException as e:
+            # Best effort: what the caller hears about is `e`. Not an
+            # Exception (Ctrl-C, SystemExit): the caller is stopping.
+            if sent is not None and not isinstance(e, Exception):
+                try:
+                    self.interrupt(machine_id, s.id, region=region)
+                except Exception:
+                    pass
+            if close:
+                try:
+                    self.close(machine_id, s.id, region=region)
+                except Exception:
+                    pass
+            raise
+        kept = not close
+        if close:
+            try:
+                self.close(machine_id, s.id, region=region)
+            except BoxdError:
+                # The turn's reply isn't lost to it: `kept` says it's still open.
+                kept = True
+        return follow.result(s, kept=kept)
+
+    def _follow_turn(
+        self,
+        machine_id: str,
+        session_id: str,
+        follow: _TurnFollow,
+        on_event: Callable[[AgentEvent], object] | None,
+        region: str | None,
+    ) -> None:
+        """`run`'s wait: the session's events until the turn's
+        ``turn.finished``, followed again after a break."""
+        while True:
+            pause = 0.0
+            stream = self.events(
+                machine_id, session_id, after_seq=follow.connect(), follow=True, region=region
+            )
+            try:
+                while True:
+                    try:
+                        event = next(stream)
+                    except StopIteration:
+                        raise follow.ended() from None
+                    except BoxdError as e:
+                        again = follow.again(e)
+                        if again is None:
+                            raise
+                        pause = again
+                        break
+                    if follow.take(event) and on_event is not None:
+                        on_event(event)
+                    if follow.reason is not None:
+                        return
+            finally:
+                stream.close()
+            time.sleep(pause)
 
     def runs(
         self,
@@ -738,6 +996,112 @@ class AsyncAgents(Namespace):
             region=region,
         )
         return [m.agent_session(s) for s in resp.sessions]
+
+    async def run(
+        self,
+        machine_id: str,
+        harness: str,
+        text: str,
+        *,
+        model: str | None = None,
+        cwd: str | None = None,
+        instructions: str | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout_secs: int | None = None,
+        max_steps: int | None = None,
+        session: str | None = None,
+        keep: bool = False,
+        on_event: Callable[[AgentEvent], object] | None = None,
+        region: str | None = None,
+    ) -> AgentRunResult:
+        """Run one task, start to reply. See :meth:`Agents.run`.
+
+        Cancelling the task (``task.cancel()``, ``asyncio.timeout``)
+        interrupts the turn, closes a session this started (unless `keep`),
+        and the :class:`asyncio.CancelledError` is raised again."""
+        _check_run(session, model=model, cwd=cwd, instructions=instructions, env=env)
+        if session is None:
+            s = await self.start(
+                machine_id,
+                harness,
+                model=model,
+                cwd=cwd,
+                instructions=instructions,
+                env=env,
+                region=region,
+            )
+        else:
+            s = _open_session(
+                await self.get(machine_id, session, region=region), session, harness
+            )
+        close = session is None and not keep
+        sent: AgentSendResult | None = None
+        try:
+            sent = await self.send(
+                machine_id,
+                s.id,
+                text,
+                timeout_secs=timeout_secs,
+                max_steps=max_steps,
+                region=region,
+            )
+            follow = _TurnFollow(s, sent.turn)
+            await self._follow_turn(machine_id, s.id, follow, on_event, region)
+        except BaseException as e:
+            # Best effort: what the caller hears about is `e`. Not an
+            # Exception (cancelled, Ctrl-C): the caller is stopping.
+            if sent is not None and not isinstance(e, Exception):
+                try:
+                    await self.interrupt(machine_id, s.id, region=region)
+                except Exception:
+                    pass
+            if close:
+                try:
+                    await self.close(machine_id, s.id, region=region)
+                except Exception:
+                    pass
+            raise
+        kept = not close
+        if close:
+            try:
+                await self.close(machine_id, s.id, region=region)
+            except BoxdError:
+                kept = True
+        return follow.result(s, kept=kept)
+
+    async def _follow_turn(
+        self,
+        machine_id: str,
+        session_id: str,
+        follow: _TurnFollow,
+        on_event: Callable[[AgentEvent], object] | None,
+        region: str | None,
+    ) -> None:
+        """`run`'s wait. See :meth:`Agents._follow_turn`."""
+        while True:
+            pause = 0.0
+            stream = self.events(
+                machine_id, session_id, after_seq=follow.connect(), follow=True, region=region
+            )
+            try:
+                while True:
+                    try:
+                        event = await anext(stream)
+                    except StopAsyncIteration:
+                        raise follow.ended() from None
+                    except BoxdError as e:
+                        again = follow.again(e)
+                        if again is None:
+                            raise
+                        pause = again
+                        break
+                    if follow.take(event) and on_event is not None:
+                        on_event(event)
+                    if follow.reason is not None:
+                        return
+            finally:
+                await stream.aclose()
+            await asyncio.sleep(pause)
 
     async def runs(
         self,

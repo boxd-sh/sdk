@@ -1096,6 +1096,25 @@ running a step again.
 SDK doesn't know is skipped. Without `follow`, `events()` ends after the latest
 event; with it, it has no deadline, and a `break` ends the call.
 
+`run()` does one task in one call: it starts a session, sends the task, waits
+for that turn to end and closes the session again:
+
+```typescript
+const result = await agents.run("my-box", {
+  harness: "claude-code",
+  text: "Fix the failing test",
+  cwd: "/home/boxd/app",
+});
+console.log(result.reply);
+if (result.reason !== "done") console.error(`[${result.reason}] ${result.error ?? ""}`);
+```
+
+`result.reply` is the agent's last reply in the turn, `result.reason` how the
+turn ended (a turn that doesn't end `"done"` resolves rather than throws), and
+`result.usage` its tokens. `keep: true` leaves the session open, `session` sends
+the task to an open session instead, `onEvent` sees each event as it happens,
+and aborting `signal` interrupts the turn.
+
 `runs()` reads how finished turns went from the platform's run history, newest
 first, across the machines you can see:
 
@@ -1119,9 +1138,9 @@ machine's env vars and secrets (`env` adds more). Give it a key as a secret
 (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, bound to its provider's host so the
 machine only holds a placeholder), or sign Claude Code or Codex in once and
 boxd serves the login to your private machines. The machine stays awake while
-a turn runs. `start`, `send` and `interrupt` are sent once: a lost answer is
-not retried, since that could start a second session or deliver a message
-twice. More: [Coding agent sessions](https://docs.boxd.sh/guides/coding-agents).
+a turn runs. `start` and `send` are sent again after a lost connection with
+the same request id, so a repeat never starts a second session or delivers a
+message twice; `interrupt` is sent once. More: [Coding agent sessions](https://docs.boxd.sh/guides/coding-agents).
 
 ### Files, ports, proxies, checkpoints
 

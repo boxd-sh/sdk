@@ -1053,6 +1053,22 @@ apart by `type`; every turn ends with `turn.finished` and its `reason`
 Without `follow`, `events()` ends after the latest event; with it, it has no
 deadline and stops when you stop iterating.
 
+`run()` does one task in one call: it starts a session, sends the task, waits
+for that turn to end and closes the session again:
+
+```python
+result = agents.run("my-box", "claude-code", "Fix the failing test", cwd="/home/boxd/app")
+print(result.reply)
+if result.reason != "done":
+    print(f"[{result.reason}] {result.error or ''}")
+```
+
+`result.reply` is the agent's last reply in the turn, `result.reason` how the
+turn ended (a turn that doesn't end `"done"` is returned, not raised), and
+`result.usage` its tokens. `keep=True` leaves the session open, `session=` sends
+the task to an open session instead, `on_event=` sees each event as it happens,
+and Ctrl-C (or cancelling the task, with `AsyncBoxd`) interrupts the turn.
+
 `runs()` reads how finished turns went from the platform's run history, newest
 first, across the machines you can see:
 
@@ -1079,9 +1095,9 @@ machine's env vars and secrets (`env=` adds more). Give it a key as a secret
 (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, bound to its provider's host so the
 machine only holds a placeholder), or sign Claude Code or Codex in once and
 boxd serves the login to your private machines. The machine stays awake while
-a turn runs. `start`, `send` and `interrupt` are sent once: a lost answer is
-not retried, since that could start a second session or deliver a message
-twice. `AsyncBoxd` has the same methods, awaited, and `events()` there is an
+a turn runs. `start` and `send` are sent again after a lost connection with
+the same request id, so a repeat never starts a second session or delivers a
+message twice; `interrupt` is sent once. `AsyncBoxd` has the same methods, awaited, and `events()` there is an
 async iterator. More: [Coding agent sessions](https://docs.boxd.sh/guides/coding-agents).
 
 ### Ports and proxies

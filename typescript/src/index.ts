@@ -140,6 +140,8 @@ export type {
   AgentLoginResult,
   AgentLoginStart,
   AgentRun,
+  AgentRunParams,
+  AgentRunResult,
   AgentRunStartedBy,
   AgentRunUsage,
   AgentRunsPage,

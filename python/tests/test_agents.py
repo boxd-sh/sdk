@@ -1,11 +1,13 @@
 """`machines.agents`: what goes on the wire, what comes back, which calls are
 sent only once, the events stream (skipped kinds, no deadline on a
 follow, ending cleanly), the run history (`runs`, its pages and
-`iter_runs`), and signing an agent in (`start_login`, `complete_login`,
-`wait_for_login`, `get_login`, `logout`)."""
+`iter_runs`), signing an agent in (`start_login`, `complete_login`,
+`wait_for_login`, `get_login`, `logout`), and one task start to reply
+(`run`: its session, its reply, Ctrl-C and cancellation, cleanup)."""
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import aclosing
 from datetime import datetime, timezone
 import re
@@ -20,6 +22,7 @@ from boxd import (
     AgentLoginResult,
     AgentLoginStart,
     AgentRun,
+    AgentRunResult,
     AgentRunUsage,
     AgentRunsPage,
     AgentMessage,
@@ -36,7 +39,7 @@ from boxd import _mappers as m
 from boxd._generated import api_pb2
 from boxd._regions import AsyncRouter, SyncRouter
 from boxd._transport import AsyncTransport, SyncTransport
-from boxd.errors import APIConnectionError, NotFoundError
+from boxd.errors import APIConnectionError, BoxdError, NotFoundError
 from boxd.resources.machines import AsyncMachines, Machines
 from fakes import (
     FakeAsyncCredentials,
@@ -1213,3 +1216,402 @@ def test_reads_are_sent_again_after_unavailable(monkeypatch):
     a, _ = real_agents(StreamCall([]), unary={"ListAgentSessions": listing})
     assert [s.id for s in a.list("box")] == ["s-1"]
     assert listing.attempts == 2
+
+
+# --- run: one task, start to reply ---
+
+
+def sent(turn=1, delivery=api_pb2.AGENT_DELIVERY_STARTED):
+    return api_pb2.SendToAgentResponse(turn=turn, delivery=delivery)
+
+
+def finished(seq, turn=1, reason=api_pb2.AGENT_FINISH_REASON_DONE, error=""):
+    return an_event(
+        seq, turn=turn, turn_finished=api_pb2.AgentTurnFinished(reason=reason, error=error)
+    )
+
+
+def message(seq, text, turn=1):
+    return an_event(seq, turn=turn, message=api_pb2.AgentMessage(text=text))
+
+
+def delta(seq, text, turn=1):
+    return an_event(seq, turn=turn, message_delta=api_pb2.AgentMessageDelta(text=text))
+
+
+def broken(*events, error):
+    """A stream that carries `events`, then fails with `error`."""
+    yield from events
+    raise error
+
+
+CLOSED = api_pb2.CloseAgentSessionResponse()
+
+
+def test_run_starts_a_session_follows_its_turn_and_closes_it():
+    a, t = agents(
+        a_session(),
+        sent(1),
+        [
+            an_event(1, turn_started=api_pb2.AgentTurnStarted()),
+            delta(2, "Look"),
+            message(3, "Looking at it."),
+            an_event(4, tool_started=api_pb2.AgentToolStarted(call_id="c", name="Bash")),
+            message(5, "Fixed: 2 tests."),
+            an_event(
+                6,
+                usage=api_pb2.AgentUsage(
+                    input_tokens=5, output_tokens=7, cache_read_tokens=100
+                ),
+            ),
+            finished(7),
+        ],
+        CLOSED,
+    )
+    seen = []
+    result = a.run(
+        "box",
+        "codex",
+        "fix it",
+        model="gpt-5",
+        cwd="/srv",
+        instructions="be brief",
+        env={"A": "1"},
+        timeout_secs=600,
+        max_steps=20,
+        on_event=lambda e: seen.append(e.type),
+        region="nyc",
+    )
+    assert result == AgentRunResult(
+        session_id="s-1",
+        machine_id="vm-1",
+        turn=1,
+        reason="done",
+        error=None,
+        reply="Fixed: 2 tests.",
+        usage=AgentRunUsage(
+            input_tokens=5, output_tokens=7, cache_read_tokens=100, cache_write_tokens=0
+        ),
+        kept=False,
+    )
+    assert seen == [
+        "turn.started",
+        "message.delta",
+        "message",
+        "tool.started",
+        "message",
+        "usage",
+        "turn.finished",
+    ]
+    assert [c[0] for c in t.calls] == [
+        "StartAgentSession",
+        "SendToAgent",
+        "AgentEvents",
+        "CloseAgentSession",
+    ]
+    start, send, events, close = (c[1] for c in t.calls)
+    assert UUID.match(start.request_id) and UUID.match(send.request_id)
+    assert start == api_pb2.StartAgentSessionRequest(
+        vm_id="box",
+        harness="codex",
+        model="gpt-5",
+        cwd="/srv",
+        instructions="be brief",
+        env={"A": "1"},
+        request_id=start.request_id,
+    )
+    assert send == api_pb2.SendToAgentRequest(
+        vm_id="box",
+        session_id="s-1",
+        text="fix it",
+        when=api_pb2.AGENT_SEND_WHEN_NEXT,
+        timeout_secs=600,
+        max_steps=20,
+        request_id=send.request_id,
+    )
+    assert events == api_pb2.AgentEventsRequest(vm_id="box", session_id="s-1", follow=True)
+    assert close == api_pb2.CloseAgentSessionRequest(vm_id="box", session_id="s-1")
+    assert t.regions == ["nyc"] * 4
+
+
+def test_run_keep_leaves_the_session_it_started_open():
+    a, t = agents(a_session(), sent(1), [finished(1)])
+    result = a.run("box", "claude-code", "hi", keep=True)
+    assert result.kept is True
+    assert [c[0] for c in t.calls] == ["StartAgentSession", "SendToAgent", "AgentEvents"]
+
+
+def test_run_in_an_open_session_ignores_other_turns_and_leaves_it_open():
+    a, t = agents(
+        a_session(
+            id="s-7",
+            harness="codex",
+            state=api_pb2.AGENT_SESSION_STATE_RUNNING,
+            turn=3,
+            last_seq=40,
+        ),
+        sent(4, api_pb2.AGENT_DELIVERY_QUEUED),
+        [
+            message(41, "the turn before", turn=3),
+            finished(42, turn=3, reason=api_pb2.AGENT_FINISH_REASON_FAILED, error="not ours"),
+            message(43, "ours", turn=4),
+            finished(44, turn=4),
+        ],
+    )
+    seen = []
+    result = a.run(
+        "box", "codex", "and then this", session="s-7", on_event=lambda e: seen.append(e.seq)
+    )
+    assert (result.session_id, result.turn, result.reason, result.error) == (
+        "s-7",
+        4,
+        "done",
+        None,
+    )
+    assert (result.reply, result.kept) == ("ours", True)
+    assert seen == [43, 44]
+    assert [c[0] for c in t.calls] == ["GetAgentSession", "SendToAgent", "AgentEvents"]
+    assert t.calls[0][1] == api_pb2.GetAgentSessionRequest(vm_id="box", session_id="s-7")
+    assert t.calls[2][1] == api_pb2.AgentEventsRequest(
+        vm_id="box", session_id="s-7", after_seq=40, follow=True
+    )
+
+
+def test_run_refuses_another_agents_session_a_closed_or_failed_one():
+    a, t = agents(
+        a_session(harness="claude-code"),
+        a_session(harness="codex", state=api_pb2.AGENT_SESSION_STATE_CLOSED),
+        a_session(harness="codex", state=api_pb2.AGENT_SESSION_STATE_FAILED),
+    )
+    with pytest.raises(BoxdError, match="session s-1 runs claude-code, not codex"):
+        a.run("box", "codex", "x", session="s-1")
+    with pytest.raises(
+        BoxdError, match="session s-1 is closed: leave out session= to start a new one"
+    ):
+        a.run("box", "codex", "x", session="s-1")
+    with pytest.raises(BoxdError, match="session s-1 is failed"):
+        a.run("box", "codex", "x", session="s-1")
+    with pytest.raises(ValueError, match="are for a new session: leave them out with session="):
+        a.run("box", "codex", "x", session="s-1", env={"A": "1"})
+    assert [c[0] for c in t.calls] == ["GetAgentSession"] * 3
+
+
+@pytest.mark.parametrize(
+    "events, reply",
+    [
+        # The last whole message; only whitespace streamed since doesn't count.
+        ([message(1, "first"), message(2, "last"), delta(3, "  ")], "last"),
+        # An agent that only streams: what the pieces add up to.
+        ([delta(1, "Hel"), delta(2, "lo")], "Hello"),
+        ([message(1, "earlier"), delta(2, "and "), delta(3, "later")], "and later"),
+        ([], ""),
+    ],
+)
+def test_run_reply_is_the_last_message_or_what_the_pieces_since_add_up_to(events, reply):
+    a, _ = agents(a_session(), sent(1), [*events, finished(99)], CLOSED)
+    assert a.run("box", "codex", "x").reply == reply
+
+
+def test_run_returns_a_failed_turn_with_its_error_and_closes_the_session():
+    a, t = agents(
+        a_session(),
+        sent(1),
+        [finished(1, reason=api_pb2.AGENT_FINISH_REASON_FAILED, error="overloaded")],
+        CLOSED,
+    )
+    result = a.run("box", "claude-code", "x")
+    assert (result.reason, result.error, result.reply, result.usage, result.kept) == (
+        "failed",
+        "overloaded",
+        "",
+        None,
+        False,
+    )
+    assert t.calls[-1][0] == "CloseAgentSession"
+
+
+def test_run_keeps_the_reply_of_a_session_it_could_not_close():
+    a, _ = agents(
+        a_session(),
+        sent(1),
+        [message(1, "done"), finished(2)],
+        APIConnectionError("connection reset"),
+    )
+    result = a.run("box", "claude-code", "x")
+    assert (result.reply, result.kept) == ("done", True)
+
+
+@pytest.mark.parametrize("keep", [False, True])
+def test_run_ctrl_c_interrupts_the_turn_and_closes_the_session_it_started(keep):
+    a, t = agents(
+        a_session(),
+        sent(1),
+        broken(an_event(1, turn_started=api_pb2.AgentTurnStarted()), error=KeyboardInterrupt()),
+        api_pb2.InterruptAgentResponse(turn=1),
+        CLOSED,
+    )
+    with pytest.raises(KeyboardInterrupt):
+        a.run("box", "claude-code", "x", keep=keep)
+    assert [c[0] for c in t.calls] == [
+        "StartAgentSession",
+        "SendToAgent",
+        "AgentEvents",
+        "InterruptAgent",
+        *([] if keep else ["CloseAgentSession"]),
+    ]
+    assert t.calls[3][1] == api_pb2.InterruptAgentRequest(vm_id="box", session_id="s-1")
+
+
+def test_run_an_error_while_following_still_closes_the_session():
+    a, t = agents(a_session(), sent(1), NotFoundError("no session s-1"), CLOSED)
+    with pytest.raises(NotFoundError, match="no session s-1"):
+        a.run("box", "codex", "x")
+    # Not a lost connection, and nothing carried yet: not followed again.
+    assert [c[0] for c in t.calls] == [
+        "StartAgentSession",
+        "SendToAgent",
+        "AgentEvents",
+        "CloseAgentSession",
+    ]
+
+    def broke(_event):
+        raise ValueError("callback broke")
+
+    a, t = agents(a_session(), sent(1), [finished(1)], CLOSED)
+    with pytest.raises(ValueError, match="callback broke"):
+        a.run("box", "codex", "x", on_event=broke)
+    assert [c[0] for c in t.calls][-2:] == ["AgentEvents", "CloseAgentSession"]
+
+
+def test_run_events_that_end_before_the_turn_finished_raise_and_close():
+    a, t = agents(
+        a_session(), sent(1), [an_event(1, turn_started=api_pb2.AgentTurnStarted())], CLOSED
+    )
+    with pytest.raises(
+        BoxdError,
+        match="the session's events ended before turn 1 finished: it may have been closed",
+    ):
+        a.run("box", "codex", "x")
+    assert t.calls[-1][0] == "CloseAgentSession"
+
+
+def test_run_follows_a_broken_stream_again_from_the_last_event(clock):
+    a, t = agents(
+        a_session(last_seq=3),
+        sent(2),
+        broken(
+            an_event(4, turn=2, turn_started=api_pb2.AgentTurnStarted()),
+            delta(5, "Hel", turn=2),
+            error=BoxdError("stream reset"),
+        ),
+        APIConnectionError("connection refused"),
+        [delta(6, "lo", turn=2), finished(7, turn=2)],
+        CLOSED,
+    )
+    result = a.run("box", "codex", "x")
+    assert (result.reply, result.reason) == ("Hello", "done")
+    assert [c[1].after_seq for c in t.calls if c[0] == "AgentEvents"] == [3, 5, 5]
+    assert clock.slept == [1, 2]
+
+
+def test_run_gives_up_after_five_breaks(clock):
+    streams = [
+        broken(delta(i, "x"), error=APIConnectionError("connection reset")) for i in range(1, 7)
+    ]
+    a, t = agents(a_session(), sent(1), *streams, CLOSED)
+    with pytest.raises(APIConnectionError):
+        a.run("box", "codex", "x")
+    assert clock.slept == [1, 2, 3, 4, 5]
+    assert [c[0] for c in t.calls].count("AgentEvents") == 6
+    assert t.calls[-1][0] == "CloseAgentSession"
+
+
+async def test_async_run_is_the_same():
+    t = FakeAsyncTransport(
+        [
+            a_session(),
+            sent(1),
+            [message(1, "on it"), delta(2, "do"), delta(3, "ne"), finished(4)],
+            CLOSED,
+        ]
+    )
+    seen = []
+    result = await AsyncMachines(t).agents.run(
+        "box", "codex", "x", cwd="/srv", on_event=lambda e: seen.append(e.seq)
+    )
+    assert (result.reply, result.reason, result.kept) == ("done", "done", False)
+    assert seen == [1, 2, 3, 4]
+    assert [c[0] for c in t.calls] == [
+        "StartAgentSession",
+        "SendToAgent",
+        "AgentEvents",
+        "CloseAgentSession",
+    ]
+    assert t.calls[0][1].cwd == "/srv"
+
+
+class QuietAsyncTransport(FakeAsyncTransport):
+    """Its event stream carries `events`, then stays open with nothing more."""
+
+    def __init__(self, responses, events):
+        super().__init__(responses)
+        self._events = events
+
+    async def server_stream(self, method, request, *, region=None):
+        self._next(method, request, region)
+        events = self._events
+
+        async def gen():
+            for item in events:
+                yield item
+            await asyncio.Event().wait()
+
+        return gen()
+
+
+@pytest.mark.parametrize("keep", [False, True])
+async def test_async_run_cancelled_interrupts_the_turn_and_closes_the_session(keep):
+    t = QuietAsyncTransport(
+        [a_session(), sent(1), api_pb2.InterruptAgentResponse(turn=1), CLOSED],
+        [an_event(1, turn_started=api_pb2.AgentTurnStarted())],
+    )
+    started = asyncio.Event()
+    task = asyncio.create_task(
+        AsyncMachines(t).agents.run(
+            "box", "claude-code", "x", keep=keep, on_event=lambda _e: started.set()
+        )
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert [c[0] for c in t.calls] == [
+        "StartAgentSession",
+        "SendToAgent",
+        "AgentEvents",
+        "InterruptAgent",
+        *([] if keep else ["CloseAgentSession"]),
+    ]
+
+
+async def test_async_run_an_error_while_following_still_closes_the_session(clock):
+    t = FakeAsyncTransport(
+        [
+            a_session(),
+            sent(1),
+            broken(message(1, "half"), error=NotFoundError("no session s-1")),
+            NotFoundError("no session s-1"),
+            CLOSED,
+        ]
+    )
+    with pytest.raises(NotFoundError):
+        await AsyncMachines(t).agents.run("box", "codex", "x")
+    # Carried an event, so followed again once; the second open fails at once.
+    assert clock.slept == [1]
+    assert [c[0] for c in t.calls] == [
+        "StartAgentSession",
+        "SendToAgent",
+        "AgentEvents",
+        "AgentEvents",
+        "CloseAgentSession",
+    ]

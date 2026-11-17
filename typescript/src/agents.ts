@@ -17,6 +17,9 @@
  * }
  * ```
  *
+ * `run()` does all of that for one task in one call: start, send, wait for
+ * the turn to end, and resolve to the agent's last reply and how it ended.
+ *
  * `runs()` reads how finished turns went, across your machines, from the
  * platform's run history instead: it never wakes a machine.
  *
@@ -24,7 +27,7 @@
  * own sign-in to Claude Code or Codex.
  */
 import type { ReadableCall, Transport } from "./_rpc.js";
-import { BoxdError } from "./errors.js";
+import { BoxdError, isRetryable } from "./errors.js";
 import type { RegionOption } from "./regions.js";
 import type { TimeBound } from "./utils.js";
 import {
@@ -242,6 +245,66 @@ export interface AgentEventsParams extends RegionOption {
    *  session: the loop finishes (nothing is thrown) and the call is
    *  cancelled. */
   signal?: AbortSignal;
+}
+
+/** `run()`'s task: one message to one session, start to reply. (Not
+ *  {@link AgentRunsParams}, which filters the run history.) */
+export interface AgentRunParams extends RegionOption {
+  /** `claude-code` or `codex`: `harnesses()` lists what the machine has.
+   *  With `session`, the agent that session runs. */
+  harness: string;
+  /** The task. */
+  text: string;
+  /** For a new session: the model. Default: the agent's own. */
+  model?: string;
+  /** For a new session: the directory the agent works in. Default: the home
+   *  directory of the machine's user. */
+  cwd?: string;
+  /** For a new session: added to the agent's own system prompt, never
+   *  replacing it. */
+  instructions?: string;
+  /** For a new session: environment variables for its agent, on top of the
+   *  machine's own variables and secrets. */
+  env?: Record<string, string>;
+  /** Interrupt the turn after this many seconds. */
+  timeoutSecs?: number;
+  /** Interrupt the turn after this many agent steps: calls to the model for
+   *  Claude Code, tool calls for Codex. */
+  maxSteps?: number;
+  /** Send the task to this open session instead of starting one. It stays
+   *  open. Not with `model`, `cwd`, `instructions` or `env`, which are for a
+   *  new session. */
+  session?: string;
+  /** Leave the session this starts open afterwards, to `send()` it more. */
+  keep?: boolean;
+  /** Aborting it interrupts the turn, closes a session this started (unless
+   *  `keep`), and rejects with the abort's reason. */
+  signal?: AbortSignal;
+  /** Called with each of the turn's events as it happens, for progress. */
+  onEvent?: (ev: AgentEvent) => void;
+}
+
+/** What `run()` did: the agent's last reply in the turn, how the turn ended,
+ *  and the session it ran in. (Not {@link AgentRun}, a finished turn in the
+ *  run history.) */
+export interface AgentRunResult {
+  sessionId: string;
+  /** The machine's id. */
+  machineId: string;
+  turn: number;
+  /** How the turn ended: anything but `done` means it didn't finish the
+   *  task, with `error` for `failed`. */
+  reason: AgentFinishReason;
+  /** What went wrong; absent when nothing did. */
+  error?: string;
+  /** The agent's last reply in the turn; `""` when it wrote none. */
+  reply: string;
+  /** The tokens the turn used, as last reported; absent when the agent
+   *  reported none. */
+  usage?: AgentRunUsage;
+  /** Whether the session is still open: `keep`, `session`, or a session
+   *  this started that it couldn't close. */
+  kept: boolean;
 }
 
 /** What started a turn: a message sent to the session (`message`), a
@@ -671,6 +734,70 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** `ms`, or until `signal` aborts: then it rejects with the abort's reason. */
+function abortableSleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** How many times `run()` follows its turn again after the event stream
+ *  breaks (a network blip, a proxy restart), from the last event it saw. */
+const RUN_RECONNECTS = 5;
+
+/** What a turn came to, from its events (`run()`): its last whole reply (or,
+ *  for an agent that only streams, what the pieces since add up to), its
+ *  tokens, and how it ended. */
+class TurnOutcome {
+  #reply = "";
+  #streamed = "";
+  usage?: AgentRunUsage;
+  /** Set by the turn's `turn.finished`. */
+  reason?: AgentFinishReason;
+  error: string | null = null;
+
+  observe(ev: AgentEvent): void {
+    switch (ev.type) {
+      case "message.delta":
+        this.#streamed += ev.text;
+        break;
+      case "message":
+        this.#reply = ev.text;
+        this.#streamed = "";
+        break;
+      case "usage":
+        this.usage = {
+          inputTokens: ev.inputTokens,
+          outputTokens: ev.outputTokens,
+          cacheReadTokens: ev.cacheReadTokens,
+          cacheWriteTokens: ev.cacheWriteTokens,
+        };
+        break;
+      case "turn.finished":
+        this.reason = ev.reason;
+        this.error = ev.error;
+        break;
+    }
+  }
+
+  /** The agent's last reply. */
+  get reply(): string {
+    return this.#streamed.trim() === "" ? this.#reply : this.#streamed;
+  }
+}
+
 /** A time bound as ms since the epoch; 0 when absent (the server default). */
 function toEpochMs(t: TimeBound | undefined): number {
   if (t === undefined) return 0;
@@ -897,6 +1024,161 @@ export class MachineAgents {
       { region: params.region },
     );
     return (resp.sessions ?? []).map(toAgentSession);
+  }
+
+  /**
+   * Run one task, start to reply: start a session with `harness` (or use
+   * the open `session`), send it `text`, wait for that turn to end, and
+   * resolve to the agent's last reply and how the turn ended. (`runs()` is
+   * something else: the history of finished turns.)
+   *
+   * ```ts
+   * const r = await boxd.machines.agents.run("my-box", {
+   *   harness: "claude-code",
+   *   text: "Fix the failing test",
+   *   cwd: "/home/boxd/app",
+   * });
+   * console.log(r.reply);
+   * if (r.reason !== "done") console.error(`[${r.reason}] ${r.error ?? ""}`);
+   * ```
+   *
+   * A turn that ends other than `done` doesn't reject: `reason` (and
+   * `error`) says how it ended. A session this starts is closed afterwards,
+   * also when following the turn fails, unless `keep`. Aborting `signal`
+   * interrupts the turn, closes a session this started (unless `keep`), and
+   * rejects with the abort's reason. The start and the send are retried as
+   * `start()` and `send()` are, and an event stream that breaks is followed
+   * again from the last event seen, up to 5 times.
+   */
+  async run(machine: string, params: AgentRunParams): Promise<AgentRunResult> {
+    const { harness, signal, region } = params;
+    if (
+      params.session !== undefined &&
+      (params.model !== undefined ||
+        params.cwd !== undefined ||
+        params.instructions !== undefined ||
+        params.env !== undefined)
+    ) {
+      throw new BoxdError(
+        "model, cwd, instructions and env are for a new session: leave them out with session",
+      );
+    }
+    signal?.throwIfAborted();
+    let session: AgentSession;
+    if (params.session === undefined) {
+      session = await this.start(machine, {
+        harness,
+        model: params.model,
+        cwd: params.cwd,
+        instructions: params.instructions,
+        env: params.env,
+        region,
+      });
+    } else {
+      const id = params.session;
+      session = await this.get(machine, id, { region });
+      if (session.harness !== harness) {
+        throw new BoxdError(`session ${id} runs ${session.harness}, not ${harness}`);
+      }
+      if (session.state === "closed" || session.state === "failed") {
+        throw new BoxdError(
+          `session ${id} is ${session.state}: leave out session to start a new one`,
+        );
+      }
+    }
+    const close = params.session === undefined && !params.keep;
+    let turn: number | undefined;
+    let outcome: TurnOutcome;
+    try {
+      signal?.throwIfAborted();
+      ({ turn } = await this.send(machine, session.id, params.text, {
+        timeoutSecs: params.timeoutSecs,
+        maxSteps: params.maxSteps,
+        region,
+      }));
+      outcome = await this.#followTurn(machine, session, turn, params);
+    } catch (err) {
+      // Best effort: what the caller hears about is `err`.
+      if (turn !== undefined && signal?.aborted) {
+        await this.interrupt(machine, session.id, { region }).catch(() => {});
+      }
+      if (close) await this.close(machine, session.id, { region }).catch(() => {});
+      throw err;
+    }
+    let kept = !close;
+    if (close) {
+      try {
+        await this.close(machine, session.id, { region });
+      } catch {
+        // The turn's reply isn't lost to it: `kept` says it's still open.
+        kept = true;
+      }
+    }
+    const result: AgentRunResult = {
+      sessionId: session.id,
+      machineId: session.machineId,
+      turn,
+      reason: outcome.reason ?? "unknown",
+      reply: outcome.reply,
+      kept,
+    };
+    if (outcome.error) result.error = outcome.error;
+    if (outcome.usage) result.usage = outcome.usage;
+    return result;
+  }
+
+  /** `run()`'s wait: the session's events from after `session.lastSeq`
+   *  until `turn`'s `turn.finished`, the other turns' skipped. A stream that
+   *  breaks is followed again from the last event seen: one that fails to
+   *  open only after a lost connection, one that has carried events after
+   *  any failure. */
+  async #followTurn(
+    machine: string,
+    session: AgentSession,
+    turn: number,
+    params: AgentRunParams,
+  ): Promise<TurnOutcome> {
+    const { signal, region } = params;
+    const outcome = new TurnOutcome();
+    let after = session.lastSeq;
+    let reconnects = 0;
+    for (;;) {
+      const stream = this.events(machine, session.id, {
+        afterSeq: after,
+        follow: true,
+        signal,
+        region,
+      });
+      let carried = false;
+      try {
+        for (;;) {
+          let next: IteratorResult<AgentEvent, void>;
+          try {
+            next = await stream.next();
+          } catch (err) {
+            if (reconnects < RUN_RECONNECTS && (carried || isRetryable(err))) break;
+            throw err;
+          }
+          if (next.done) {
+            signal?.throwIfAborted();
+            throw new BoxdError(
+              `the session's events ended before turn ${turn} finished: it may have been closed`,
+            );
+          }
+          const ev = next.value;
+          carried = true;
+          after = ev.seq;
+          if (ev.turn !== turn) continue;
+          outcome.observe(ev);
+          params.onEvent?.(ev);
+          if (outcome.reason !== undefined) return outcome;
+        }
+      } finally {
+        await stream.return(undefined);
+      }
+      reconnects += 1;
+      await abortableSleep(reconnects * 1000, signal);
+    }
   }
 
   /**
