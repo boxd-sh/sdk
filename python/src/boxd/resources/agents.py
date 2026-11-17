@@ -25,10 +25,20 @@ platform's run history instead: it never wakes a machine::
     page = boxd.machines.agents.runs(machine="my-box", limit=10)
     for run in page.runs:
         print(run.session_id, run.turn, run.reason, run.error or "")
+
+``start_login()`` signs an agent in for your machines, with the platform's
+own sign-in to Claude Code or Codex::
+
+    start = boxd.machines.agents.start_login("my-box", "codex")
+    print(f"Open {start.url} and enter {start.user_code}")
+    login = boxd.machines.agents.wait_for_login("my-box", "codex", start)
 """
 
 from __future__ import annotations
 
+import asyncio
+import math
+import time
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator, Mapping
 from datetime import datetime
@@ -36,9 +46,13 @@ from datetime import datetime
 from .. import _mappers as m
 from .. import _requests as req
 from .._generated import api_pb2
+from ..errors import BoxdError
 from ..models import (
     AgentEvent,
     AgentInterruptResult,
+    AgentLogin,
+    AgentLoginResult,
+    AgentLoginStart,
     AgentRun,
     AgentRunsPage,
     AgentSendResult,
@@ -131,6 +145,69 @@ def _runs(
         limit=limit or 0,
         page_token=page_token or "",
     )
+
+
+def _complete_login(
+    machine_id: str, harness: str, *, code: str | None, handle: str | None
+) -> api_pb2.CompleteAgentLoginRequest:
+    return api_pb2.CompleteAgentLoginRequest(
+        vm_id=machine_id, harness=harness, code=code or "", handle=handle or ""
+    )
+
+
+_LOGIN_INTERVAL_SECS = 5
+"""How often `wait_for_login` asks when the start doesn't say, in seconds."""
+
+
+class _LoginWait:
+    """`wait_for_login`'s schedule, shared by both namespaces: the handle it
+    asks with, how long it waits before asking again, and when it gives up."""
+
+    def __init__(self, harness: str, start: AgentLoginStart, timeout: float | None):
+        if start.method == "paste_code":
+            raise ValueError(
+                "a paste_code sign-in can't be waited on: pass the code its page "
+                "shows you after you approve to complete_login(code=...)"
+            )
+        if start.method != "device_code":
+            raise ValueError(
+                f"wait_for_login() waits on a device_code sign-in, not {start.method!r}"
+            )
+        if not start.handle:
+            raise ValueError("the sign-in has no handle: pass what start_login() returned")
+        self.handle = start.handle
+        self._harness = harness
+        self._timeout = timeout
+        self._interval = start.interval_secs or _LOGIN_INTERVAL_SECS
+        now = time.monotonic()
+        self._timeout_at = math.inf if timeout is None else now + timeout
+        # `expires_at` is on the wall clock; both deadlines are kept on the
+        # monotonic one.
+        self._expires_at = (
+            math.inf
+            if start.expires_at is None
+            else now + start.expires_at.timestamp() - time.time()
+        )
+
+    def pause(self) -> float:
+        """Seconds to wait before asking again, or TimeoutError when there is
+        no time left."""
+        left = min(self._timeout_at, self._expires_at) - time.monotonic()
+        if left <= 0:
+            if self._timeout_at < self._expires_at:
+                raise TimeoutError(
+                    f"the {self._harness} sign-in wasn't approved within {self._timeout}s"
+                )
+            raise TimeoutError(
+                f"the {self._harness} sign-in code expired before it was approved: "
+                "start again with start_login()"
+            )
+        return min(self._interval, left)
+
+    def login(self, result: AgentLoginResult) -> AgentLogin:
+        if result.login is None:
+            raise BoxdError(f"the {self._harness} sign-in ended without a login")
+        return result.login
 
 
 def _cancel(stream) -> None:
@@ -412,6 +489,110 @@ class Agents(Namespace):
                 return
             token = page.next_page_token
 
+    def start_login(
+        self, machine_id: str, harness: str, *, region: str | None = None
+    ) -> AgentLoginStart:
+        """Sign a coding agent in (`harness`: ``"claude-code"`` or
+        ``"codex"``) for `machine_id`, one of yours: the platform's own
+        sign-in, the same as the console's Integrations page. The login is
+        kept for you in the machine's organization, refreshed by the
+        platform, and given to every private machine of yours there; your
+        agent sessions use it.
+
+        This says where to go. Claude Code (``"paste_code"``): open ``url``,
+        approve, and pass the code the page then shows you to
+        :meth:`complete_login`. Codex (``"device_code"``): open ``url``,
+        enter ``user_code``, and :meth:`wait_for_login`::
+
+            start = boxd.machines.agents.start_login("my-box", "codex")
+            print(f"Open {start.url} and enter {start.user_code}")
+            login = boxd.machines.agents.wait_for_login("my-box", "codex", start)
+
+        A machine that would never get the login (a shared or isolated one,
+        another member's, a Windows one) is refused with a
+        :class:`~boxd.errors.ConflictError` saying what to do instead.
+        """
+        return m.agent_login_start(
+            self._transport.call(
+                "StartAgentLogin",
+                api_pb2.StartAgentLoginRequest(vm_id=machine_id, harness=harness),
+                region=region,
+            )
+        )
+
+    def complete_login(
+        self,
+        machine_id: str,
+        harness: str,
+        *,
+        code: str | None = None,
+        handle: str | None = None,
+        region: str | None = None,
+    ) -> AgentLoginResult:
+        """Finish a sign-in :meth:`start_login` began, in one call. Claude
+        Code: `code` is the code the page showed you after you approved, and
+        you're signed in. Codex: `handle` is the start's, and the result is
+        ``pending`` until you've approved; :meth:`wait_for_login` asks again
+        for you."""
+        return m.agent_login_result(
+            self._transport.call(
+                "CompleteAgentLogin",
+                _complete_login(machine_id, harness, code=code, handle=handle),
+                region=region,
+            )
+        )
+
+    def wait_for_login(
+        self,
+        machine_id: str,
+        harness: str,
+        start: AgentLoginStart,
+        *,
+        timeout: float | None = None,
+        region: str | None = None,
+    ) -> AgentLogin:
+        """Wait until you've approved a Codex (``"device_code"``) sign-in:
+        asks with the start's ``handle`` every ``interval_secs`` until it's
+        no longer pending, and returns the login. Raises
+        :class:`TimeoutError` once the code expires (``expires_at``), or after
+        `timeout` seconds when that comes first (None: until it expires).
+
+        A Claude Code (``"paste_code"``) sign-in can't be waited on
+        (:class:`ValueError`): pass the code its page shows you to
+        :meth:`complete_login`.
+        """
+        wait = _LoginWait(harness, start, timeout)
+        while True:
+            result = self.complete_login(
+                machine_id, harness, handle=wait.handle, region=region
+            )
+            if not result.pending:
+                return wait.login(result)
+            time.sleep(wait.pause())
+
+    def get_login(
+        self, machine_id: str, harness: str, *, region: str | None = None
+    ) -> AgentLogin:
+        """Whether you're signed in to `harness` for `machine_id`, and as
+        whom: the login kept in the machine's organization."""
+        return m.agent_login(
+            self._transport.call(
+                "GetAgentLogin",
+                api_pb2.GetAgentLoginRequest(vm_id=machine_id, harness=harness),
+                region=region,
+            )
+        )
+
+    def logout(self, machine_id: str, harness: str, *, region: str | None = None) -> None:
+        """Forget your sign-in to `harness` in the machine's organization. It
+        isn't revoked at Anthropic or OpenAI; do that from your account
+        there."""
+        self._transport.call(
+            "DeleteAgentLogin",
+            api_pb2.DeleteAgentLoginRequest(vm_id=machine_id, harness=harness),
+            region=region,
+        )
+
 
 class AsyncAgents(Namespace):
     """Async twin of :class:`Agents`."""
@@ -613,3 +794,77 @@ class AsyncAgents(Namespace):
             if not page.next_page_token:
                 return
             token = page.next_page_token
+
+    async def start_login(
+        self, machine_id: str, harness: str, *, region: str | None = None
+    ) -> AgentLoginStart:
+        """Sign a coding agent in for `machine_id`. See
+        :meth:`Agents.start_login`."""
+        return m.agent_login_start(
+            await self._transport.call(
+                "StartAgentLogin",
+                api_pb2.StartAgentLoginRequest(vm_id=machine_id, harness=harness),
+                region=region,
+            )
+        )
+
+    async def complete_login(
+        self,
+        machine_id: str,
+        harness: str,
+        *,
+        code: str | None = None,
+        handle: str | None = None,
+        region: str | None = None,
+    ) -> AgentLoginResult:
+        """Finish a sign-in, in one call. See :meth:`Agents.complete_login`."""
+        return m.agent_login_result(
+            await self._transport.call(
+                "CompleteAgentLogin",
+                _complete_login(machine_id, harness, code=code, handle=handle),
+                region=region,
+            )
+        )
+
+    async def wait_for_login(
+        self,
+        machine_id: str,
+        harness: str,
+        start: AgentLoginStart,
+        *,
+        timeout: float | None = None,
+        region: str | None = None,
+    ) -> AgentLogin:
+        """Wait until you've approved a Codex sign-in. See
+        :meth:`Agents.wait_for_login`."""
+        wait = _LoginWait(harness, start, timeout)
+        while True:
+            result = await self.complete_login(
+                machine_id, harness, handle=wait.handle, region=region
+            )
+            if not result.pending:
+                return wait.login(result)
+            await asyncio.sleep(wait.pause())
+
+    async def get_login(
+        self, machine_id: str, harness: str, *, region: str | None = None
+    ) -> AgentLogin:
+        """Whether you're signed in to `harness` for `machine_id`. See
+        :meth:`Agents.get_login`."""
+        return m.agent_login(
+            await self._transport.call(
+                "GetAgentLogin",
+                api_pb2.GetAgentLoginRequest(vm_id=machine_id, harness=harness),
+                region=region,
+            )
+        )
+
+    async def logout(
+        self, machine_id: str, harness: str, *, region: str | None = None
+    ) -> None:
+        """Forget your sign-in to `harness`. See :meth:`Agents.logout`."""
+        await self._transport.call(
+            "DeleteAgentLogin",
+            api_pb2.DeleteAgentLoginRequest(vm_id=machine_id, harness=harness),
+            region=region,
+        )

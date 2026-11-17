@@ -23,6 +23,10 @@ from .models import (
     AgentEvent,
     AgentFinishReason,
     AgentInterruptResult,
+    AgentLogin,
+    AgentLoginMethod,
+    AgentLoginResult,
+    AgentLoginStart,
     AgentMessage,
     AgentMessageDelta,
     AgentPlan,
@@ -637,6 +641,10 @@ _AGENT_FINISH_REASONS: dict[int, AgentFinishReason] = {
     6: "refused",
     7: "failed",
 }
+_AGENT_LOGIN_METHODS: dict[int, AgentLoginMethod] = {
+    1: "paste_code",
+    2: "device_code",
+}
 
 
 def agent_delivery(value: int) -> AgentDelivery:
@@ -707,6 +715,35 @@ def agent_runs_page(msg) -> AgentRunsPage:
     return AgentRunsPage(
         runs=[agent_run(r) for r in msg.runs],
         next_page_token=msg.next_page_token or None,
+    )
+
+
+def agent_login_start(msg) -> AgentLoginStart:
+    # The device fields are empty for a paste_code sign-in.
+    return AgentLoginStart(
+        method=_AGENT_LOGIN_METHODS.get(msg.method, "unknown"),
+        url=msg.url,
+        user_code=_text(msg.user_code),
+        handle=_text(msg.handle),
+        expires_at=_epoch_ms(msg.expires_at_ms),
+        interval_secs=msg.interval_secs or None,
+    )
+
+
+def agent_login(msg) -> AgentLogin:
+    return AgentLogin(
+        harness=msg.harness,
+        signed_in=msg.signed_in,
+        account=_text(msg.account),
+        org_id=msg.org_id,
+        updated_at=_epoch_ms(msg.updated_at_ms),
+    )
+
+
+def agent_login_result(msg) -> AgentLoginResult:
+    return AgentLoginResult(
+        pending=msg.pending,
+        login=agent_login(msg.login) if msg.HasField("login") else None,
     )
 
 

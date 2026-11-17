@@ -621,6 +621,27 @@ def test_an_agent_call_on_the_machine_says_where_the_machine_is():
         )
 
 
+def test_an_agent_sign_in_says_where_the_machine_is():
+    router, _, _ = make(
+        {
+            "StartAgentLogin": NotFoundError("VM not found"),
+            "CompleteAgentLogin": NotFoundError("VM not found"),
+            "GetAgentLogin": NotFoundError("VM not found"),
+            "DeleteAgentLogin": NotFoundError("VM not found"),
+            "FindElsewhere": elsewhere(exact=[("nyc", "foo")]),
+        }
+    )
+    agents = Machines(router).agents
+    for call in (
+        lambda: agents.start_login("foo", "codex"),
+        lambda: agents.complete_login("foo", "codex", handle="h-1"),
+        lambda: agents.get_login("foo", "codex"),
+        lambda: agents.logout("foo", "codex"),
+    ):
+        with pytest.raises(NotFoundError, match='pass region="nyc"'):
+            call()
+
+
 def test_an_agent_session_not_found_is_not_looked_up():
     # The session may be what is missing, not the machine.
     router, home, _ = make({"GetAgentSession": NotFoundError("no session s-1")})

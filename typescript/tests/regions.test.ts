@@ -684,6 +684,29 @@ describe("not found elsewhere", () => {
     expect(err.message).toContain('pass { region: "nyc" }');
   });
 
+  it("an agent sign-in says where the machine is", async () => {
+    const { router } = make({
+      [HOME]: {
+        StartAgentLogin: new NotFoundError("VM not found", 5),
+        CompleteAgentLogin: new NotFoundError("VM not found", 5),
+        GetAgentLogin: new NotFoundError("VM not found", 5),
+        DeleteAgentLogin: new NotFoundError("VM not found", 5),
+        FindElsewhere: elsewhere([["nyc", "foo"]]),
+      },
+    });
+    const agents = new Machines(router).agents;
+    for (const call of [
+      () => agents.startLogin("foo", "codex"),
+      () => agents.completeLogin("foo", "codex", { handle: "h-1" }),
+      () => agents.getLogin("foo", "codex"),
+      () => agents.logout("foo", "codex"),
+    ]) {
+      const err = await call().catch((e) => e);
+      expect(err).toBeInstanceOf(NotFoundError);
+      expect(err.message).toContain('pass { region: "nyc" }');
+    }
+  });
+
   it("logs say where the machine is", async () => {
     const { router } = make({
       [HOME]: {

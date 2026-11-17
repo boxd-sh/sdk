@@ -225,6 +225,53 @@ export function agentDeliveryToJSON(object: AgentDelivery): string {
   }
 }
 
+export enum AgentLoginMethod {
+  AGENT_LOGIN_METHOD_UNSPECIFIED = 0,
+  /**
+   * AGENT_LOGIN_METHOD_PASTE_CODE - Claude Code: open `url`, approve, and pass the code the page then shows
+   * you to CompleteAgentLogin.
+   */
+  AGENT_LOGIN_METHOD_PASTE_CODE = 1,
+  /**
+   * AGENT_LOGIN_METHOD_DEVICE_CODE - Codex: open `url`, enter `user_code`, then call CompleteAgentLogin with
+   * `handle` every `interval_secs` until it's no longer pending.
+   */
+  AGENT_LOGIN_METHOD_DEVICE_CODE = 2,
+  UNRECOGNIZED = -1,
+}
+
+export function agentLoginMethodFromJSON(object: any): AgentLoginMethod {
+  switch (object) {
+    case 0:
+    case "AGENT_LOGIN_METHOD_UNSPECIFIED":
+      return AgentLoginMethod.AGENT_LOGIN_METHOD_UNSPECIFIED;
+    case 1:
+    case "AGENT_LOGIN_METHOD_PASTE_CODE":
+      return AgentLoginMethod.AGENT_LOGIN_METHOD_PASTE_CODE;
+    case 2:
+    case "AGENT_LOGIN_METHOD_DEVICE_CODE":
+      return AgentLoginMethod.AGENT_LOGIN_METHOD_DEVICE_CODE;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return AgentLoginMethod.UNRECOGNIZED;
+  }
+}
+
+export function agentLoginMethodToJSON(object: AgentLoginMethod): string {
+  switch (object) {
+    case AgentLoginMethod.AGENT_LOGIN_METHOD_UNSPECIFIED:
+      return "AGENT_LOGIN_METHOD_UNSPECIFIED";
+    case AgentLoginMethod.AGENT_LOGIN_METHOD_PASTE_CODE:
+      return "AGENT_LOGIN_METHOD_PASTE_CODE";
+    case AgentLoginMethod.AGENT_LOGIN_METHOD_DEVICE_CODE:
+      return "AGENT_LOGIN_METHOD_DEVICE_CODE";
+    case AgentLoginMethod.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
 /**
  * What a tool call does, the same for every agent; the agent's own tool
  * name is in `AgentToolStarted.name`.
@@ -2699,6 +2746,72 @@ export interface ListAgentRunsResponse {
   runs: AgentRun[];
   /** Pass it as `page_token` for the next, older page; empty on the last. */
   nextPageToken: string;
+}
+
+export interface StartAgentLoginRequest {
+  /**
+   * The machine you'll run the agent in (name or id): yours, private, not
+   * isolated. The login is kept in its organization.
+   */
+  vmId: string;
+  /** `claude-code` or `codex` */
+  harness: string;
+}
+
+export interface StartAgentLoginResponse {
+  method: AgentLoginMethod;
+  /** where to sign in */
+  url: string;
+  /** DEVICE_CODE: what to enter at `url` */
+  userCode: string;
+  /** DEVICE_CODE: pass it to CompleteAgentLogin */
+  handle: string;
+  /** DEVICE_CODE: when `user_code` stops working */
+  expiresAtMs: number;
+  /** DEVICE_CODE: how often to ask */
+  intervalSecs: number;
+}
+
+export interface CompleteAgentLoginRequest {
+  /** as in StartAgentLogin */
+  vmId: string;
+  harness: string;
+  /** PASTE_CODE: the code the page showed after you approved */
+  code: string;
+  /** DEVICE_CODE: StartAgentLogin's `handle` */
+  handle: string;
+}
+
+export interface CompleteAgentLoginResponse {
+  /** DEVICE_CODE: not approved yet; ask again in `interval_secs`. */
+  pending: boolean;
+  /** once signed in */
+  login?: AgentLogin | undefined;
+}
+
+export interface GetAgentLoginRequest {
+  vmId: string;
+  harness: string;
+}
+
+export interface DeleteAgentLoginRequest {
+  vmId: string;
+  harness: string;
+}
+
+export interface DeleteAgentLoginResponse {
+}
+
+/** Your sign-in to one agent in one organization. */
+export interface AgentLogin {
+  harness: string;
+  signedIn: boolean;
+  /** the account's email, when the provider says */
+  account: string;
+  /** the organization it's kept in */
+  orgId: string;
+  /** the last sign-in or refresh; 0 when signed out */
+  updatedAtMs: number;
 }
 
 export interface AgentEventsRequest {
@@ -23235,6 +23348,767 @@ export const ListAgentRunsResponse: MessageFns<ListAgentRunsResponse> = {
   },
 };
 
+function createBaseStartAgentLoginRequest(): StartAgentLoginRequest {
+  return { vmId: "", harness: "" };
+}
+
+export const StartAgentLoginRequest: MessageFns<StartAgentLoginRequest> = {
+  encode(message: StartAgentLoginRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    if (message.harness !== "") {
+      writer.uint32(18).string(message.harness);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): StartAgentLoginRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseStartAgentLoginRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.harness = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): StartAgentLoginRequest {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      harness: isSet(object.harness) ? globalThis.String(object.harness) : "",
+    };
+  },
+
+  toJSON(message: StartAgentLoginRequest): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.harness !== "") {
+      obj.harness = message.harness;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<StartAgentLoginRequest>): StartAgentLoginRequest {
+    return StartAgentLoginRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<StartAgentLoginRequest>): StartAgentLoginRequest {
+    const message = createBaseStartAgentLoginRequest();
+    message.vmId = object.vmId ?? "";
+    message.harness = object.harness ?? "";
+    return message;
+  },
+};
+
+function createBaseStartAgentLoginResponse(): StartAgentLoginResponse {
+  return { method: 0, url: "", userCode: "", handle: "", expiresAtMs: 0, intervalSecs: 0 };
+}
+
+export const StartAgentLoginResponse: MessageFns<StartAgentLoginResponse> = {
+  encode(message: StartAgentLoginResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.method !== 0) {
+      writer.uint32(8).int32(message.method);
+    }
+    if (message.url !== "") {
+      writer.uint32(18).string(message.url);
+    }
+    if (message.userCode !== "") {
+      writer.uint32(26).string(message.userCode);
+    }
+    if (message.handle !== "") {
+      writer.uint32(34).string(message.handle);
+    }
+    if (message.expiresAtMs !== 0) {
+      writer.uint32(40).int64(message.expiresAtMs);
+    }
+    if (message.intervalSecs !== 0) {
+      writer.uint32(48).uint32(message.intervalSecs);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): StartAgentLoginResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseStartAgentLoginResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.method = reader.int32() as any;
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.url = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.userCode = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.handle = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.expiresAtMs = longToNumber(reader.int64());
+          continue;
+        }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.intervalSecs = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): StartAgentLoginResponse {
+    return {
+      method: isSet(object.method) ? agentLoginMethodFromJSON(object.method) : 0,
+      url: isSet(object.url) ? globalThis.String(object.url) : "",
+      userCode: isSet(object.userCode)
+        ? globalThis.String(object.userCode)
+        : isSet(object.user_code)
+        ? globalThis.String(object.user_code)
+        : "",
+      handle: isSet(object.handle) ? globalThis.String(object.handle) : "",
+      expiresAtMs: isSet(object.expiresAtMs)
+        ? globalThis.Number(object.expiresAtMs)
+        : isSet(object.expires_at_ms)
+        ? globalThis.Number(object.expires_at_ms)
+        : 0,
+      intervalSecs: isSet(object.intervalSecs)
+        ? globalThis.Number(object.intervalSecs)
+        : isSet(object.interval_secs)
+        ? globalThis.Number(object.interval_secs)
+        : 0,
+    };
+  },
+
+  toJSON(message: StartAgentLoginResponse): unknown {
+    const obj: any = {};
+    if (message.method !== 0) {
+      obj.method = agentLoginMethodToJSON(message.method);
+    }
+    if (message.url !== "") {
+      obj.url = message.url;
+    }
+    if (message.userCode !== "") {
+      obj.userCode = message.userCode;
+    }
+    if (message.handle !== "") {
+      obj.handle = message.handle;
+    }
+    if (message.expiresAtMs !== 0) {
+      obj.expiresAtMs = Math.round(message.expiresAtMs);
+    }
+    if (message.intervalSecs !== 0) {
+      obj.intervalSecs = Math.round(message.intervalSecs);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<StartAgentLoginResponse>): StartAgentLoginResponse {
+    return StartAgentLoginResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<StartAgentLoginResponse>): StartAgentLoginResponse {
+    const message = createBaseStartAgentLoginResponse();
+    message.method = object.method ?? 0;
+    message.url = object.url ?? "";
+    message.userCode = object.userCode ?? "";
+    message.handle = object.handle ?? "";
+    message.expiresAtMs = object.expiresAtMs ?? 0;
+    message.intervalSecs = object.intervalSecs ?? 0;
+    return message;
+  },
+};
+
+function createBaseCompleteAgentLoginRequest(): CompleteAgentLoginRequest {
+  return { vmId: "", harness: "", code: "", handle: "" };
+}
+
+export const CompleteAgentLoginRequest: MessageFns<CompleteAgentLoginRequest> = {
+  encode(message: CompleteAgentLoginRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    if (message.harness !== "") {
+      writer.uint32(18).string(message.harness);
+    }
+    if (message.code !== "") {
+      writer.uint32(26).string(message.code);
+    }
+    if (message.handle !== "") {
+      writer.uint32(34).string(message.handle);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): CompleteAgentLoginRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseCompleteAgentLoginRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.harness = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.code = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.handle = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): CompleteAgentLoginRequest {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      harness: isSet(object.harness) ? globalThis.String(object.harness) : "",
+      code: isSet(object.code) ? globalThis.String(object.code) : "",
+      handle: isSet(object.handle) ? globalThis.String(object.handle) : "",
+    };
+  },
+
+  toJSON(message: CompleteAgentLoginRequest): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.harness !== "") {
+      obj.harness = message.harness;
+    }
+    if (message.code !== "") {
+      obj.code = message.code;
+    }
+    if (message.handle !== "") {
+      obj.handle = message.handle;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<CompleteAgentLoginRequest>): CompleteAgentLoginRequest {
+    return CompleteAgentLoginRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<CompleteAgentLoginRequest>): CompleteAgentLoginRequest {
+    const message = createBaseCompleteAgentLoginRequest();
+    message.vmId = object.vmId ?? "";
+    message.harness = object.harness ?? "";
+    message.code = object.code ?? "";
+    message.handle = object.handle ?? "";
+    return message;
+  },
+};
+
+function createBaseCompleteAgentLoginResponse(): CompleteAgentLoginResponse {
+  return { pending: false, login: undefined };
+}
+
+export const CompleteAgentLoginResponse: MessageFns<CompleteAgentLoginResponse> = {
+  encode(message: CompleteAgentLoginResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.pending !== false) {
+      writer.uint32(8).bool(message.pending);
+    }
+    if (message.login !== undefined) {
+      AgentLogin.encode(message.login, writer.uint32(18).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): CompleteAgentLoginResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseCompleteAgentLoginResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.pending = reader.bool();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.login = AgentLogin.decode(reader, reader.uint32());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): CompleteAgentLoginResponse {
+    return {
+      pending: isSet(object.pending) ? globalThis.Boolean(object.pending) : false,
+      login: isSet(object.login) ? AgentLogin.fromJSON(object.login) : undefined,
+    };
+  },
+
+  toJSON(message: CompleteAgentLoginResponse): unknown {
+    const obj: any = {};
+    if (message.pending !== false) {
+      obj.pending = message.pending;
+    }
+    if (message.login !== undefined) {
+      obj.login = AgentLogin.toJSON(message.login);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<CompleteAgentLoginResponse>): CompleteAgentLoginResponse {
+    return CompleteAgentLoginResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<CompleteAgentLoginResponse>): CompleteAgentLoginResponse {
+    const message = createBaseCompleteAgentLoginResponse();
+    message.pending = object.pending ?? false;
+    message.login = (object.login !== undefined && object.login !== null)
+      ? AgentLogin.fromPartial(object.login)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseGetAgentLoginRequest(): GetAgentLoginRequest {
+  return { vmId: "", harness: "" };
+}
+
+export const GetAgentLoginRequest: MessageFns<GetAgentLoginRequest> = {
+  encode(message: GetAgentLoginRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    if (message.harness !== "") {
+      writer.uint32(18).string(message.harness);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GetAgentLoginRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseGetAgentLoginRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.harness = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): GetAgentLoginRequest {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      harness: isSet(object.harness) ? globalThis.String(object.harness) : "",
+    };
+  },
+
+  toJSON(message: GetAgentLoginRequest): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.harness !== "") {
+      obj.harness = message.harness;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<GetAgentLoginRequest>): GetAgentLoginRequest {
+    return GetAgentLoginRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<GetAgentLoginRequest>): GetAgentLoginRequest {
+    const message = createBaseGetAgentLoginRequest();
+    message.vmId = object.vmId ?? "";
+    message.harness = object.harness ?? "";
+    return message;
+  },
+};
+
+function createBaseDeleteAgentLoginRequest(): DeleteAgentLoginRequest {
+  return { vmId: "", harness: "" };
+}
+
+export const DeleteAgentLoginRequest: MessageFns<DeleteAgentLoginRequest> = {
+  encode(message: DeleteAgentLoginRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.vmId !== "") {
+      writer.uint32(10).string(message.vmId);
+    }
+    if (message.harness !== "") {
+      writer.uint32(18).string(message.harness);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): DeleteAgentLoginRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseDeleteAgentLoginRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.vmId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.harness = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): DeleteAgentLoginRequest {
+    return {
+      vmId: isSet(object.vmId)
+        ? globalThis.String(object.vmId)
+        : isSet(object.vm_id)
+        ? globalThis.String(object.vm_id)
+        : "",
+      harness: isSet(object.harness) ? globalThis.String(object.harness) : "",
+    };
+  },
+
+  toJSON(message: DeleteAgentLoginRequest): unknown {
+    const obj: any = {};
+    if (message.vmId !== "") {
+      obj.vmId = message.vmId;
+    }
+    if (message.harness !== "") {
+      obj.harness = message.harness;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<DeleteAgentLoginRequest>): DeleteAgentLoginRequest {
+    return DeleteAgentLoginRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<DeleteAgentLoginRequest>): DeleteAgentLoginRequest {
+    const message = createBaseDeleteAgentLoginRequest();
+    message.vmId = object.vmId ?? "";
+    message.harness = object.harness ?? "";
+    return message;
+  },
+};
+
+function createBaseDeleteAgentLoginResponse(): DeleteAgentLoginResponse {
+  return {};
+}
+
+export const DeleteAgentLoginResponse: MessageFns<DeleteAgentLoginResponse> = {
+  encode(_: DeleteAgentLoginResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): DeleteAgentLoginResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseDeleteAgentLoginResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(_: any): DeleteAgentLoginResponse {
+    return {};
+  },
+
+  toJSON(_: DeleteAgentLoginResponse): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create(base?: DeepPartial<DeleteAgentLoginResponse>): DeleteAgentLoginResponse {
+    return DeleteAgentLoginResponse.fromPartial(base ?? {});
+  },
+  fromPartial(_: DeepPartial<DeleteAgentLoginResponse>): DeleteAgentLoginResponse {
+    const message = createBaseDeleteAgentLoginResponse();
+    return message;
+  },
+};
+
+function createBaseAgentLogin(): AgentLogin {
+  return { harness: "", signedIn: false, account: "", orgId: "", updatedAtMs: 0 };
+}
+
+export const AgentLogin: MessageFns<AgentLogin> = {
+  encode(message: AgentLogin, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.harness !== "") {
+      writer.uint32(10).string(message.harness);
+    }
+    if (message.signedIn !== false) {
+      writer.uint32(16).bool(message.signedIn);
+    }
+    if (message.account !== "") {
+      writer.uint32(26).string(message.account);
+    }
+    if (message.orgId !== "") {
+      writer.uint32(34).string(message.orgId);
+    }
+    if (message.updatedAtMs !== 0) {
+      writer.uint32(40).int64(message.updatedAtMs);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AgentLogin {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseAgentLogin();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.harness = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.signedIn = reader.bool();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.account = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.orgId = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.updatedAtMs = longToNumber(reader.int64());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): AgentLogin {
+    return {
+      harness: isSet(object.harness) ? globalThis.String(object.harness) : "",
+      signedIn: isSet(object.signedIn)
+        ? globalThis.Boolean(object.signedIn)
+        : isSet(object.signed_in)
+        ? globalThis.Boolean(object.signed_in)
+        : false,
+      account: isSet(object.account) ? globalThis.String(object.account) : "",
+      orgId: isSet(object.orgId)
+        ? globalThis.String(object.orgId)
+        : isSet(object.org_id)
+        ? globalThis.String(object.org_id)
+        : "",
+      updatedAtMs: isSet(object.updatedAtMs)
+        ? globalThis.Number(object.updatedAtMs)
+        : isSet(object.updated_at_ms)
+        ? globalThis.Number(object.updated_at_ms)
+        : 0,
+    };
+  },
+
+  toJSON(message: AgentLogin): unknown {
+    const obj: any = {};
+    if (message.harness !== "") {
+      obj.harness = message.harness;
+    }
+    if (message.signedIn !== false) {
+      obj.signedIn = message.signedIn;
+    }
+    if (message.account !== "") {
+      obj.account = message.account;
+    }
+    if (message.orgId !== "") {
+      obj.orgId = message.orgId;
+    }
+    if (message.updatedAtMs !== 0) {
+      obj.updatedAtMs = Math.round(message.updatedAtMs);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<AgentLogin>): AgentLogin {
+    return AgentLogin.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<AgentLogin>): AgentLogin {
+    const message = createBaseAgentLogin();
+    message.harness = object.harness ?? "";
+    message.signedIn = object.signedIn ?? false;
+    message.account = object.account ?? "";
+    message.orgId = object.orgId ?? "";
+    message.updatedAtMs = object.updatedAtMs ?? 0;
+    return message;
+  },
+};
+
 function createBaseAgentEventsRequest(): AgentEventsRequest {
   return { vmId: "", sessionId: "", afterSeq: 0, follow: false };
 }
@@ -39448,6 +40322,53 @@ export const BoxdApiDefinition = {
       requestType: ListAgentRunsRequest as typeof ListAgentRunsRequest,
       requestStream: false,
       responseType: ListAgentRunsResponse as typeof ListAgentRunsResponse,
+      responseStream: false,
+      options: {},
+    },
+    /**
+     * Sign a coding agent in (Claude Code or Codex) for a machine of yours:
+     * the platform's own sign-in, the same as the console's Integrations page.
+     * The login is kept for you in the machine's organization, refreshed by
+     * the platform, and given to every private machine of yours there; your
+     * agent sessions use it. A shared or isolated machine never gets it (give
+     * it an API key as a secret instead). Start returns where to go; Complete
+     * takes the code Claude shows you, or says whether you've approved Codex's
+     * device code yet.
+     */
+    startAgentLogin: {
+      name: "StartAgentLogin",
+      requestType: StartAgentLoginRequest as typeof StartAgentLoginRequest,
+      requestStream: false,
+      responseType: StartAgentLoginResponse as typeof StartAgentLoginResponse,
+      responseStream: false,
+      options: {},
+    },
+    completeAgentLogin: {
+      name: "CompleteAgentLogin",
+      requestType: CompleteAgentLoginRequest as typeof CompleteAgentLoginRequest,
+      requestStream: false,
+      responseType: CompleteAgentLoginResponse as typeof CompleteAgentLoginResponse,
+      responseStream: false,
+      options: {},
+    },
+    /** Whether you're signed in to an agent for that machine, and as whom. */
+    getAgentLogin: {
+      name: "GetAgentLogin",
+      requestType: GetAgentLoginRequest as typeof GetAgentLoginRequest,
+      requestStream: false,
+      responseType: AgentLogin as typeof AgentLogin,
+      responseStream: false,
+      options: {},
+    },
+    /**
+     * Forget that login. It isn't revoked at Anthropic or OpenAI; do that from
+     * your account there.
+     */
+    deleteAgentLogin: {
+      name: "DeleteAgentLogin",
+      requestType: DeleteAgentLoginRequest as typeof DeleteAgentLoginRequest,
+      requestStream: false,
+      responseType: DeleteAgentLoginResponse as typeof DeleteAgentLoginResponse,
       responseStream: false,
       options: {},
     },

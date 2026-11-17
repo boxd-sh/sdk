@@ -996,6 +996,53 @@ class AgentRunsPage(BaseModel):
     last."""
 
 
+AgentLoginMethod = Literal["paste_code", "device_code", "unknown"]
+"""How a sign-in goes. ``"paste_code"`` (Claude Code): open ``url``, approve,
+and pass the code the page then shows you to ``complete_login(code=...)``.
+``"device_code"`` (Codex): open ``url``, enter ``user_code``, then
+``wait_for_login()``. ``"unknown"``: a method this SDK doesn't know yet."""
+
+
+class AgentLoginStart(BaseModel):
+    """Where to sign in, from ``machines.agents.start_login``."""
+
+    method: AgentLoginMethod
+    url: str
+    """Where to sign in."""
+    user_code: str | None = None
+    """``"device_code"``: what to enter at ``url``."""
+    handle: str | None = None
+    """``"device_code"``: pass it to ``complete_login(handle=...)``."""
+    expires_at: datetime | None = None
+    """``"device_code"``: when ``user_code`` stops working."""
+    interval_secs: int | None = None
+    """``"device_code"``: how often to ask whether you've approved, in
+    seconds."""
+
+
+class AgentLogin(BaseModel):
+    """Your sign-in to one agent in one organization."""
+
+    harness: str
+    """``"claude-code"`` or ``"codex"``."""
+    signed_in: bool
+    account: str | None
+    """The account's email, when the provider says. None otherwise."""
+    org_id: str
+    """The organization it's kept in: the machine's."""
+    updated_at: datetime | None
+    """The last sign-in or refresh; None when signed out."""
+
+
+class AgentLoginResult(BaseModel):
+    """What ``machines.agents.complete_login`` got."""
+
+    pending: bool
+    """``"device_code"``: not approved yet; ask again in ``interval_secs``."""
+    login: AgentLogin | None = None
+    """Once signed in."""
+
+
 AgentEvent = Union[
     AgentTurnStarted,
     AgentUserMessage,

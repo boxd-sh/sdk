@@ -103,6 +103,21 @@ service BoxdApi {
   // days, also after it's deleted. No prompts or output, only how each turn
   // went (AgentEvents has the transcript, from the machine itself).
   rpc ListAgentRuns(ListAgentRunsRequest)          returns (ListAgentRunsResponse);
+  // Sign a coding agent in (Claude Code or Codex) for a machine of yours:
+  // the platform's own sign-in, the same as the console's Integrations page.
+  // The login is kept for you in the machine's organization, refreshed by
+  // the platform, and given to every private machine of yours there; your
+  // agent sessions use it. A shared or isolated machine never gets it (give
+  // it an API key as a secret instead). Start returns where to go; Complete
+  // takes the code Claude shows you, or says whether you've approved Codex's
+  // device code yet.
+  rpc StartAgentLogin(StartAgentLoginRequest)      returns (StartAgentLoginResponse);
+  rpc CompleteAgentLogin(CompleteAgentLoginRequest) returns (CompleteAgentLoginResponse);
+  // Whether you're signed in to an agent for that machine, and as whom.
+  rpc GetAgentLogin(GetAgentLoginRequest)          returns (AgentLogin);
+  // Forget that login. It isn't revoked at Anthropic or OpenAI; do that from
+  // your account there.
+  rpc DeleteAgentLogin(DeleteAgentLoginRequest)    returns (DeleteAgentLoginResponse);
   rpc CreateNetwork(CreateNetworkRequest)   returns (CreateNetworkResponse);
   rpc ListNetworks(ListNetworksRequest)     returns (ListNetworksResponse);
   // Per-VM custom domains (one domain -> one VM). AddCustomDomain creates a
@@ -2210,6 +2225,66 @@ message ListAgentRunsResponse {
   repeated AgentRun runs = 1;
   // Pass it as `page_token` for the next, older page; empty on the last.
   string next_page_token = 2;
+}
+
+message StartAgentLoginRequest {
+  // The machine you'll run the agent in (name or id): yours, private, not
+  // isolated. The login is kept in its organization.
+  string vm_id   = 1;
+  string harness = 2;  // `claude-code` or `codex`
+}
+
+enum AgentLoginMethod {
+  AGENT_LOGIN_METHOD_UNSPECIFIED = 0;
+  // Claude Code: open `url`, approve, and pass the code the page then shows
+  // you to CompleteAgentLogin.
+  AGENT_LOGIN_METHOD_PASTE_CODE  = 1;
+  // Codex: open `url`, enter `user_code`, then call CompleteAgentLogin with
+  // `handle` every `interval_secs` until it's no longer pending.
+  AGENT_LOGIN_METHOD_DEVICE_CODE = 2;
+}
+
+message StartAgentLoginResponse {
+  AgentLoginMethod method = 1;
+  string url            = 2;  // where to sign in
+  string user_code      = 3;  // DEVICE_CODE: what to enter at `url`
+  string handle         = 4;  // DEVICE_CODE: pass it to CompleteAgentLogin
+  int64  expires_at_ms  = 5;  // DEVICE_CODE: when `user_code` stops working
+  uint32 interval_secs  = 6;  // DEVICE_CODE: how often to ask
+}
+
+message CompleteAgentLoginRequest {
+  string vm_id   = 1;  // as in StartAgentLogin
+  string harness = 2;
+  string code    = 3;  // PASTE_CODE: the code the page showed after you approved
+  string handle  = 4;  // DEVICE_CODE: StartAgentLogin's `handle`
+}
+
+message CompleteAgentLoginResponse {
+  // DEVICE_CODE: not approved yet; ask again in `interval_secs`.
+  bool       pending = 1;
+  AgentLogin login   = 2;  // once signed in
+}
+
+message GetAgentLoginRequest {
+  string vm_id   = 1;
+  string harness = 2;
+}
+
+message DeleteAgentLoginRequest {
+  string vm_id   = 1;
+  string harness = 2;
+}
+
+message DeleteAgentLoginResponse {}
+
+// Your sign-in to one agent in one organization.
+message AgentLogin {
+  string harness       = 1;
+  bool   signed_in     = 2;
+  string account       = 3;  // the account's email, when the provider says
+  string org_id        = 4;  // the organization it's kept in
+  int64  updated_at_ms = 5;  // the last sign-in or refresh; 0 when signed out
 }
 
 message AgentEventsRequest {

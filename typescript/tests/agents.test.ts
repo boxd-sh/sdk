@@ -1,13 +1,15 @@
 /**
  * `machines.agents`: the right RPC and request for each call, the models out,
  * the event stream (every kind, unknown kinds skipped, no deadline on a
- * follow stream, the call ended when the reader stops early), and the run
- * history (`runs`, its pages and their iterator).
+ * follow stream, the call ended when the reader stops early), the run
+ * history (`runs`, its pages and their iterator), and signing an agent in
+ * (`startLogin`, `completeLogin`, `waitForLogin`, `getLogin`, `logout`).
  */
 import { describe, expect, it } from "bun:test";
 import {
   AgentDelivery,
   AgentFinishReason,
+  AgentLoginMethod,
   AgentSendWhen,
   AgentSessionState,
   AgentToolKind,
@@ -15,8 +17,8 @@ import {
 } from "../src/_generated/definitions.js";
 import type { CallOptions, MethodDef, Transport, UnaryOptions } from "../src/_rpc.js";
 import { withRetries } from "../src/_retry.js";
-import { APIConnectionError } from "../src/errors.js";
-import { toAgentEvent, toAgentRun } from "../src/agents.js";
+import { APIConnectionError, BoxdError } from "../src/errors.js";
+import { toAgentEvent, toAgentLoginStart, toAgentRun } from "../src/agents.js";
 import { MachineAgents, Machines, type AgentEvent } from "../src/index.js";
 
 interface Recorded {
@@ -621,5 +623,203 @@ describe("machines.agents.runs", () => {
       if (r.turn === 3) break;
     }
     expect(t.calls).toHaveLength(1);
+  });
+});
+
+const aLogin = (fields: Record<string, unknown> = {}) => ({
+  harness: "codex",
+  signedIn: true,
+  account: "ada@example.com",
+  orgId: "org-1",
+  updatedAtMs: 1_700_000_000_000,
+  ...fields,
+});
+
+const aDeviceStart = (fields: Record<string, unknown> = {}) => ({
+  method: AgentLoginMethod.AGENT_LOGIN_METHOD_DEVICE_CODE,
+  url: "https://auth.openai.com/codex/device",
+  userCode: "ABCD-1234",
+  handle: "h-1",
+  expiresAtMs: 1_700_000_900_000,
+  intervalSecs: 5,
+  ...fields,
+});
+
+/** A device-code start as `startLogin()` returns it, asking every `ms`. */
+const deviceStart = (ms: number, expiresInMs = 60_000) => ({
+  method: "device_code" as const,
+  url: "https://auth.openai.com/codex/device",
+  userCode: "ABCD-1234",
+  handle: "h-1",
+  expiresAt: new Date(Date.now() + expiresInMs),
+  intervalSecs: ms / 1000,
+});
+
+const pending = (n: number) => Array.from({ length: n }, () => ({ pending: true }));
+
+describe("machines.agents logins", () => {
+  it("startLogin for Claude Code: a URL, and no device fields", async () => {
+    const t = new FakeTransport([
+      {
+        method: AgentLoginMethod.AGENT_LOGIN_METHOD_PASTE_CODE,
+        url: "https://claude.ai/oauth/authorize?x=1",
+        userCode: "",
+        handle: "",
+        expiresAtMs: 0,
+        intervalSecs: 0,
+      },
+    ]);
+    const start = await agents(t).startLogin("box", "claude-code");
+    expect(t.calls).toEqual([
+      {
+        method: "StartAgentLogin",
+        req: { vmId: "box", harness: "claude-code" },
+        opts: { region: undefined },
+      },
+    ]);
+    expect(start).toEqual({ method: "paste_code", url: "https://claude.ai/oauth/authorize?x=1" });
+    for (const k of ["userCode", "handle", "expiresAt", "intervalSecs"]) {
+      expect(k in start).toBe(false);
+    }
+  });
+
+  it("startLogin for Codex: the device code, its handle, expiry and interval", async () => {
+    const t = new FakeTransport([aDeviceStart()]);
+    const start = await agents(t).startLogin("box", "codex", { region: "nyc" });
+    expect(t.calls[0]!.req).toEqual({ vmId: "box", harness: "codex" });
+    expect(t.calls[0]!.opts).toEqual({ region: "nyc" });
+    expect(start).toEqual({
+      method: "device_code",
+      url: "https://auth.openai.com/codex/device",
+      userCode: "ABCD-1234",
+      handle: "h-1",
+      expiresAt: new Date(1_700_000_900_000),
+      intervalSecs: 5,
+    });
+    // From a newer server.
+    expect(toAgentLoginStart(aDeviceStart({ method: 99 })).method).toBe("unknown");
+  });
+
+  it("completeLogin sends the pasted code and maps the login", async () => {
+    const t = new FakeTransport([{ pending: false, login: aLogin({ harness: "claude-code" }) }]);
+    const result = await agents(t).completeLogin("box", "claude-code", { code: "abc#state" });
+    expect(t.calls).toEqual([
+      {
+        method: "CompleteAgentLogin",
+        req: { vmId: "box", harness: "claude-code", code: "abc#state", handle: "" },
+        opts: { region: undefined },
+      },
+    ]);
+    expect(result).toEqual({
+      pending: false,
+      login: {
+        harness: "claude-code",
+        signedIn: true,
+        account: "ada@example.com",
+        orgId: "org-1",
+        updatedAt: new Date(1_700_000_000_000),
+      },
+    });
+  });
+
+  it("completeLogin sends the handle; pending has no login", async () => {
+    const t = new FakeTransport([{ pending: true }]);
+    const result = await agents(t).completeLogin("box", "codex", { handle: "h-1", region: "lon" });
+    expect(t.calls[0]!.req).toEqual({ vmId: "box", harness: "codex", code: "", handle: "h-1" });
+    expect(t.calls[0]!.opts).toEqual({ region: "lon" });
+    expect(result).toEqual({ pending: true });
+    expect("login" in result).toBe(false);
+  });
+
+  it("getLogin maps a sign-in; an empty account and a zero time are left out", async () => {
+    const t = new FakeTransport([
+      aLogin({ account: "" }),
+      aLogin({ signedIn: false, account: "", updatedAtMs: 0 }),
+    ]);
+    const signedIn = await agents(t).getLogin("box", "codex");
+    expect(signedIn).toEqual({
+      harness: "codex",
+      signedIn: true,
+      orgId: "org-1",
+      updatedAt: new Date(1_700_000_000_000),
+    });
+    expect("account" in signedIn).toBe(false);
+    const signedOut = await agents(t).getLogin("box", "codex", { region: "nyc" });
+    expect(signedOut).toEqual({ harness: "codex", signedIn: false, orgId: "org-1" });
+    expect("updatedAt" in signedOut).toBe(false);
+    expect(t.calls.map((c) => [c.method, c.req, c.opts])).toEqual([
+      ["GetAgentLogin", { vmId: "box", harness: "codex" }, { region: undefined }],
+      ["GetAgentLogin", { vmId: "box", harness: "codex" }, { region: "nyc" }],
+    ]);
+  });
+
+  it("logout calls DeleteAgentLogin", async () => {
+    const t = new FakeTransport([{}]);
+    expect(await agents(t).logout("box", "claude-code")).toBeUndefined();
+    expect(t.calls).toEqual([
+      {
+        method: "DeleteAgentLogin",
+        req: { vmId: "box", harness: "claude-code" },
+        opts: { region: undefined },
+      },
+    ]);
+  });
+
+  it("waitForLogin asks with the handle until it's approved", async () => {
+    const t = new FakeTransport([...pending(2), { pending: false, login: aLogin() }]);
+    const login = await agents(t).waitForLogin("box", "codex", deviceStart(2), { region: "nyc" });
+    expect(login).toEqual({
+      harness: "codex",
+      signedIn: true,
+      account: "ada@example.com",
+      orgId: "org-1",
+      updatedAt: new Date(1_700_000_000_000),
+    });
+    expect(t.calls.map((c) => [c.method, c.req, c.opts])).toEqual(
+      Array.from({ length: 3 }, () => [
+        "CompleteAgentLogin",
+        { vmId: "box", harness: "codex", code: "", handle: "h-1" },
+        { region: "nyc" },
+      ]),
+    );
+  });
+
+  it("waitForLogin gives up once the code expires", async () => {
+    const t = new FakeTransport(pending(1000));
+    const err = await agents(t)
+      .waitForLogin("box", "codex", deviceStart(5, 30))
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(BoxdError);
+    expect(err.message).toBe(
+      "the codex sign-in code expired before it was approved: start again with startLogin()",
+    );
+    expect(t.calls.length).toBeGreaterThan(1);
+    expect(t.calls.length).toBeLessThan(20);
+  });
+
+  it("waitForLogin gives up after its timeout when that comes first", async () => {
+    const t = new FakeTransport(pending(1000));
+    const err = await agents(t)
+      .waitForLogin("box", "codex", deviceStart(5), { timeout: 30 })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(BoxdError);
+    expect(err.message).toBe("the codex sign-in wasn't approved within 30ms");
+  });
+
+  it("waitForLogin refuses a paste_code sign-in, and one without a handle", async () => {
+    const t = new FakeTransport();
+    const claude = { method: "paste_code" as const, url: "https://claude.ai/oauth/authorize" };
+    await expect(agents(t).waitForLogin("box", "claude-code", claude)).rejects.toThrow(
+      "a paste_code sign-in can't be waited on: pass the code its page shows you " +
+        "after you approve to completeLogin()",
+    );
+    const { handle: _, ...noHandle } = deviceStart(5);
+    await expect(agents(t).waitForLogin("box", "codex", noHandle)).rejects.toThrow(
+      "the sign-in has no handle: pass what startLogin() returned",
+    );
+    await expect(
+      agents(t).waitForLogin("box", "codex", { ...deviceStart(5), method: "unknown" }),
+    ).rejects.toThrow("waitForLogin() waits on a device_code sign-in, not unknown");
+    expect(t.calls).toHaveLength(0);
   });
 });

@@ -19,6 +19,9 @@
  *
  * `runs()` reads how finished turns went, across your machines, from the
  * platform's run history instead: it never wakes a machine.
+ *
+ * `startLogin()` signs an agent in for your machines, with the platform's
+ * own sign-in to Claude Code or Codex.
  */
 import type { ReadableCall, Transport } from "./_rpc.js";
 import { BoxdError } from "./errors.js";
@@ -27,15 +30,19 @@ import type { TimeBound } from "./utils.js";
 import {
   AgentDelivery as PbAgentDelivery,
   AgentFinishReason as PbAgentFinishReason,
+  AgentLoginMethod as PbAgentLoginMethod,
   AgentSendWhen as PbAgentSendWhen,
   AgentSessionState as PbAgentSessionState,
   AgentToolKind as PbAgentToolKind,
   BoxdApiDefinition,
   type AgentEvent as PbAgentEvent,
+  type AgentLogin as PbAgentLogin,
   type AgentRun as PbAgentRun,
   type AgentSession as PbAgentSession,
+  type CompleteAgentLoginResponse as PbCompleteAgentLoginResponse,
   type Harness as PbHarness,
   type ListAgentRunsResponse as PbListAgentRunsResponse,
+  type StartAgentLoginResponse as PbStartAgentLoginResponse,
 } from "./_generated/definitions.js";
 
 // ─── Models ──────────────────────────────────────────────────────────────
@@ -304,6 +311,51 @@ export interface AgentRunsParams extends RegionOption {
   /** `nextPageToken` from the page before. */
   pageToken?: string;
 }
+
+/** How a sign-in goes. `paste_code` (Claude Code): open `url`, approve, and
+ *  pass the code the page then shows you to `completeLogin()`.
+ *  `device_code` (Codex): open `url`, enter `userCode`, then
+ *  `waitForLogin()`. `unknown`: a method this SDK doesn't know yet. */
+export type AgentLoginMethod = "paste_code" | "device_code" | "unknown";
+
+/** Where to sign in, from `startLogin()`. */
+export interface AgentLoginStart {
+  method: AgentLoginMethod;
+  /** Where to sign in. */
+  url: string;
+  /** `device_code`: what to enter at `url`. */
+  userCode?: string;
+  /** `device_code`: pass it to `completeLogin()`. */
+  handle?: string;
+  /** `device_code`: when `userCode` stops working. */
+  expiresAt?: Date;
+  /** `device_code`: how often to ask whether you've approved, in seconds. */
+  intervalSecs?: number;
+}
+
+/** Your sign-in to one agent in one organization. */
+export interface AgentLogin {
+  /** `claude-code` or `codex`. */
+  harness: string;
+  signedIn: boolean;
+  /** The account's email, when the provider says. */
+  account?: string;
+  /** The organization it's kept in: the machine's. */
+  orgId: string;
+  /** The last sign-in or refresh; absent when signed out. */
+  updatedAt?: Date;
+}
+
+/** What `completeLogin()` got. */
+export interface AgentLoginResult {
+  /** `device_code`: not approved yet; ask again in `intervalSecs`. */
+  pending: boolean;
+  /** Once signed in. */
+  login?: AgentLogin;
+}
+
+/** How often `waitForLogin()` asks when the start doesn't say, in seconds. */
+const LOGIN_INTERVAL_SECS = 5;
 
 const emptyToNull = (s: string): string | null => (s === "" ? null : s);
 
@@ -580,6 +632,43 @@ export function toAgentRunsPage(r: PbListAgentRunsResponse): AgentRunsPage {
   const page: AgentRunsPage = { runs: (r.runs ?? []).map(toAgentRun) };
   if (r.nextPageToken) page.nextPageToken = r.nextPageToken;
   return page;
+}
+
+function toLoginMethod(m: PbAgentLoginMethod): AgentLoginMethod {
+  switch (m) {
+    case PbAgentLoginMethod.AGENT_LOGIN_METHOD_PASTE_CODE:
+      return "paste_code";
+    case PbAgentLoginMethod.AGENT_LOGIN_METHOD_DEVICE_CODE:
+      return "device_code";
+    default:
+      return "unknown";
+  }
+}
+
+export function toAgentLoginStart(r: PbStartAgentLoginResponse): AgentLoginStart {
+  const start: AgentLoginStart = { method: toLoginMethod(r.method), url: r.url };
+  if (r.userCode) start.userCode = r.userCode;
+  if (r.handle) start.handle = r.handle;
+  if (r.expiresAtMs) start.expiresAt = new Date(r.expiresAtMs);
+  if (r.intervalSecs) start.intervalSecs = r.intervalSecs;
+  return start;
+}
+
+export function toAgentLogin(l: PbAgentLogin): AgentLogin {
+  const login: AgentLogin = { harness: l.harness, signedIn: l.signedIn, orgId: l.orgId };
+  if (l.account) login.account = l.account;
+  if (l.updatedAtMs) login.updatedAt = new Date(l.updatedAtMs);
+  return login;
+}
+
+export function toAgentLoginResult(r: PbCompleteAgentLoginResponse): AgentLoginResult {
+  const result: AgentLoginResult = { pending: r.pending };
+  if (r.login) result.login = toAgentLogin(r.login);
+  return result;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 /** A time bound as ms since the epoch; 0 when absent (the server default). */
@@ -865,5 +954,136 @@ export class MachineAgents {
       yield* page.runs;
       pageToken = page.nextPageToken;
     } while (pageToken);
+  }
+
+  /**
+   * Sign a coding agent in (`harness`: `claude-code` or `codex`) for
+   * `machine`, one of yours: the platform's own sign-in, the same as the
+   * console's Integrations page. The login is kept for you in the machine's
+   * organization, refreshed by the platform, and given to every private
+   * machine of yours there; your agent sessions use it.
+   *
+   * This says where to go. Claude Code (`paste_code`): open `url`, approve,
+   * and pass the code the page then shows you to `completeLogin()`. Codex
+   * (`device_code`): open `url`, enter `userCode`, and `waitForLogin()`:
+   *
+   * ```ts
+   * const start = await boxd.machines.agents.startLogin("my-box", "codex");
+   * console.log(`Open ${start.url} and enter ${start.userCode}`);
+   * const login = await boxd.machines.agents.waitForLogin("my-box", "codex", start);
+   * ```
+   *
+   * A machine that would never get the login (a shared or isolated one,
+   * another member's, a Windows one) is refused with a `ConflictError`
+   * saying what to do instead.
+   */
+  async startLogin(
+    machine: string,
+    harness: string,
+    opts: RegionOption = {},
+  ): Promise<AgentLoginStart> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.startAgentLogin,
+      { vmId: machine, harness },
+      { region: opts.region },
+    );
+    return toAgentLoginStart(resp);
+  }
+
+  /**
+   * Finish a sign-in `startLogin()` began, in one call. Claude Code: `code`
+   * is the code the page showed you after you approved, and you're signed
+   * in. Codex: `handle` is the start's, and the result is `pending` until
+   * you've approved; `waitForLogin()` asks again for you.
+   */
+  async completeLogin(
+    machine: string,
+    harness: string,
+    params: {
+      /** `paste_code`: the code the page showed you after you approved. */
+      code?: string;
+      /** `device_code`: the start's `handle`. */
+      handle?: string;
+    } & RegionOption,
+  ): Promise<AgentLoginResult> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.completeAgentLogin,
+      { vmId: machine, harness, code: params.code ?? "", handle: params.handle ?? "" },
+      { region: params.region },
+    );
+    return toAgentLoginResult(resp);
+  }
+
+  /**
+   * Wait until you've approved a Codex (`device_code`) sign-in: asks with
+   * the start's `handle` every `intervalSecs` until it's no longer pending,
+   * and resolves to the login. It gives up with an error once the code
+   * expires (`expiresAt`), or after `timeout` milliseconds when that comes
+   * first. A Claude Code (`paste_code`) sign-in can't be waited on: pass the
+   * code its page shows you to `completeLogin()`.
+   */
+  async waitForLogin(
+    machine: string,
+    harness: string,
+    start: AgentLoginStart,
+    opts: {
+      /** Milliseconds. Default: until the code expires. */
+      timeout?: number;
+    } & RegionOption = {},
+  ): Promise<AgentLogin> {
+    if (start.method === "paste_code") {
+      throw new BoxdError(
+        "a paste_code sign-in can't be waited on: pass the code its page shows you " +
+          "after you approve to completeLogin()",
+      );
+    }
+    if (start.method !== "device_code") {
+      throw new BoxdError(`waitForLogin() waits on a device_code sign-in, not ${start.method}`);
+    }
+    const handle = start.handle;
+    if (!handle) {
+      throw new BoxdError("the sign-in has no handle: pass what startLogin() returned");
+    }
+    const intervalMs = (start.intervalSecs || LOGIN_INTERVAL_SECS) * 1000;
+    const expiresAt = start.expiresAt?.getTime() ?? Infinity;
+    const timeoutAt = opts.timeout === undefined ? Infinity : Date.now() + opts.timeout;
+    for (;;) {
+      const r = await this.completeLogin(machine, harness, { handle, region: opts.region });
+      if (!r.pending) {
+        if (r.login) return r.login;
+        throw new BoxdError(`the ${harness} sign-in ended without a login`);
+      }
+      const left = Math.min(expiresAt, timeoutAt) - Date.now();
+      if (left <= 0) {
+        throw new BoxdError(
+          timeoutAt < expiresAt
+            ? `the ${harness} sign-in wasn't approved within ${opts.timeout}ms`
+            : `the ${harness} sign-in code expired before it was approved: ` +
+                "start again with startLogin()",
+        );
+      }
+      await sleep(Math.min(intervalMs, left));
+    }
+  }
+
+  /** Whether you're signed in to `harness` for `machine`, and as whom: the
+   *  login kept in the machine's organization. */
+  async getLogin(machine: string, harness: string, opts: RegionOption = {}): Promise<AgentLogin> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.getAgentLogin,
+      { vmId: machine, harness },
+      { region: opts.region },
+    );
+    return toAgentLogin(resp);
+  }
+
+  /** Forget your sign-in to `harness` in the machine's organization. It
+   *  isn't revoked at Anthropic or OpenAI; do that from your account there. */
+  async logout(machine: string, harness: string, opts: RegionOption = {}): Promise<void> {
+    await this.transport.unary(
+      BoxdApiDefinition.methods.deleteAgentLogin,
+      { vmId: machine, harness },
+      { region: opts.region },
+    );
   }
 }

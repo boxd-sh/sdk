@@ -194,6 +194,26 @@ class BoxdApiStub(object):
                 request_serializer=api__pb2.ListAgentRunsRequest.SerializeToString,
                 response_deserializer=api__pb2.ListAgentRunsResponse.FromString,
                 _registered_method=True)
+        self.StartAgentLogin = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/StartAgentLogin',
+                request_serializer=api__pb2.StartAgentLoginRequest.SerializeToString,
+                response_deserializer=api__pb2.StartAgentLoginResponse.FromString,
+                _registered_method=True)
+        self.CompleteAgentLogin = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/CompleteAgentLogin',
+                request_serializer=api__pb2.CompleteAgentLoginRequest.SerializeToString,
+                response_deserializer=api__pb2.CompleteAgentLoginResponse.FromString,
+                _registered_method=True)
+        self.GetAgentLogin = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/GetAgentLogin',
+                request_serializer=api__pb2.GetAgentLoginRequest.SerializeToString,
+                response_deserializer=api__pb2.AgentLogin.FromString,
+                _registered_method=True)
+        self.DeleteAgentLogin = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/DeleteAgentLogin',
+                request_serializer=api__pb2.DeleteAgentLoginRequest.SerializeToString,
+                response_deserializer=api__pb2.DeleteAgentLoginResponse.FromString,
+                _registered_method=True)
         self.CreateNetwork = channel.unary_unary(
                 '/boxd.api.v1.BoxdApi/CreateNetwork',
                 request_serializer=api__pb2.CreateNetworkRequest.SerializeToString,
@@ -1035,6 +1055,41 @@ class BoxdApiServicer(object):
         run history: it never wakes a machine, and keeps a machine's runs for 30
         days, also after it's deleted. No prompts or output, only how each turn
         went (AgentEvents has the transcript, from the machine itself).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def StartAgentLogin(self, request, context):
+        """Sign a coding agent in (Claude Code or Codex) for a machine of yours:
+        the platform's own sign-in, the same as the console's Integrations page.
+        The login is kept for you in the machine's organization, refreshed by
+        the platform, and given to every private machine of yours there; your
+        agent sessions use it. A shared or isolated machine never gets it (give
+        it an API key as a secret instead). Start returns where to go; Complete
+        takes the code Claude shows you, or says whether you've approved Codex's
+        device code yet.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CompleteAgentLogin(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetAgentLogin(self, request, context):
+        """Whether you're signed in to an agent for that machine, and as whom.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteAgentLogin(self, request, context):
+        """Forget that login. It isn't revoked at Anthropic or OpenAI; do that from
+        your account there.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -2096,6 +2151,26 @@ def add_BoxdApiServicer_to_server(servicer, server):
                     servicer.ListAgentRuns,
                     request_deserializer=api__pb2.ListAgentRunsRequest.FromString,
                     response_serializer=api__pb2.ListAgentRunsResponse.SerializeToString,
+            ),
+            'StartAgentLogin': grpc.unary_unary_rpc_method_handler(
+                    servicer.StartAgentLogin,
+                    request_deserializer=api__pb2.StartAgentLoginRequest.FromString,
+                    response_serializer=api__pb2.StartAgentLoginResponse.SerializeToString,
+            ),
+            'CompleteAgentLogin': grpc.unary_unary_rpc_method_handler(
+                    servicer.CompleteAgentLogin,
+                    request_deserializer=api__pb2.CompleteAgentLoginRequest.FromString,
+                    response_serializer=api__pb2.CompleteAgentLoginResponse.SerializeToString,
+            ),
+            'GetAgentLogin': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetAgentLogin,
+                    request_deserializer=api__pb2.GetAgentLoginRequest.FromString,
+                    response_serializer=api__pb2.AgentLogin.SerializeToString,
+            ),
+            'DeleteAgentLogin': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteAgentLogin,
+                    request_deserializer=api__pb2.DeleteAgentLoginRequest.FromString,
+                    response_serializer=api__pb2.DeleteAgentLoginResponse.SerializeToString,
             ),
             'CreateNetwork': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateNetwork,
@@ -3542,6 +3617,114 @@ class BoxdApi(object):
             '/boxd.api.v1.BoxdApi/ListAgentRuns',
             api__pb2.ListAgentRunsRequest.SerializeToString,
             api__pb2.ListAgentRunsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StartAgentLogin(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/StartAgentLogin',
+            api__pb2.StartAgentLoginRequest.SerializeToString,
+            api__pb2.StartAgentLoginResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CompleteAgentLogin(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/CompleteAgentLogin',
+            api__pb2.CompleteAgentLoginRequest.SerializeToString,
+            api__pb2.CompleteAgentLoginResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetAgentLogin(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/GetAgentLogin',
+            api__pb2.GetAgentLoginRequest.SerializeToString,
+            api__pb2.AgentLogin.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteAgentLogin(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/DeleteAgentLogin',
+            api__pb2.DeleteAgentLoginRequest.SerializeToString,
+            api__pb2.DeleteAgentLoginResponse.FromString,
             options,
             channel_credentials,
             insecure,

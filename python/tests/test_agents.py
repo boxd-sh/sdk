@@ -1,19 +1,24 @@
 """`machines.agents`: what goes on the wire, what comes back, which calls are
 sent only once, the events stream (skipped kinds, no deadline on a
-follow, ending cleanly), and the run history (`runs`, its pages and
-`iter_runs`)."""
+follow, ending cleanly), the run history (`runs`, its pages and
+`iter_runs`), and signing an agent in (`start_login`, `complete_login`,
+`wait_for_login`, `get_login`, `logout`)."""
 
 from __future__ import annotations
 
 from contextlib import aclosing
 from datetime import datetime, timezone
 import re
+from types import SimpleNamespace
 
 import grpc
 import pytest
 
 from boxd import (
     AgentInterruptResult,
+    AgentLogin,
+    AgentLoginResult,
+    AgentLoginStart,
     AgentRun,
     AgentRunUsage,
     AgentRunsPage,
@@ -148,6 +153,7 @@ def test_session_state(wire, state):
         (api_pb2.AgentDelivery, "AGENT_DELIVERY_", m._AGENT_DELIVERIES),
         (api_pb2.AgentToolKind, "AGENT_TOOL_KIND_", m._AGENT_TOOL_KINDS),
         (api_pb2.AgentFinishReason, "AGENT_FINISH_REASON_", m._AGENT_FINISH_REASONS),
+        (api_pb2.AgentLoginMethod, "AGENT_LOGIN_METHOD_", m._AGENT_LOGIN_METHODS),
     ],
 )
 def test_enum_names_are_the_protos_lowercased(enum, prefix, mapping):
@@ -723,6 +729,294 @@ async def test_async_send_refuses_an_unknown_when():
     with pytest.raises(ValueError):
         await AsyncMachines(t).agents.send("box", "s-1", "x", when="soon")
     assert t.calls == []
+
+
+# --- signing an agent in ---
+
+
+def a_device_start(**overrides):
+    fields = dict(
+        method=api_pb2.AGENT_LOGIN_METHOD_DEVICE_CODE,
+        url="https://auth.openai.com/codex/device",
+        user_code="ABCD-1234",
+        handle="h-1",
+        expires_at_ms=T0 + 900_000,
+        interval_secs=5,
+    )
+    fields.update(overrides)
+    return api_pb2.StartAgentLoginResponse(**fields)
+
+
+def a_login(**overrides):
+    fields = dict(
+        harness="codex",
+        signed_in=True,
+        account="ada@example.com",
+        org_id="org-1",
+        updated_at_ms=T0,
+    )
+    fields.update(overrides)
+    return api_pb2.AgentLogin(**fields)
+
+
+def approved(**overrides):
+    return api_pb2.CompleteAgentLoginResponse(login=a_login(**overrides))
+
+
+def pending(n):
+    return [api_pb2.CompleteAgentLoginResponse(pending=True) for _ in range(n)]
+
+
+def test_login_start_for_claude_code_has_no_device_fields():
+    start = m.agent_login_start(
+        api_pb2.StartAgentLoginResponse(
+            method=api_pb2.AGENT_LOGIN_METHOD_PASTE_CODE,
+            url="https://claude.ai/oauth/authorize?x=1",
+        )
+    )
+    assert start == AgentLoginStart(
+        method="paste_code",
+        url="https://claude.ai/oauth/authorize?x=1",
+        user_code=None,
+        handle=None,
+        expires_at=None,
+        interval_secs=None,
+    )
+
+
+def test_login_start_for_codex_maps_the_device_code():
+    assert m.agent_login_start(a_device_start()) == AgentLoginStart(
+        method="device_code",
+        url="https://auth.openai.com/codex/device",
+        user_code="ABCD-1234",
+        handle="h-1",
+        expires_at=datetime(2026, 10, 14, 18, 1, 40, tzinfo=timezone.utc),
+        interval_secs=5,
+    )
+    # From a newer server.
+    assert m.agent_login_start(a_device_start(method=99)).method == "unknown"
+
+
+def test_login_maps_every_field_and_an_empty_account_is_none():
+    assert m.agent_login(a_login()) == AgentLogin(
+        harness="codex",
+        signed_in=True,
+        account="ada@example.com",
+        org_id="org-1",
+        updated_at=T0_DT,
+    )
+    assert m.agent_login(a_login(account="")).account is None
+    # Signed out.
+    assert m.agent_login(
+        a_login(signed_in=False, account="", updated_at_ms=0)
+    ) == AgentLogin(
+        harness="codex", signed_in=False, account=None, org_id="org-1", updated_at=None
+    )
+
+
+def test_login_result_pending_or_signed_in():
+    assert m.agent_login_result(api_pb2.CompleteAgentLoginResponse(pending=True)) == (
+        AgentLoginResult(pending=True, login=None)
+    )
+    assert m.agent_login_result(approved()) == AgentLoginResult(
+        pending=False, login=m.agent_login(a_login())
+    )
+
+
+def test_start_login():
+    a, t = agents(
+        api_pb2.StartAgentLoginResponse(
+            method=api_pb2.AGENT_LOGIN_METHOD_PASTE_CODE, url="https://claude.ai/x"
+        ),
+        a_device_start(),
+    )
+    claude = a.start_login("box", "claude-code")
+    codex = a.start_login("box", "codex", region="nyc")
+    assert (claude.method, claude.url, claude.handle) == ("paste_code", "https://claude.ai/x", None)
+    assert (codex.method, codex.user_code, codex.handle) == ("device_code", "ABCD-1234", "h-1")
+    assert t.calls == [
+        ("StartAgentLogin", api_pb2.StartAgentLoginRequest(vm_id="box", harness="claude-code")),
+        ("StartAgentLogin", api_pb2.StartAgentLoginRequest(vm_id="box", harness="codex")),
+    ]
+    assert t.regions == [None, "nyc"]
+
+
+def test_complete_login_sends_the_code_or_the_handle():
+    a, t = agents(approved(harness="claude-code"), *pending(1))
+    done = a.complete_login("box", "claude-code", code="abc#state")
+    assert done.pending is False
+    assert done.login is not None and done.login.harness == "claude-code"
+    waiting = a.complete_login("box", "codex", handle="h-1", region="lon")
+    assert waiting == AgentLoginResult(pending=True, login=None)
+    assert t.calls == [
+        (
+            "CompleteAgentLogin",
+            api_pb2.CompleteAgentLoginRequest(
+                vm_id="box", harness="claude-code", code="abc#state"
+            ),
+        ),
+        (
+            "CompleteAgentLogin",
+            api_pb2.CompleteAgentLoginRequest(vm_id="box", harness="codex", handle="h-1"),
+        ),
+    ]
+    assert t.regions == [None, "lon"]
+
+
+def test_get_login_and_logout():
+    a, t = agents(a_login(account=""), api_pb2.DeleteAgentLoginResponse())
+    login = a.get_login("box", "codex", region="nyc")
+    assert login.signed_in is True and login.account is None
+    assert a.logout("box", "claude-code") is None
+    assert t.calls == [
+        ("GetAgentLogin", api_pb2.GetAgentLoginRequest(vm_id="box", harness="codex")),
+        ("DeleteAgentLogin", api_pb2.DeleteAgentLoginRequest(vm_id="box", harness="claude-code")),
+    ]
+    assert t.regions == ["nyc", None]
+
+
+class FakeClock:
+    """Stands in for `time` (and `asyncio.sleep`) in the agents module:
+    sleeping moves it on."""
+
+    def __init__(self):
+        self.now = T0 / 1000
+        self.slept: list[float] = []
+
+    def time(self):
+        return self.now
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, secs):
+        self.slept.append(secs)
+        self.now += secs
+
+    async def async_sleep(self, secs):
+        self.sleep(secs)
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    c = FakeClock()
+    monkeypatch.setattr("boxd.resources.agents.time", c)
+    monkeypatch.setattr(
+        "boxd.resources.agents.asyncio", SimpleNamespace(sleep=c.async_sleep)
+    )
+    return c
+
+
+def device_start(*, expires_in=900, interval=5):
+    return m.agent_login_start(
+        a_device_start(expires_at_ms=T0 + expires_in * 1000, interval_secs=interval)
+    )
+
+
+def test_wait_for_login_asks_with_the_handle_until_it_is_approved(clock):
+    a, t = agents(*pending(2), approved())
+    login = a.wait_for_login("box", "codex", device_start(), region="nyc")
+    assert login == m.agent_login(a_login())
+    asked = (
+        "CompleteAgentLogin",
+        api_pb2.CompleteAgentLoginRequest(vm_id="box", harness="codex", handle="h-1"),
+    )
+    assert t.calls == [asked] * 3
+    assert t.regions == ["nyc"] * 3
+    assert clock.slept == [5, 5]
+
+
+def test_wait_for_login_gives_up_once_the_code_expires(clock):
+    a, t = agents(*pending(10))
+    with pytest.raises(
+        TimeoutError,
+        match="the codex sign-in code expired before it was approved: start again",
+    ):
+        a.wait_for_login("box", "codex", device_start(expires_in=12))
+    # Asked at 0, 5, 10 and, last, at 12, when it expires.
+    assert clock.slept == [5, 5, 2]
+    assert len(t.calls) == 4
+
+
+def test_wait_for_login_gives_up_after_its_timeout_when_that_comes_first(clock):
+    a, t = agents(*pending(10))
+    with pytest.raises(TimeoutError, match="the codex sign-in wasn't approved within 7s"):
+        a.wait_for_login("box", "codex", device_start(), timeout=7)
+    assert clock.slept == [5, 2]
+    assert len(t.calls) == 3
+
+
+def test_wait_for_login_asks_every_5s_when_the_start_does_not_say(clock):
+    a, _ = agents(*pending(1), approved())
+    start = AgentLoginStart(method="device_code", url="https://x", handle="h-1")
+    assert a.wait_for_login("box", "codex", start).signed_in is True
+    assert clock.slept == [5]
+
+
+def test_wait_for_login_refuses_a_paste_code_sign_in():
+    a, t = agents()
+    with pytest.raises(ValueError, match="a paste_code sign-in can't be waited on"):
+        a.wait_for_login(
+            "box", "claude-code", AgentLoginStart(method="paste_code", url="https://x")
+        )
+    with pytest.raises(ValueError, match="the sign-in has no handle"):
+        a.wait_for_login(
+            "box", "codex", AgentLoginStart(method="device_code", url="https://x")
+        )
+    with pytest.raises(ValueError, match="a device_code sign-in, not 'unknown'"):
+        a.wait_for_login(
+            "box", "codex", AgentLoginStart(method="unknown", url="https://x", handle="h")
+        )
+    assert t.calls == []
+
+
+async def test_async_logins(clock):
+    t = FakeAsyncTransport(
+        [
+            a_device_start(),
+            *pending(1),
+            approved(),
+            approved(harness="claude-code"),
+            a_login(signed_in=False, account="", updated_at_ms=0),
+            api_pb2.DeleteAgentLoginResponse(),
+            *pending(10),
+        ]
+    )
+    a = AsyncMachines(t).agents
+    start = await a.start_login("box", "codex", region="nyc")
+    login = await a.wait_for_login("box", "codex", start, region="nyc")
+    assert login.org_id == "org-1" and clock.slept == [5]
+    done = await a.complete_login("box", "claude-code", code="abc#state")
+    assert done.login is not None and done.login.harness == "claude-code"
+    signed_out = await a.get_login("box", "codex")
+    assert (signed_out.signed_in, signed_out.account, signed_out.updated_at) == (
+        False,
+        None,
+        None,
+    )
+    assert await a.logout("box", "codex") is None
+    assert [c[0] for c in t.calls] == [
+        "StartAgentLogin",
+        "CompleteAgentLogin",
+        "CompleteAgentLogin",
+        "CompleteAgentLogin",
+        "GetAgentLogin",
+        "DeleteAgentLogin",
+    ]
+    requests = [c[1] for c in t.calls]
+    assert requests[0] == api_pb2.StartAgentLoginRequest(vm_id="box", harness="codex")
+    assert requests[1] == requests[2] == api_pb2.CompleteAgentLoginRequest(
+        vm_id="box", harness="codex", handle="h-1"
+    )
+    assert requests[3].code == "abc#state"
+    assert t.regions[:3] == ["nyc"] * 3
+
+    with pytest.raises(TimeoutError, match="within 3s"):
+        await a.wait_for_login("box", "codex", start, timeout=3)
+    with pytest.raises(ValueError, match="can't be waited on"):
+        await a.wait_for_login(
+            "box", "claude-code", AgentLoginStart(method="paste_code", url="https://x")
+        )
 
 
 # --- the events stream through the real transport ---

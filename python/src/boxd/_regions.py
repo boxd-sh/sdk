@@ -184,6 +184,10 @@ _LOOKUP: dict[str, tuple[str, tuple[str, ...]]] = {
             "ListHarnesses",
             "StartAgentSession",
             "ListAgentSessions",
+            "StartAgentLogin",
+            "CompleteAgentLogin",
+            "GetAgentLogin",
+            "DeleteAgentLogin",
         )
     },
     "GetSnapshot": ("snapshot", ("name",)),
