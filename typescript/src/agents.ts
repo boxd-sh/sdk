@@ -196,6 +196,12 @@ export interface AgentStartParams extends RegionOption {
   /** Environment variables for this session's agent, on top of the
    *  machine's own variables and secrets. */
   env?: Record<string, string>;
+  /** Makes a retry safe: a second start with the same id on this machine
+   *  returns the session the first one started instead of starting another.
+   *  Default: a new id for this call, which the SDK's own retries keep. Pass
+   *  your own to retry across processes, such as an automation re-running a
+   *  step. */
+  requestId?: string;
 }
 
 export interface AgentSendParams extends RegionOption {
@@ -207,6 +213,11 @@ export interface AgentSendParams extends RegionOption {
   /** For a turn this message starts: interrupt it after this many agent
    *  steps: calls to the model for Claude Code, tool calls for Codex. */
   maxSteps?: number;
+  /** Makes a retry safe: a second message with the same id in this session
+   *  isn't sent again, and gets the first one's answer. Default: a new id
+   *  for this call, which the SDK's own retries keep. Pass your own to retry
+   *  across processes, such as an automation re-running a step. */
+  requestId?: string;
 }
 
 export interface AgentEventsParams extends RegionOption {
@@ -554,7 +565,9 @@ export class MachineAgents {
     return (resp.harnesses ?? []).map(toHarness);
   }
 
-  /** Start a session. Nothing runs until the first `send()`. */
+  /** Start a session. Nothing runs until the first `send()`. Retried after
+   *  a lost connection: its `requestId` makes a repeat return the session
+   *  the first attempt started. */
   async start(machine: string, params: AgentStartParams): Promise<AgentSession> {
     const resp = await this.transport.unary(
       BoxdApiDefinition.methods.startAgentSession,
@@ -565,15 +578,17 @@ export class MachineAgents {
         cwd: params.cwd ?? "",
         instructions: params.instructions ?? "",
         env: params.env ?? {},
+        requestId: params.requestId ?? crypto.randomUUID(),
       },
-      // Not repeated after a lost answer: it could open a second session.
-      { region: params.region, retry: false },
+      { region: params.region },
     );
     return toAgentSession(resp);
   }
 
   /** Send a message. Resolves once it is delivered, not when the turn ends:
-   *  read the turn's events with `events()`. */
+   *  read the turn's events with `events()`. Retried after a lost
+   *  connection: its `requestId` makes a repeat get the first attempt's
+   *  answer instead of sending the message twice. */
   async send(
     machine: string,
     sessionId: string,
@@ -595,9 +610,9 @@ export class MachineAgents {
             : PbAgentSendWhen.AGENT_SEND_WHEN_NEXT,
         timeoutSecs: params.timeoutSecs ?? 0,
         maxSteps: params.maxSteps ?? 0,
+        requestId: params.requestId ?? crypto.randomUUID(),
       },
-      // Not repeated after a lost answer: a message must not be sent twice.
-      { region: params.region, retry: false },
+      { region: params.region },
     );
     return { turn: resp.turn, delivery: toDelivery(resp.delivery) };
   }

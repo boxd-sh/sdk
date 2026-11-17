@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from contextlib import aclosing
 from datetime import datetime, timezone
+import re
 
 import grpc
 import pytest
@@ -358,6 +359,9 @@ def test_harnesses():
     assert harnesses[0].mid_turn_input is True
 
 
+UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+
+
 def test_start_sends_every_option_once():
     a, t = agents(a_session())
     session = a.start(
@@ -367,6 +371,7 @@ def test_start_sends_every_option_once():
         cwd="/srv/app",
         instructions="Keep replies short.",
         env={"FOO": "bar"},
+        request_id="deploy-42",
     )
     method, request = t.calls[0]
     assert method == "StartAgentSession"
@@ -377,39 +382,53 @@ def test_start_sends_every_option_once():
         cwd="/srv/app",
         instructions="Keep replies short.",
         env={"FOO": "bar"},
+        request_id="deploy-42",
     )
-    assert t.call_options == [{"retry": False}]
+    # A repeat is harmless with a request id, so it's retried like a read.
+    assert t.call_options == [{}]
     assert isinstance(session, AgentSession)
     assert session.machine_id == "vm-1"
 
 
-def test_start_defaults_are_empty_on_the_wire():
-    a, t = agents(a_session())
+def test_start_defaults_are_empty_on_the_wire_but_a_request_id():
+    a, t = agents(a_session(), a_session())
     a.start("box", "claude-code")
-    assert t.calls[0][1] == api_pb2.StartAgentSessionRequest(vm_id="box", harness="claude-code")
+    a.start("box", "claude-code")
+    first, second = t.calls[0][1], t.calls[1][1]
+    assert UUID.match(first.request_id) and UUID.match(second.request_id)
+    assert first.request_id != second.request_id, "a new one for each call"
+    first.ClearField("request_id")
+    assert first == api_pb2.StartAgentSessionRequest(vm_id="box", harness="claude-code")
 
 
-def test_send_defaults_to_next_and_is_sent_once():
+def test_send_defaults_to_next_with_a_request_id_of_its_own():
     a, t = agents(
         api_pb2.SendToAgentResponse(turn=1, delivery=api_pb2.AGENT_DELIVERY_STARTED)
     )
     result = a.send("box", "s-1", "hello")
     method, request = t.calls[0]
     assert method == "SendToAgent"
+    assert UUID.match(request.request_id)
     assert request == api_pb2.SendToAgentRequest(
-        vm_id="box", session_id="s-1", text="hello", when=api_pb2.AGENT_SEND_WHEN_NEXT
+        vm_id="box",
+        session_id="s-1",
+        text="hello",
+        when=api_pb2.AGENT_SEND_WHEN_NEXT,
+        request_id=request.request_id,
     )
-    # A lost answer is not sent again: the message would arrive twice.
-    assert t.call_options == [{"retry": False}]
+    assert t.call_options == [{}]
     assert result == AgentSendResult(turn=1, delivery="started")
 
 
 def test_send_now_with_limits():
     a, t = agents(api_pb2.SendToAgentResponse(turn=2, delivery=api_pb2.AGENT_DELIVERY_JOINED))
-    result = a.send("box", "s-1", "also this", when="now", timeout_secs=600, max_steps=25)
+    result = a.send(
+        "box", "s-1", "also this", when="now", timeout_secs=600, max_steps=25, request_id="step-7"
+    )
     request = t.calls[0][1]
     assert request.when == api_pb2.AGENT_SEND_WHEN_NOW
     assert (request.timeout_secs, request.max_steps) == (600, 25)
+    assert request.request_id == "step-7"
     assert result.delivery == "joined"
 
 
@@ -526,8 +545,9 @@ async def test_async_twin_sends_the_same():
     assert requests[3] == api_pb2.AgentEventsRequest(vm_id="box", session_id="s-1", after_seq=5)
     assert requests[4].clear_queue is True
     assert requests[7].all is True
+    assert UUID.match(requests[1].request_id) and UUID.match(requests[2].request_id)
     retry = [o.get("retry", True) for o in t.call_options]
-    assert retry == [True, False, False, True, False, True, True, True]
+    assert retry == [True, True, True, True, False, True, True, True]
 
 
 async def test_async_send_refuses_an_unknown_when():
@@ -683,18 +703,41 @@ async def test_async_stopping_early_ends_the_call():
 # --- sent once, or again, through the real transport ---
 
 
-def test_send_is_not_sent_again_after_unavailable(monkeypatch):
+class RecordingMulticallable(FakeMulticallable):
+    """A stub method that also keeps the request of every attempt."""
+
+    def __init__(self, outcomes):
+        super().__init__(outcomes)
+        self.requests: list = []
+
+    def with_call(self, request, timeout=None, metadata=None):
+        self.requests.append(request)
+        return super().with_call(request, timeout=timeout, metadata=metadata)
+
+    def __call__(self, request, timeout=None, metadata=None):
+        self.requests.append(request)
+        return super().__call__(request, timeout=timeout, metadata=metadata)
+
+
+@pytest.mark.parametrize("method", ["StartAgentSession", "SendToAgent"])
+def test_start_and_send_are_sent_again_after_unavailable_with_the_same_request_id(
+    monkeypatch, method
+):
     monkeypatch.setattr("boxd._transport.time.sleep", lambda _s: None)
-    send = FakeMulticallable(
-        [
-            FakeRpcError(grpc.StatusCode.UNAVAILABLE, "connection reset"),
-            api_pb2.SendToAgentResponse(turn=1),
-        ]
+    answer = (
+        a_session() if method == "StartAgentSession" else api_pb2.SendToAgentResponse(turn=1)
     )
-    a, _ = real_agents(StreamCall([]), unary={"SendToAgent": send})
-    with pytest.raises(APIConnectionError):
-        a.send("box", "s-1", "hello")
-    assert send.attempts == 1
+    stub = RecordingMulticallable(
+        [FakeRpcError(grpc.StatusCode.UNAVAILABLE, "connection reset"), answer]
+    )
+    a, _ = real_agents(StreamCall([]), unary={method: stub})
+    if method == "StartAgentSession":
+        assert a.start("box", "claude-code").id == "s-1"
+    else:
+        assert a.send("box", "s-1", "hello").turn == 1
+    assert stub.attempts == 2
+    ids = [r.request_id for r in stub.requests]
+    assert UUID.match(ids[0]) and ids[0] == ids[1], ids
 
 
 def test_reads_are_sent_again_after_unavailable(monkeypatch):

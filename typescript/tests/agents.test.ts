@@ -13,6 +13,8 @@ import {
   type AgentEvent as PbAgentEvent,
 } from "../src/_generated/definitions.js";
 import type { CallOptions, MethodDef, Transport, UnaryOptions } from "../src/_rpc.js";
+import { withRetries } from "../src/_retry.js";
+import { APIConnectionError } from "../src/errors.js";
 import { toAgentEvent } from "../src/agents.js";
 import { MachineAgents, Machines, type AgentEvent } from "../src/index.js";
 
@@ -96,6 +98,24 @@ class FakeTransport implements Transport {
 
 const agents = (t: FakeTransport) => new MachineAgents(t as Transport);
 
+/** A transport that retries as the real ones do (`withRetries`), its first
+ *  attempt at each call failing to connect. */
+class FlakyTransport extends FakeTransport {
+  override async unary<Req, Resp>(method: MethodDef<Req, Resp>, req: Req, opts?: UnaryOptions) {
+    let failed = false;
+    return withRetries(opts?.retry === false ? 0 : 2, async () => {
+      if (!failed) {
+        failed = true;
+        this.calls.push({ method: method.name, req: { ...(req as Record<string, unknown>) }, opts });
+        throw new APIConnectionError("connection reset");
+      }
+      return super.unary(method, req, opts);
+    });
+  }
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 const aSession = (fields: Record<string, unknown> = {}) => ({
   id: "s-1",
   vmId: "vm-1",
@@ -152,8 +172,10 @@ describe("machines.agents", () => {
     const t = new FakeTransport([aSession(), aSession({ model: "opus", error: "x" })]);
     const s = await agents(t).start("box", { harness: "claude-code" });
     expect(t.calls[0]!.method).toBe("StartAgentSession");
-    expect(t.calls[0]!.opts).toEqual({ region: undefined, retry: false });
-    expect(t.calls[0]!.req).toEqual({
+    expect(t.calls[0]!.opts).toEqual({ region: undefined });
+    const { requestId, ...rest } = t.calls[0]!.req;
+    expect(requestId).toMatch(UUID);
+    expect(rest).toEqual({
       vmId: "box",
       harness: "claude-code",
       model: "",
@@ -182,6 +204,7 @@ describe("machines.agents", () => {
       cwd: "/srv",
       instructions: "be brief",
       env: { A: "1" },
+      requestId: "deploy-42",
     });
     expect(t.calls[1]!.req).toEqual({
       vmId: "box",
@@ -190,18 +213,21 @@ describe("machines.agents", () => {
       cwd: "/srv",
       instructions: "be brief",
       env: { A: "1" },
+      requestId: "deploy-42",
     });
     expect(s2.model).toBe("opus");
     expect(s2.error).toBe("x");
   });
 
-  it("send maps when and limits, and is never retried", async () => {
+  it("send maps when and limits, with a request id of its own", async () => {
     const t = new FakeTransport([
       { turn: 1, delivery: AgentDelivery.AGENT_DELIVERY_STARTED },
       { turn: 1, delivery: AgentDelivery.AGENT_DELIVERY_QUEUED_FALLBACK },
     ]);
     expect(await agents(t).send("box", "s-1", "hi")).toEqual({ turn: 1, delivery: "started" });
-    expect(t.calls[0]).toEqual({
+    const { requestId, ...rest } = t.calls[0]!.req;
+    expect(requestId).toMatch(UUID);
+    expect({ method: t.calls[0]!.method, req: rest, opts: t.calls[0]!.opts }).toEqual({
       method: "SendToAgent",
       req: {
         vmId: "box",
@@ -211,20 +237,39 @@ describe("machines.agents", () => {
         timeoutSecs: 0,
         maxSteps: 0,
       },
-      opts: { region: undefined, retry: false },
+      opts: { region: undefined },
     });
     expect(
-      await agents(t).send("box", "s-1", "and this", { when: "now", timeoutSecs: 60, maxSteps: 5 }),
+      await agents(t).send("box", "s-1", "and this", {
+        when: "now",
+        timeoutSecs: 60,
+        maxSteps: 5,
+        requestId: "step-7",
+      }),
     ).toEqual({ turn: 1, delivery: "queued_fallback" });
     expect(t.calls[1]!.req).toMatchObject({
       when: AgentSendWhen.AGENT_SEND_WHEN_NOW,
       timeoutSecs: 60,
       maxSteps: 5,
+      requestId: "step-7",
     });
     await expect(
       agents(t).send("box", "s-1", "x", { when: "later" as "now" }),
     ).rejects.toThrow('when is "next" or "now", not "later"');
     expect(t.calls).toHaveLength(2);
+  });
+
+  it("start and send are retried after a lost connection, with the same request id", async () => {
+    const t = new FlakyTransport([aSession(), { turn: 2, delivery: AgentDelivery.AGENT_DELIVERY_QUEUED }]);
+    const s = await agents(t).start("box", { harness: "codex" });
+    expect(s.id).toBe("s-1");
+    expect(t.calls.map((c) => c.method)).toEqual(["StartAgentSession", "StartAgentSession"]);
+    expect(t.calls[0]!.req.requestId).toMatch(UUID);
+    expect(t.calls[1]!.req.requestId).toBe(t.calls[0]!.req.requestId);
+
+    expect(await agents(t).send("box", "s-1", "go")).toEqual({ turn: 2, delivery: "queued" });
+    expect(t.calls[3]!.req.requestId).toBe(t.calls[2]!.req.requestId);
+    expect(t.calls[2]!.req.requestId).not.toBe(t.calls[0]!.req.requestId);
   });
 
   it("interrupt maps turn 0 to null", async () => {

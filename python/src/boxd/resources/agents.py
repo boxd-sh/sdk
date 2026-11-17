@@ -22,6 +22,7 @@ The machine argument is a machine's name or id, as everywhere in
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncGenerator, Generator, Mapping
 
 from .. import _mappers as m
@@ -53,6 +54,7 @@ def _start(
     cwd: str | None,
     instructions: str | None,
     env: Mapping[str, str] | None,
+    request_id: str | None,
 ) -> api_pb2.StartAgentSessionRequest:
     return api_pb2.StartAgentSessionRequest(
         vm_id=machine_id,
@@ -61,6 +63,9 @@ def _start(
         cwd=cwd or "",
         instructions=instructions or "",
         env=dict(env or {}),
+        # Kept across the transport's retries: a repeat returns the session
+        # the first attempt started.
+        request_id=request_id or str(uuid.uuid4()),
     )
 
 
@@ -72,6 +77,7 @@ def _send(
     when: AgentSendWhen,
     timeout_secs: int | None,
     max_steps: int | None,
+    request_id: str | None,
 ) -> api_pb2.SendToAgentRequest:
     wire_when = _SEND_WHEN.get(when)
     if wire_when is None:
@@ -83,6 +89,9 @@ def _send(
         when=wire_when,
         timeout_secs=timeout_secs or 0,
         max_steps=max_steps or 0,
+        # Kept across the transport's retries: a repeat gets the first
+        # attempt's answer instead of sending the message twice.
+        request_id=request_id or str(uuid.uuid4()),
     )
 
 
@@ -124,6 +133,7 @@ class Agents(Namespace):
         cwd: str | None = None,
         instructions: str | None = None,
         env: Mapping[str, str] | None = None,
+        request_id: str | None = None,
         region: str | None = None,
     ) -> AgentSession:
         """Start a session with `harness` (``"claude-code"`` or ``"codex"``;
@@ -135,13 +145,24 @@ class Agents(Namespace):
         `instructions` are added to the agent's own system prompt, never
         replacing it. `env`: environment variables for this session's agent,
         on top of the machine's own variables and secrets.
+
+        `request_id` makes a retry safe: a second start with the same id on
+        this machine returns the session the first one started instead of
+        starting another. None: a new id for this call, which the SDK's own
+        retries after a lost connection keep. Pass your own to retry across
+        processes, such as an automation re-running a step.
         """
         request = _start(
-            machine_id, harness, model=model, cwd=cwd, instructions=instructions, env=env
+            machine_id,
+            harness,
+            model=model,
+            cwd=cwd,
+            instructions=instructions,
+            env=env,
+            request_id=request_id,
         )
-        # Sent once: a lost answer must not start a second session.
         return m.agent_session(
-            self._transport.call("StartAgentSession", request, region=region, retry=False)
+            self._transport.call("StartAgentSession", request, region=region)
         )
 
     def send(
@@ -153,6 +174,7 @@ class Agents(Namespace):
         when: AgentSendWhen = "next",
         timeout_secs: int | None = None,
         max_steps: int | None = None,
+        request_id: str | None = None,
         region: str | None = None,
     ) -> AgentSendResult:
         """Send a message. Returns once it is delivered, not when the turn
@@ -169,6 +191,12 @@ class Agents(Namespace):
         seconds, or after `max_steps` agent steps (calls to the model for
         Claude Code, tool calls for Codex). None: no limit. They don't apply
         to a running turn the message joins.
+
+        `request_id` makes a retry safe: a second message with the same id
+        in this session isn't sent again, and gets the first one's answer.
+        None: a new id for this call, which the SDK's own retries after a
+        lost connection keep. Pass your own to retry across processes, such
+        as an automation re-running a step.
         """
         request = _send(
             machine_id,
@@ -177,11 +205,10 @@ class Agents(Namespace):
             when=when,
             timeout_secs=timeout_secs,
             max_steps=max_steps,
+            request_id=request_id,
         )
-        # Sent once: after a lost answer, sending it again could deliver the
-        # message twice.
         return m.agent_send_result(
-            self._transport.call("SendToAgent", request, region=region, retry=False)
+            self._transport.call("SendToAgent", request, region=region)
         )
 
     def events(
@@ -301,16 +328,21 @@ class AsyncAgents(Namespace):
         cwd: str | None = None,
         instructions: str | None = None,
         env: Mapping[str, str] | None = None,
+        request_id: str | None = None,
         region: str | None = None,
     ) -> AgentSession:
         """Start a session. See :meth:`Agents.start`."""
         request = _start(
-            machine_id, harness, model=model, cwd=cwd, instructions=instructions, env=env
+            machine_id,
+            harness,
+            model=model,
+            cwd=cwd,
+            instructions=instructions,
+            env=env,
+            request_id=request_id,
         )
         return m.agent_session(
-            await self._transport.call(
-                "StartAgentSession", request, region=region, retry=False
-            )
+            await self._transport.call("StartAgentSession", request, region=region)
         )
 
     async def send(
@@ -322,6 +354,7 @@ class AsyncAgents(Namespace):
         when: AgentSendWhen = "next",
         timeout_secs: int | None = None,
         max_steps: int | None = None,
+        request_id: str | None = None,
         region: str | None = None,
     ) -> AgentSendResult:
         """Send a message. See :meth:`Agents.send`."""
@@ -332,9 +365,10 @@ class AsyncAgents(Namespace):
             when=when,
             timeout_secs=timeout_secs,
             max_steps=max_steps,
+            request_id=request_id,
         )
         return m.agent_send_result(
-            await self._transport.call("SendToAgent", request, region=region, retry=False)
+            await self._transport.call("SendToAgent", request, region=region)
         )
 
     async def events(

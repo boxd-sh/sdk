@@ -1080,6 +1080,12 @@ tool calls for Codex). `interrupt()` stops the running turn
 (`{ clearQueue: true }` also drops the waiting messages), `close()` ends the
 session, and `list(machine, { all: true })` also shows closed and failed
 sessions.
+
+`start` and `send` are retried after a lost connection without running
+anything twice: each carries a `requestId`, and a repeat with the same one
+gets the first answer. The SDK makes up a new one for each call; pass
+`requestId` yourself to retry from another process, such as an automation
+running a step again.
 `harnesses()` lists the agents a machine can run.
 
 `AgentEvent` is a union narrowed on `type`: `turn.started`, `user.message`,

@@ -2533,6 +2533,14 @@ export interface StartAgentSessionRequest {
    * own variables and secrets.
    */
   env: { [key: string]: string };
+  /**
+   * Optional: an id of your choosing that makes retrying safe. A second
+   * start with the same `request_id` on this machine (a retry after a
+   * network error, say) returns the session the first one started instead
+   * of starting another. Use a new one for every session you mean to start.
+   * The SDKs and CLIs make one up for each call they retry.
+   */
+  requestId: string;
 }
 
 export interface StartAgentSessionRequest_EnvEntry {
@@ -2578,6 +2586,15 @@ export interface SendToAgentRequest {
    */
   timeoutSecs: number;
   maxSteps: number;
+  /**
+   * Optional: an id of your choosing that makes retrying safe. A second
+   * message with the same `request_id` in this session (a retry after a
+   * network error, say) isn't sent again: it gets the first one's answer.
+   * The session remembers its last 1,000. Use a new one for every message
+   * you mean to send. The SDKs and CLIs make one up for each call they
+   * retry.
+   */
+  requestId: string;
 }
 
 export interface SendToAgentResponse {
@@ -21317,7 +21334,7 @@ export const ListHarnessesResponse: MessageFns<ListHarnessesResponse> = {
 };
 
 function createBaseStartAgentSessionRequest(): StartAgentSessionRequest {
-  return { vmId: "", harness: "", model: "", cwd: "", instructions: "", env: {} };
+  return { vmId: "", harness: "", model: "", cwd: "", instructions: "", env: {}, requestId: "" };
 }
 
 export const StartAgentSessionRequest: MessageFns<StartAgentSessionRequest> = {
@@ -21340,6 +21357,9 @@ export const StartAgentSessionRequest: MessageFns<StartAgentSessionRequest> = {
     globalThis.Object.entries(message.env).forEach(([key, value]: [string, string]) => {
       StartAgentSessionRequest_EnvEntry.encode({ key: key as any, value }, writer.uint32(50).fork()).join();
     });
+    if (message.requestId !== "") {
+      writer.uint32(58).string(message.requestId);
+    }
     return writer;
   },
 
@@ -21401,6 +21421,14 @@ export const StartAgentSessionRequest: MessageFns<StartAgentSessionRequest> = {
           }
           continue;
         }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.requestId = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -21430,6 +21458,11 @@ export const StartAgentSessionRequest: MessageFns<StartAgentSessionRequest> = {
           {},
         )
         : {},
+      requestId: isSet(object.requestId)
+        ? globalThis.String(object.requestId)
+        : isSet(object.request_id)
+        ? globalThis.String(object.request_id)
+        : "",
     };
   },
 
@@ -21459,6 +21492,9 @@ export const StartAgentSessionRequest: MessageFns<StartAgentSessionRequest> = {
         });
       }
     }
+    if (message.requestId !== "") {
+      obj.requestId = message.requestId;
+    }
     return obj;
   },
 
@@ -21481,6 +21517,7 @@ export const StartAgentSessionRequest: MessageFns<StartAgentSessionRequest> = {
       },
       {},
     );
+    message.requestId = object.requestId ?? "";
     return message;
   },
 };
@@ -21827,7 +21864,7 @@ export const AgentSession: MessageFns<AgentSession> = {
 };
 
 function createBaseSendToAgentRequest(): SendToAgentRequest {
-  return { vmId: "", sessionId: "", text: "", when: 0, timeoutSecs: 0, maxSteps: 0 };
+  return { vmId: "", sessionId: "", text: "", when: 0, timeoutSecs: 0, maxSteps: 0, requestId: "" };
 }
 
 export const SendToAgentRequest: MessageFns<SendToAgentRequest> = {
@@ -21849,6 +21886,9 @@ export const SendToAgentRequest: MessageFns<SendToAgentRequest> = {
     }
     if (message.maxSteps !== 0) {
       writer.uint32(48).uint32(message.maxSteps);
+    }
+    if (message.requestId !== "") {
+      writer.uint32(58).string(message.requestId);
     }
     return writer;
   },
@@ -21908,6 +21948,14 @@ export const SendToAgentRequest: MessageFns<SendToAgentRequest> = {
           message.maxSteps = reader.uint32();
           continue;
         }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.requestId = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -21941,6 +21989,11 @@ export const SendToAgentRequest: MessageFns<SendToAgentRequest> = {
         : isSet(object.max_steps)
         ? globalThis.Number(object.max_steps)
         : 0,
+      requestId: isSet(object.requestId)
+        ? globalThis.String(object.requestId)
+        : isSet(object.request_id)
+        ? globalThis.String(object.request_id)
+        : "",
     };
   },
 
@@ -21964,6 +22017,9 @@ export const SendToAgentRequest: MessageFns<SendToAgentRequest> = {
     if (message.maxSteps !== 0) {
       obj.maxSteps = Math.round(message.maxSteps);
     }
+    if (message.requestId !== "") {
+      obj.requestId = message.requestId;
+    }
     return obj;
   },
 
@@ -21978,6 +22034,7 @@ export const SendToAgentRequest: MessageFns<SendToAgentRequest> = {
     message.when = object.when ?? 0;
     message.timeoutSecs = object.timeoutSecs ?? 0;
     message.maxSteps = object.maxSteps ?? 0;
+    message.requestId = object.requestId ?? "";
     return message;
   },
 };

@@ -1038,6 +1038,12 @@ Claude Code, tool calls for Codex). `interrupt()` stops the running turn
 session, and `list(machine, all=True)` also shows closed and failed sessions.
 `harnesses()` lists the agents a machine can run.
 
+`start` and `send` are retried after a lost connection without running
+anything twice: each carries a `request_id`, and a repeat with the same one
+gets the first answer. The SDK makes up a new one for each call; pass
+`request_id=` yourself to retry from another process, such as an automation
+running a step again.
+
 The events are `AgentTurnStarted`, `AgentUserMessage`, `AgentMessageDelta`,
 `AgentMessage`, `AgentThinkingDelta`, `AgentToolStarted`, `AgentToolOutput`,
 `AgentToolFinished`, `AgentPlan`, `AgentUsage` and `AgentTurnFinished`, told

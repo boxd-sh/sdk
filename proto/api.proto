@@ -2040,6 +2040,12 @@ message StartAgentSessionRequest {
   // Environment variables for this session's agent, on top of the machine's
   // own variables and secrets.
   map<string, string> env = 6;
+  // Optional: an id of your choosing that makes retrying safe. A second
+  // start with the same `request_id` on this machine (a retry after a
+  // network error, say) returns the session the first one started instead
+  // of starting another. Use a new one for every session you mean to start.
+  // The SDKs and CLIs make one up for each call they retry.
+  string request_id = 7;
 }
 
 enum AgentSessionState {
@@ -2094,6 +2100,13 @@ message SendToAgentRequest {
   // don't apply to a running turn the message joins.
   uint32 timeout_secs = 5;
   uint32 max_steps    = 6;
+  // Optional: an id of your choosing that makes retrying safe. A second
+  // message with the same `request_id` in this session (a retry after a
+  // network error, say) isn't sent again: it gets the first one's answer.
+  // The session remembers its last 1,000. Use a new one for every message
+  // you mean to send. The SDKs and CLIs make one up for each call they
+  // retry.
+  string request_id = 7;
 }
 
 enum AgentDelivery {
