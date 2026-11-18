@@ -958,6 +958,14 @@ export interface ListExposedPortsResponse {
  * requests to these hosts. The request carries the FULL desired set: setting
  * a secret without `domains` makes it a plain secret again (there is no
  * separate domains RPC). Ignored for kind="env".
+ * `replace_in` (secrets with `domains` only): the parts of a request where the
+ * egress proxy may replace the placeholder with the value: "url" (the request
+ * line), "headers" (every header value, a Basic credential included) and
+ * "body" (the body and the trailers of a chunked body). Empty = all three. In
+ * the other parts the placeholder is sent as it is. Like `domains` it is the
+ * FULL desired set: setting a secret without it replaces the value
+ * everywhere again. Refused without `domains`, and for an unknown part.
+ * Ignored for kind="env".
  */
 export interface SetVarRequest {
   org: string;
@@ -966,6 +974,7 @@ export interface SetVarRequest {
   value: string;
   scope: string;
   domains: string[];
+  replaceIn: string[];
 }
 
 export interface VarReply {
@@ -987,6 +996,11 @@ export interface VarItem {
   domains: string[];
   /** Unattached secrets only: how many machines list it in their spec. */
   boundMachines: number;
+  /**
+   * Secrets with domains only: where in a request the value is replaced
+   * ("url", "headers", "body"), as set; empty = all three.
+   */
+  replaceIn: string[];
 }
 
 export interface VarListReply {
@@ -7838,7 +7852,7 @@ export const ListExposedPortsResponse: MessageFns<ListExposedPortsResponse> = {
 };
 
 function createBaseSetVarRequest(): SetVarRequest {
-  return { org: "", kind: "", name: "", value: "", scope: "", domains: [] };
+  return { org: "", kind: "", name: "", value: "", scope: "", domains: [], replaceIn: [] };
 }
 
 export const SetVarRequest: MessageFns<SetVarRequest> = {
@@ -7860,6 +7874,9 @@ export const SetVarRequest: MessageFns<SetVarRequest> = {
     }
     for (const v of message.domains) {
       writer.uint32(50).string(v!);
+    }
+    for (const v of message.replaceIn) {
+      writer.uint32(58).string(v!);
     }
     return writer;
   },
@@ -7919,6 +7936,14 @@ export const SetVarRequest: MessageFns<SetVarRequest> = {
           message.domains.push(reader.string());
           continue;
         }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.replaceIn.push(reader.string());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -7936,6 +7961,11 @@ export const SetVarRequest: MessageFns<SetVarRequest> = {
       value: isSet(object.value) ? globalThis.String(object.value) : "",
       scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
       domains: globalThis.Array.isArray(object?.domains) ? object.domains.map((e: any) => globalThis.String(e)) : [],
+      replaceIn: globalThis.Array.isArray(object?.replaceIn)
+        ? object.replaceIn.map((e: any) => globalThis.String(e))
+        : globalThis.Array.isArray(object?.replace_in)
+        ? object.replace_in.map((e: any) => globalThis.String(e))
+        : [],
     };
   },
 
@@ -7959,6 +7989,9 @@ export const SetVarRequest: MessageFns<SetVarRequest> = {
     if (message.domains?.length) {
       obj.domains = message.domains;
     }
+    if (message.replaceIn?.length) {
+      obj.replaceIn = message.replaceIn;
+    }
     return obj;
   },
 
@@ -7973,6 +8006,7 @@ export const SetVarRequest: MessageFns<SetVarRequest> = {
     message.value = object.value ?? "";
     message.scope = object.scope ?? "";
     message.domains = object.domains?.map((e) => e) || [];
+    message.replaceIn = object.replaceIn?.map((e) => e) || [];
     return message;
   },
 };
@@ -8112,7 +8146,7 @@ export const ListVarsRequest: MessageFns<ListVarsRequest> = {
 };
 
 function createBaseVarItem(): VarItem {
-  return { name: "", kind: "", scope: "", value: "", domains: [], boundMachines: 0 };
+  return { name: "", kind: "", scope: "", value: "", domains: [], boundMachines: 0, replaceIn: [] };
 }
 
 export const VarItem: MessageFns<VarItem> = {
@@ -8134,6 +8168,9 @@ export const VarItem: MessageFns<VarItem> = {
     }
     if (message.boundMachines !== 0) {
       writer.uint32(56).uint32(message.boundMachines);
+    }
+    for (const v of message.replaceIn) {
+      writer.uint32(66).string(v!);
     }
     return writer;
   },
@@ -8193,6 +8230,14 @@ export const VarItem: MessageFns<VarItem> = {
           message.boundMachines = reader.uint32();
           continue;
         }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.replaceIn.push(reader.string());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -8214,6 +8259,11 @@ export const VarItem: MessageFns<VarItem> = {
         : isSet(object.bound_machines)
         ? globalThis.Number(object.bound_machines)
         : 0,
+      replaceIn: globalThis.Array.isArray(object?.replaceIn)
+        ? object.replaceIn.map((e: any) => globalThis.String(e))
+        : globalThis.Array.isArray(object?.replace_in)
+        ? object.replace_in.map((e: any) => globalThis.String(e))
+        : [],
     };
   },
 
@@ -8237,6 +8287,9 @@ export const VarItem: MessageFns<VarItem> = {
     if (message.boundMachines !== 0) {
       obj.boundMachines = Math.round(message.boundMachines);
     }
+    if (message.replaceIn?.length) {
+      obj.replaceIn = message.replaceIn;
+    }
     return obj;
   },
 
@@ -8251,6 +8304,7 @@ export const VarItem: MessageFns<VarItem> = {
     message.value = object.value ?? "";
     message.domains = object.domains?.map((e) => e) || [];
     message.boundMachines = object.boundMachines ?? 0;
+    message.replaceIn = object.replaceIn?.map((e) => e) || [];
     return message;
   },
 };

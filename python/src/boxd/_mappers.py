@@ -854,6 +854,7 @@ def secret(msg) -> Secret:
         scope=msg.scope,
         domains=list(msg.domains),
         bound_machines=msg.bound_machines,
+        replace_in=list(msg.replace_in),
     )
 
 

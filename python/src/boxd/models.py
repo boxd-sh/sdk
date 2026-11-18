@@ -1198,6 +1198,12 @@ VarScope = Literal["all", "shared", "private", "unattached", "private-unattached
 are for secrets only: such a secret reaches only machines whose spec lists it
 in ``secrets``."""
 
+ReplacePart = Literal["url", "headers", "body"]
+"""A part of a request where a host-bound secret's placeholder may be replaced
+with its value: ``url`` (the request line), ``headers`` (every header value,
+a Basic credential included) or ``body`` (the body, and the trailers of a
+chunked one)."""
+
 
 class EnvVar(BaseModel):
     """An environment variable. Values are readable."""
@@ -1220,6 +1226,9 @@ class Secret(BaseModel):
     bound_machines: int = 0
     """How many machines list this secret in their spec. Only unattached
     secrets have any; 0 for the rest."""
+    replace_in: list[ReplacePart | str] = []
+    """Host-bound secrets only: the parts of a request where the placeholder
+    is replaced with the value. Empty = all three. See :meth:`Secrets.set`."""
 
 
 # ── Orgs ─────────────────────────────────────────────────────────────
@@ -1737,6 +1746,7 @@ __all__ = [
     "RegionCount",
     "RegionOrgState",
     "RegionalList",
+    "ReplacePart",
     "ResumeResult",
     "Secret",
     "Snapshot",

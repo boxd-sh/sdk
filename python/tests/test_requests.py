@@ -413,6 +413,23 @@ def test_set_var_domains_default_empty_and_forward():
     assert list(scoped.domains) == ["api.example.com"]
 
 
+def test_set_var_replace_in_default_empty_and_forward():
+    from boxd import _requests as req
+
+    plain = req.set_var(kind="secret", name="T", value="v", scope=None, org=None)
+    assert list(plain.replace_in) == []
+    narrowed = req.set_var(
+        kind="secret",
+        name="T",
+        value="v",
+        scope=None,
+        org=None,
+        domains=["api.example.com"],
+        replace_in=["headers"],
+    )
+    assert list(narrowed.replace_in) == ["headers"]
+
+
 def test_label_selector_from_a_dict_or_a_list():
     assert req.label_selector(None) == []
     assert req.label_selector({"env": "prod", "team": ""}) == ["env=prod", "team="]

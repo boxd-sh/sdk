@@ -1266,7 +1266,13 @@ describe("env and secrets", () => {
       { vars: [{ name: "TOKEN", kind: "secret", scope: "all", value: "" }] },
     ]);
     const [secret] = await new Secrets(asTransport(secT)).list();
-    expect(secret).toEqual({ name: "TOKEN", scope: "all", domains: [], boundMachines: 0 });
+    expect(secret).toEqual({
+      name: "TOKEN",
+      scope: "all",
+      domains: [],
+      boundMachines: 0,
+      replaceIn: [],
+    });
     expect("value" in secret!).toBe(false);
   });
 
@@ -1299,6 +1305,20 @@ describe("env and secrets", () => {
     const envT = new FakeTransport([{ message: "ok" }]);
     await new EnvVars(asTransport(envT)).set("MODE", "prod");
     expect(envT.calls[0]!.req.domains).toEqual([]);
+  });
+
+  it("secrets.set forwards replaceIn, and sends none when it is left out", async () => {
+    const t = new FakeTransport([{ message: "ok" }, { message: "ok" }]);
+    const secrets = new Secrets(asTransport(t));
+    await secrets.set("GH_TOKEN", "v", { domains: ["api.github.com"], replaceIn: ["headers"] });
+    await secrets.set("GH_TOKEN", "v", { domains: ["api.github.com"] });
+    expect(t.calls[0]!.req.replaceIn).toEqual(["headers"]);
+    // The full desired state: a set without it asks for everywhere.
+    expect(t.calls[1]!.req.replaceIn).toEqual([]);
+
+    const envT = new FakeTransport([{ message: "ok" }]);
+    await new EnvVars(asTransport(envT)).set("MODE", "prod");
+    expect(envT.calls[0]!.req.replaceIn).toEqual([]);
   });
 
   it("move requires both ends and returns the confirmation", async () => {

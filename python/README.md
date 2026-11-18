@@ -1200,7 +1200,7 @@ boxd.secrets.set("STRIPE_KEY", "sk_live_...", scope="all", domains=["api.stripe.
 
 Inside the machine, `STRIPE_KEY` is an opaque `bxds_…` string. An HTTPS
 request to `api.stripe.com` carrying it anywhere (the URL, a header, Basic auth
-included, or the body) arrives at Stripe with the real key. It is replaced only
+included, or the body; see `replace_in` below) arrives at Stripe with the real key. It is replaced only
 over HTTPS, and only when both the server name the connection was opened for
 and the request's own `Host` are hosts the secret is bound to: over plain HTTP
 and in a request to any other host it stays the useless placeholder. A body
@@ -1216,6 +1216,20 @@ placeholder does not change when the value is rotated. `domains` is the full des
 setting the secret again without it makes it a plain secret. Wildcards such as
 `*.stripe.com` are accepted; provider-wide ones such as `*.amazonaws.com` are
 refused.
+
+`replace_in` limits where in a request the placeholder is replaced: any of
+`"url"` (the request line), `"headers"` (every header value, Basic auth
+included) and `"body"` (the body and a chunked body's trailers). In the other
+parts the placeholder is sent as it is. A token that only ever goes in a
+header can then not be written into a request body the host would publish:
+
+```python
+boxd.secrets.set("GH_TOKEN", "ghp_...", domains=["api.github.com"], replace_in=["headers"])
+```
+
+Left out, it means all three, and like `domains` it is the full desired set:
+setting the secret again without it replaces the value everywhere again.
+Responses are scrubbed whatever it says.
 
 `scope` defaults to `"shared"` on `set` and `delete`; `list` takes `org` only
 and reports every scope. Pass `org="acme"` to any of these to work in an

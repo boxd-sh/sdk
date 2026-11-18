@@ -499,6 +499,7 @@ def set_var(
     scope: str | None,
     org: str | None,
     domains: Sequence[str] | None = None,
+    replace_in: Sequence[str] | None = None,
 ) -> api_pb2.SetVarRequest:
     return api_pb2.SetVarRequest(
         org=org or "",
@@ -507,6 +508,7 @@ def set_var(
         value=value,
         scope=scope or "",
         domains=list(domains or []),
+        replace_in=list(replace_in or []),
     )
 
 

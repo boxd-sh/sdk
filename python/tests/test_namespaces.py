@@ -1828,6 +1828,25 @@ async def test_async_env_and_secrets():
     assert transport.calls[1][1].kind == "secret"
 
 
+def test_secrets_set_forwards_replace_in():
+    transport = FakeTransport([api_pb2.VarReply(), api_pb2.VarReply()])
+    Secrets(transport).set(
+        "GH_TOKEN", "v", domains=["api.github.com"], replace_in=["headers"]
+    )
+    Secrets(transport).set("GH_TOKEN", "v", domains=["api.github.com"])
+    assert list(transport.calls[0][1].replace_in) == ["headers"]
+    # The full desired state: a set without it asks for everywhere.
+    assert list(transport.calls[1][1].replace_in) == []
+
+
+async def test_async_secrets_set_forwards_replace_in():
+    transport = FakeAsyncTransport([api_pb2.VarReply()])
+    await AsyncSecrets(transport).set(
+        "GH_TOKEN", "v", domains=["api.github.com"], replace_in=["url", "body"]
+    )
+    assert list(transport.calls[0][1].replace_in) == ["url", "body"]
+
+
 def test_sync_and_async_clients_expose_the_same_namespaces():
     sync = Boxd(token="t")
     async_ = AsyncBoxd(token="t")

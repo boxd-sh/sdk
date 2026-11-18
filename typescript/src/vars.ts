@@ -4,6 +4,7 @@ import {
   toEnvVar,
   toSecret,
   type EnvVar,
+  type ReplacePart,
   type Secret,
   type VarScope,
 } from "./models.js";
@@ -56,6 +57,15 @@ export interface SecretSetParams extends VarParams {
    * desired set: omit it to make (or keep) the secret a plain one.
    */
   domains?: string[];
+  /**
+   * With `domains` only: the parts of a request where the placeholder is
+   * replaced, any of `"url"`, `"headers"` and `"body"`. In the other parts the
+   * placeholder is sent as it is, so a token bound to `["headers"]` can't be
+   * written into a request body that the host would publish. Omitted or empty
+   * = all three. Like `domains` it is the full desired set: a `set` without
+   * it replaces the value everywhere again.
+   */
+  replaceIn?: ReplacePart[];
 }
 
 export interface VarMoveParams {
@@ -87,6 +97,7 @@ abstract class VarNamespace<T> {
       value,
       scope: params.scope ?? "",
       domains: this.kind === "secret" ? ((params as SecretSetParams).domains ?? []) : [],
+      replaceIn: this.kind === "secret" ? ((params as SecretSetParams).replaceIn ?? []) : [],
     };
     const resp = await this.transport.unary(BoxdApiDefinition.methods.setVar, req);
     return resp.message;
@@ -147,7 +158,9 @@ export class Secrets extends VarNamespace<Secret> {
 
   /**
    * Create or update a secret. Pass {@link SecretSetParams.domains} to bind
-   * it to hosts. Returns the server's human-readable confirmation.
+   * it to hosts, and {@link SecretSetParams.replaceIn} to limit where in a
+   * request its value is replaced. Returns the server's human-readable
+   * confirmation.
    */
   override async set(name: string, value: string, params: SecretSetParams = {}): Promise<string> {
     return super.set(name, value, params);

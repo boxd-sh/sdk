@@ -810,6 +810,14 @@ message ListExposedPortsResponse { repeated ExposePortResponse forwards = 1; }
 // requests to these hosts. The request carries the FULL desired set: setting
 // a secret without `domains` makes it a plain secret again (there is no
 // separate domains RPC). Ignored for kind="env".
+// `replace_in` (secrets with `domains` only): the parts of a request where the
+// egress proxy may replace the placeholder with the value: "url" (the request
+// line), "headers" (every header value, a Basic credential included) and
+// "body" (the body and the trailers of a chunked body). Empty = all three. In
+// the other parts the placeholder is sent as it is. Like `domains` it is the
+// FULL desired set: setting a secret without it replaces the value
+// everywhere again. Refused without `domains`, and for an unknown part.
+// Ignored for kind="env".
 message SetVarRequest {
   string org    = 1;
   string kind   = 2;
@@ -817,6 +825,7 @@ message SetVarRequest {
   string value  = 4;
   string scope  = 5;
   repeated string domains = 6;
+  repeated string replace_in = 7;
 }
 message VarReply { string message = 1; }
 message ListVarsRequest { string org = 1; string kind = 2; }
@@ -829,6 +838,9 @@ message VarItem {
   repeated string domains = 6;  // secrets only; empty = not network-scoped
   // Unattached secrets only: how many machines list it in their spec.
   uint32 bound_machines = 7;
+  // Secrets with domains only: where in a request the value is replaced
+  // ("url", "headers", "body"), as set; empty = all three.
+  repeated string replace_in = 8;
 }
 message VarListReply { repeated VarItem vars = 1; }
 message RemoveVarRequest { string org = 1; string kind = 2; string name = 3; string scope = 4; }

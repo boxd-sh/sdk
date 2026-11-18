@@ -687,7 +687,13 @@ describe("other mappers", () => {
     const item = { name: "API_URL", kind: "env", scope: "shared", value: "https://x" };
     expect(toEnvVar(item)).toEqual({ name: "API_URL", scope: "shared", value: "https://x" });
     const secret = toSecret({ name: "TOKEN", kind: "secret", scope: "private", value: "" });
-    expect(secret).toEqual({ name: "TOKEN", scope: "private", domains: [], boundMachines: 0 });
+    expect(secret).toEqual({
+      name: "TOKEN",
+      scope: "private",
+      domains: [],
+      boundMachines: 0,
+      replaceIn: [],
+    });
     expect("value" in secret).toBe(false);
     const scoped = toSecret({
       name: "TOKEN",
@@ -706,6 +712,15 @@ describe("other mappers", () => {
       boundMachines: 2,
     });
     expect([bound.scope, bound.boundMachines]).toEqual(["unattached", 2]);
+    const narrowed = toSecret({
+      name: "GH_TOKEN",
+      kind: "secret",
+      scope: "all",
+      value: "",
+      domains: ["api.github.com"],
+      replaceIn: ["headers"],
+    });
+    expect(narrowed.replaceIn).toEqual(["headers"]);
   });
 
   it("billing: empty stripe ids and pastDueSince 0 are null", () => {

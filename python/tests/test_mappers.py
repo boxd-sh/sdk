@@ -674,6 +674,22 @@ def test_secret_domains_survive_and_default_empty():
     assert scoped.domains == ["api.example.com", "*.example.org"]
 
 
+def test_secret_replace_in_survives_and_defaults_empty():
+    plain = m.secret(api_pb2.VarItem(name="TOKEN", kind="secret", scope="all"))
+    assert plain.replace_in == []
+    narrowed = m.secret(
+        api_pb2.VarItem(
+            name="TOKEN",
+            kind="secret",
+            scope="all",
+            domains=["api.example.com"],
+            replace_in=["url", "headers"],
+        )
+    )
+    assert narrowed.replace_in == ["url", "headers"]
+    assert Secret(name="TOKEN", scope="all", domains=[]).replace_in == []
+
+
 def test_secret_bound_machines_defaults_to_zero_on_the_model():
     assert Secret(name="TOKEN", scope="all", domains=[]).bound_machines == 0
 

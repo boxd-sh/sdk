@@ -15,7 +15,7 @@ from collections.abc import Sequence
 
 from .. import _mappers as m
 from .. import _requests as req
-from ..models import EnvVar, Secret, VarScope
+from ..models import EnvVar, ReplacePart, Secret, VarScope
 from . import Namespace
 
 _ENV = "env"
@@ -109,6 +109,7 @@ class Secrets(_VarsBase):
         scope: VarScope | None = None,
         org: str | None = None,
         domains: Sequence[str] | None = None,
+        replace_in: Sequence[ReplacePart] | None = None,
     ) -> str:
         """Create or update a secret. Returns the server's human-readable
         confirmation.
@@ -123,6 +124,14 @@ class Secrets(_VarsBase):
         placeholder is stable across value rotations. ``domains`` is the
         full desired set: omit it to make (or keep) the secret a plain one
         that injects its real value.
+
+        ``replace_in`` (with ``domains`` only) limits where in a request the
+        placeholder is replaced: any of ``"url"``, ``"headers"`` and
+        ``"body"``. In the other parts the placeholder is sent as it is, so a
+        token bound to ``["headers"]`` can't be written into a request body
+        that the host would publish. Omitted or empty = all three. Like
+        ``domains`` it is the full desired set: a ``set`` without it replaces
+        the value everywhere again.
         """
         return self._transport.call(
             "SetVar",
@@ -133,6 +142,7 @@ class Secrets(_VarsBase):
                 scope=scope,
                 org=org,
                 domains=domains,
+                replace_in=replace_in,
             ),
         ).message
 
@@ -233,9 +243,10 @@ class AsyncSecrets(_VarsBase):
         scope: VarScope | None = None,
         org: str | None = None,
         domains: Sequence[str] | None = None,
+        replace_in: Sequence[ReplacePart] | None = None,
     ) -> str:
         """Create or update a secret. See :meth:`Secrets.set` for
-        ``domains``."""
+        ``domains`` and ``replace_in``."""
         resp = await self._transport.call(
             "SetVar",
             req.set_var(
@@ -245,6 +256,7 @@ class AsyncSecrets(_VarsBase):
                 scope=scope,
                 org=org,
                 domains=domains,
+                replace_in=replace_in,
             ),
         )
         return resp.message

@@ -258,6 +258,7 @@ export type {
   RegionalList,
   RegionCount,
   RegionOrgState,
+  ReplacePart,
   ResizeResult,
   SelfDeleteResult,
   Secret,

@@ -1336,6 +1336,14 @@ export function toCreatedDisk(d: CreateDiskResponse): CreatedDisk {
  */
 export type VarScope = "all" | "shared" | "private" | "unattached" | "private-unattached";
 
+/**
+ * A part of a request where a host-bound secret's placeholder may be replaced
+ * with its value: `url` (the request line), `headers` (every header value, a
+ * Basic credential included) or `body` (the body, and the trailers of a
+ * chunked one).
+ */
+export type ReplacePart = "url" | "headers" | "body";
+
 export interface EnvVar {
   name: string;
   scope: VarScope;
@@ -1361,6 +1369,12 @@ export interface Secret {
    * secrets have any; 0 for the rest.
    */
   boundMachines: number;
+  /**
+   * Host-bound secrets only: the parts of a request where the placeholder is
+   * replaced with the value. Empty = all three. See
+   * {@link SecretSetParams.replaceIn}.
+   */
+  replaceIn: ReplacePart[];
 }
 
 export function toEnvVar(v: VarItem): EnvVar {
@@ -1373,6 +1387,7 @@ export function toSecret(v: VarItem): Secret {
     scope: v.scope as VarScope,
     domains: v.domains ?? [],
     boundMachines: v.boundMachines ?? 0,
+    replaceIn: (v.replaceIn ?? []) as ReplacePart[],
   };
 }
 
