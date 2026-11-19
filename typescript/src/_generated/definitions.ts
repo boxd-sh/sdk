@@ -2788,12 +2788,21 @@ export interface ListAgentRunsResponse {
 
 export interface StartAgentLoginRequest {
   /**
-   * The machine you'll run the agent in (name or id): yours, private, not
-   * isolated. The login is kept in its organization.
+   * Instead of `org`, a machine of yours (name or id): the sign-in is kept in
+   * its organization, and refused when that machine would never get it
+   * (shared, isolated, another member's).
    */
   vmId: string;
-  /** `claude-code` or `codex` */
+  /**
+   * `claude` (also `claude-code`, the agent's id in agent sessions) or
+   * `codex`.
+   */
   harness: string;
+  /**
+   * The organization to keep the sign-in in (name or id). Empty, with no
+   * `vm_id`: your default organization, or the one your API key is for.
+   */
+  org: string;
 }
 
 export interface StartAgentLoginResponse {
@@ -2818,6 +2827,8 @@ export interface CompleteAgentLoginRequest {
   code: string;
   /** DEVICE_CODE: StartAgentLogin's `handle` */
   handle: string;
+  /** as in StartAgentLogin */
+  org: string;
 }
 
 export interface CompleteAgentLoginResponse {
@@ -2827,14 +2838,21 @@ export interface CompleteAgentLoginResponse {
   login?: AgentLogin | undefined;
 }
 
+/**
+ * The fields as in StartAgentLogin. With `vm_id`, the answer is about the
+ * sign-in that machine gets, or why it gets none.
+ */
 export interface GetAgentLoginRequest {
   vmId: string;
   harness: string;
+  org: string;
 }
 
+/** The fields as in StartAgentLogin. */
 export interface DeleteAgentLoginRequest {
   vmId: string;
   harness: string;
+  org: string;
 }
 
 export interface DeleteAgentLoginResponse {
@@ -23623,7 +23641,7 @@ export const ListAgentRunsResponse: MessageFns<ListAgentRunsResponse> = {
 };
 
 function createBaseStartAgentLoginRequest(): StartAgentLoginRequest {
-  return { vmId: "", harness: "" };
+  return { vmId: "", harness: "", org: "" };
 }
 
 export const StartAgentLoginRequest: MessageFns<StartAgentLoginRequest> = {
@@ -23633,6 +23651,9 @@ export const StartAgentLoginRequest: MessageFns<StartAgentLoginRequest> = {
     }
     if (message.harness !== "") {
       writer.uint32(18).string(message.harness);
+    }
+    if (message.org !== "") {
+      writer.uint32(26).string(message.org);
     }
     return writer;
   },
@@ -23660,6 +23681,14 @@ export const StartAgentLoginRequest: MessageFns<StartAgentLoginRequest> = {
           message.harness = reader.string();
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.org = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -23677,6 +23706,7 @@ export const StartAgentLoginRequest: MessageFns<StartAgentLoginRequest> = {
         ? globalThis.String(object.vm_id)
         : "",
       harness: isSet(object.harness) ? globalThis.String(object.harness) : "",
+      org: isSet(object.org) ? globalThis.String(object.org) : "",
     };
   },
 
@@ -23688,6 +23718,9 @@ export const StartAgentLoginRequest: MessageFns<StartAgentLoginRequest> = {
     if (message.harness !== "") {
       obj.harness = message.harness;
     }
+    if (message.org !== "") {
+      obj.org = message.org;
+    }
     return obj;
   },
 
@@ -23698,6 +23731,7 @@ export const StartAgentLoginRequest: MessageFns<StartAgentLoginRequest> = {
     const message = createBaseStartAgentLoginRequest();
     message.vmId = object.vmId ?? "";
     message.harness = object.harness ?? "";
+    message.org = object.org ?? "";
     return message;
   },
 };
@@ -23855,7 +23889,7 @@ export const StartAgentLoginResponse: MessageFns<StartAgentLoginResponse> = {
 };
 
 function createBaseCompleteAgentLoginRequest(): CompleteAgentLoginRequest {
-  return { vmId: "", harness: "", code: "", handle: "" };
+  return { vmId: "", harness: "", code: "", handle: "", org: "" };
 }
 
 export const CompleteAgentLoginRequest: MessageFns<CompleteAgentLoginRequest> = {
@@ -23871,6 +23905,9 @@ export const CompleteAgentLoginRequest: MessageFns<CompleteAgentLoginRequest> = 
     }
     if (message.handle !== "") {
       writer.uint32(34).string(message.handle);
+    }
+    if (message.org !== "") {
+      writer.uint32(42).string(message.org);
     }
     return writer;
   },
@@ -23914,6 +23951,14 @@ export const CompleteAgentLoginRequest: MessageFns<CompleteAgentLoginRequest> = 
           message.handle = reader.string();
           continue;
         }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.org = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -23933,6 +23978,7 @@ export const CompleteAgentLoginRequest: MessageFns<CompleteAgentLoginRequest> = 
       harness: isSet(object.harness) ? globalThis.String(object.harness) : "",
       code: isSet(object.code) ? globalThis.String(object.code) : "",
       handle: isSet(object.handle) ? globalThis.String(object.handle) : "",
+      org: isSet(object.org) ? globalThis.String(object.org) : "",
     };
   },
 
@@ -23950,6 +23996,9 @@ export const CompleteAgentLoginRequest: MessageFns<CompleteAgentLoginRequest> = 
     if (message.handle !== "") {
       obj.handle = message.handle;
     }
+    if (message.org !== "") {
+      obj.org = message.org;
+    }
     return obj;
   },
 
@@ -23962,6 +24011,7 @@ export const CompleteAgentLoginRequest: MessageFns<CompleteAgentLoginRequest> = 
     message.harness = object.harness ?? "";
     message.code = object.code ?? "";
     message.handle = object.handle ?? "";
+    message.org = object.org ?? "";
     return message;
   },
 };
@@ -24045,7 +24095,7 @@ export const CompleteAgentLoginResponse: MessageFns<CompleteAgentLoginResponse> 
 };
 
 function createBaseGetAgentLoginRequest(): GetAgentLoginRequest {
-  return { vmId: "", harness: "" };
+  return { vmId: "", harness: "", org: "" };
 }
 
 export const GetAgentLoginRequest: MessageFns<GetAgentLoginRequest> = {
@@ -24055,6 +24105,9 @@ export const GetAgentLoginRequest: MessageFns<GetAgentLoginRequest> = {
     }
     if (message.harness !== "") {
       writer.uint32(18).string(message.harness);
+    }
+    if (message.org !== "") {
+      writer.uint32(26).string(message.org);
     }
     return writer;
   },
@@ -24082,6 +24135,14 @@ export const GetAgentLoginRequest: MessageFns<GetAgentLoginRequest> = {
           message.harness = reader.string();
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.org = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -24099,6 +24160,7 @@ export const GetAgentLoginRequest: MessageFns<GetAgentLoginRequest> = {
         ? globalThis.String(object.vm_id)
         : "",
       harness: isSet(object.harness) ? globalThis.String(object.harness) : "",
+      org: isSet(object.org) ? globalThis.String(object.org) : "",
     };
   },
 
@@ -24110,6 +24172,9 @@ export const GetAgentLoginRequest: MessageFns<GetAgentLoginRequest> = {
     if (message.harness !== "") {
       obj.harness = message.harness;
     }
+    if (message.org !== "") {
+      obj.org = message.org;
+    }
     return obj;
   },
 
@@ -24120,12 +24185,13 @@ export const GetAgentLoginRequest: MessageFns<GetAgentLoginRequest> = {
     const message = createBaseGetAgentLoginRequest();
     message.vmId = object.vmId ?? "";
     message.harness = object.harness ?? "";
+    message.org = object.org ?? "";
     return message;
   },
 };
 
 function createBaseDeleteAgentLoginRequest(): DeleteAgentLoginRequest {
-  return { vmId: "", harness: "" };
+  return { vmId: "", harness: "", org: "" };
 }
 
 export const DeleteAgentLoginRequest: MessageFns<DeleteAgentLoginRequest> = {
@@ -24135,6 +24201,9 @@ export const DeleteAgentLoginRequest: MessageFns<DeleteAgentLoginRequest> = {
     }
     if (message.harness !== "") {
       writer.uint32(18).string(message.harness);
+    }
+    if (message.org !== "") {
+      writer.uint32(26).string(message.org);
     }
     return writer;
   },
@@ -24162,6 +24231,14 @@ export const DeleteAgentLoginRequest: MessageFns<DeleteAgentLoginRequest> = {
           message.harness = reader.string();
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.org = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -24179,6 +24256,7 @@ export const DeleteAgentLoginRequest: MessageFns<DeleteAgentLoginRequest> = {
         ? globalThis.String(object.vm_id)
         : "",
       harness: isSet(object.harness) ? globalThis.String(object.harness) : "",
+      org: isSet(object.org) ? globalThis.String(object.org) : "",
     };
   },
 
@@ -24190,6 +24268,9 @@ export const DeleteAgentLoginRequest: MessageFns<DeleteAgentLoginRequest> = {
     if (message.harness !== "") {
       obj.harness = message.harness;
     }
+    if (message.org !== "") {
+      obj.org = message.org;
+    }
     return obj;
   },
 
@@ -24200,6 +24281,7 @@ export const DeleteAgentLoginRequest: MessageFns<DeleteAgentLoginRequest> = {
     const message = createBaseDeleteAgentLoginRequest();
     message.vmId = object.vmId ?? "";
     message.harness = object.harness ?? "";
+    message.org = object.org ?? "";
     return message;
   },
 };
@@ -40600,14 +40682,15 @@ export const BoxdApiDefinition = {
       options: {},
     },
     /**
-     * Sign a coding agent in (Claude Code or Codex) for a machine of yours:
-     * the platform's own sign-in, the same as the console's Integrations page.
-     * The login is kept for you in the machine's organization, refreshed by
+     * Sign a coding agent in (Claude Code or Codex): the platform's own
+     * sign-in, the same as Integrations in the console. A sign-in is yours,
+     * kept in one organization (`org`, else your default one), refreshed by
      * the platform, and given to every private machine of yours there; your
      * agent sessions use it. A shared or isolated machine never gets it (give
      * it an API key as a secret instead). Start returns where to go; Complete
      * takes the code Claude shows you, or says whether you've approved Codex's
-     * device code yet.
+     * device code yet. An organization API key can't sign in: a sign-in
+     * belongs to a person.
      */
     startAgentLogin: {
       name: "StartAgentLogin",
@@ -40625,7 +40708,7 @@ export const BoxdApiDefinition = {
       responseStream: false,
       options: {},
     },
-    /** Whether you're signed in to an agent for that machine, and as whom. */
+    /** Whether you're signed in to an agent in an organization, and as whom. */
     getAgentLogin: {
       name: "GetAgentLogin",
       requestType: GetAgentLoginRequest as typeof GetAgentLoginRequest,
@@ -40635,7 +40718,7 @@ export const BoxdApiDefinition = {
       options: {},
     },
     /**
-     * Forget that login. It isn't revoked at Anthropic or OpenAI; do that from
+     * Forget a sign-in. It isn't revoked at Anthropic or OpenAI; do that from
      * your account there.
      */
     deleteAgentLogin: {

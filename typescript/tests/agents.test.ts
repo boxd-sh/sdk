@@ -674,7 +674,7 @@ describe("machines.agents logins", () => {
     expect(t.calls).toEqual([
       {
         method: "StartAgentLogin",
-        req: { vmId: "box", harness: "claude-code" },
+        req: { vmId: "box", harness: "claude-code", org: "" },
         opts: { region: undefined },
       },
     ]);
@@ -687,7 +687,7 @@ describe("machines.agents logins", () => {
   it("startLogin for Codex: the device code, its handle, expiry and interval", async () => {
     const t = new FakeTransport([aDeviceStart()]);
     const start = await agents(t).startLogin("box", "codex", { region: "nyc" });
-    expect(t.calls[0]!.req).toEqual({ vmId: "box", harness: "codex" });
+    expect(t.calls[0]!.req).toEqual({ vmId: "box", harness: "codex", org: "" });
     expect(t.calls[0]!.opts).toEqual({ region: "nyc" });
     expect(start).toEqual({
       method: "device_code",
@@ -707,7 +707,7 @@ describe("machines.agents logins", () => {
     expect(t.calls).toEqual([
       {
         method: "CompleteAgentLogin",
-        req: { vmId: "box", harness: "claude-code", code: "abc#state", handle: "" },
+        req: { vmId: "box", harness: "claude-code", org: "", code: "abc#state", handle: "" },
         opts: { region: undefined },
       },
     ]);
@@ -726,7 +726,7 @@ describe("machines.agents logins", () => {
   it("completeLogin sends the handle; pending has no login", async () => {
     const t = new FakeTransport([{ pending: true }]);
     const result = await agents(t).completeLogin("box", "codex", { handle: "h-1", region: "lon" });
-    expect(t.calls[0]!.req).toEqual({ vmId: "box", harness: "codex", code: "", handle: "h-1" });
+    expect(t.calls[0]!.req).toEqual({ vmId: "box", harness: "codex", org: "", code: "", handle: "h-1" });
     expect(t.calls[0]!.opts).toEqual({ region: "lon" });
     expect(result).toEqual({ pending: true });
     expect("login" in result).toBe(false);
@@ -749,8 +749,8 @@ describe("machines.agents logins", () => {
     expect(signedOut).toEqual({ harness: "codex", signedIn: false, orgId: "org-1" });
     expect("updatedAt" in signedOut).toBe(false);
     expect(t.calls.map((c) => [c.method, c.req, c.opts])).toEqual([
-      ["GetAgentLogin", { vmId: "box", harness: "codex" }, { region: undefined }],
-      ["GetAgentLogin", { vmId: "box", harness: "codex" }, { region: "nyc" }],
+      ["GetAgentLogin", { vmId: "box", harness: "codex", org: "" }, { region: undefined }],
+      ["GetAgentLogin", { vmId: "box", harness: "codex", org: "" }, { region: "nyc" }],
     ]);
   });
 
@@ -760,7 +760,7 @@ describe("machines.agents logins", () => {
     expect(t.calls).toEqual([
       {
         method: "DeleteAgentLogin",
-        req: { vmId: "box", harness: "claude-code" },
+        req: { vmId: "box", harness: "claude-code", org: "" },
         opts: { region: undefined },
       },
     ]);
@@ -779,7 +779,7 @@ describe("machines.agents logins", () => {
     expect(t.calls.map((c) => [c.method, c.req, c.opts])).toEqual(
       Array.from({ length: 3 }, () => [
         "CompleteAgentLogin",
-        { vmId: "box", harness: "codex", code: "", handle: "h-1" },
+        { vmId: "box", harness: "codex", org: "", code: "", handle: "h-1" },
         { region: "nyc" },
       ]),
     );

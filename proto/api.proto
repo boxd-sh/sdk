@@ -103,19 +103,20 @@ service BoxdApi {
   // days, also after it's deleted. No prompts or output, only how each turn
   // went (AgentEvents has the transcript, from the machine itself).
   rpc ListAgentRuns(ListAgentRunsRequest)          returns (ListAgentRunsResponse);
-  // Sign a coding agent in (Claude Code or Codex) for a machine of yours:
-  // the platform's own sign-in, the same as the console's Integrations page.
-  // The login is kept for you in the machine's organization, refreshed by
+  // Sign a coding agent in (Claude Code or Codex): the platform's own
+  // sign-in, the same as Integrations in the console. A sign-in is yours,
+  // kept in one organization (`org`, else your default one), refreshed by
   // the platform, and given to every private machine of yours there; your
   // agent sessions use it. A shared or isolated machine never gets it (give
   // it an API key as a secret instead). Start returns where to go; Complete
   // takes the code Claude shows you, or says whether you've approved Codex's
-  // device code yet.
+  // device code yet. An organization API key can't sign in: a sign-in
+  // belongs to a person.
   rpc StartAgentLogin(StartAgentLoginRequest)      returns (StartAgentLoginResponse);
   rpc CompleteAgentLogin(CompleteAgentLoginRequest) returns (CompleteAgentLoginResponse);
-  // Whether you're signed in to an agent for that machine, and as whom.
+  // Whether you're signed in to an agent in an organization, and as whom.
   rpc GetAgentLogin(GetAgentLoginRequest)          returns (AgentLogin);
-  // Forget that login. It isn't revoked at Anthropic or OpenAI; do that from
+  // Forget a sign-in. It isn't revoked at Anthropic or OpenAI; do that from
   // your account there.
   rpc DeleteAgentLogin(DeleteAgentLoginRequest)    returns (DeleteAgentLoginResponse);
   rpc CreateNetwork(CreateNetworkRequest)   returns (CreateNetworkResponse);
@@ -2268,10 +2269,16 @@ message ListAgentRunsResponse {
 }
 
 message StartAgentLoginRequest {
-  // The machine you'll run the agent in (name or id): yours, private, not
-  // isolated. The login is kept in its organization.
+  // Instead of `org`, a machine of yours (name or id): the sign-in is kept in
+  // its organization, and refused when that machine would never get it
+  // (shared, isolated, another member's).
   string vm_id   = 1;
-  string harness = 2;  // `claude-code` or `codex`
+  // `claude` (also `claude-code`, the agent's id in agent sessions) or
+  // `codex`.
+  string harness = 2;
+  // The organization to keep the sign-in in (name or id). Empty, with no
+  // `vm_id`: your default organization, or the one your API key is for.
+  string org     = 3;
 }
 
 enum AgentLoginMethod {
@@ -2298,6 +2305,7 @@ message CompleteAgentLoginRequest {
   string harness = 2;
   string code    = 3;  // PASTE_CODE: the code the page showed after you approved
   string handle  = 4;  // DEVICE_CODE: StartAgentLogin's `handle`
+  string org     = 5;  // as in StartAgentLogin
 }
 
 message CompleteAgentLoginResponse {
@@ -2306,14 +2314,19 @@ message CompleteAgentLoginResponse {
   AgentLogin login   = 2;  // once signed in
 }
 
+// The fields as in StartAgentLogin. With `vm_id`, the answer is about the
+// sign-in that machine gets, or why it gets none.
 message GetAgentLoginRequest {
   string vm_id   = 1;
   string harness = 2;
+  string org     = 3;
 }
 
+// The fields as in StartAgentLogin.
 message DeleteAgentLoginRequest {
   string vm_id   = 1;
   string harness = 2;
+  string org     = 3;
 }
 
 message DeleteAgentLoginResponse {}

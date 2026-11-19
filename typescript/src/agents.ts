@@ -1266,7 +1266,7 @@ export class MachineAgents {
   ): Promise<AgentLoginStart> {
     const resp = await this.transport.unary(
       BoxdApiDefinition.methods.startAgentLogin,
-      { vmId: machine, harness },
+      { vmId: machine, harness, org: "" },
       { region: opts.region },
     );
     return toAgentLoginStart(resp);
@@ -1290,7 +1290,13 @@ export class MachineAgents {
   ): Promise<AgentLoginResult> {
     const resp = await this.transport.unary(
       BoxdApiDefinition.methods.completeAgentLogin,
-      { vmId: machine, harness, code: params.code ?? "", handle: params.handle ?? "" },
+      {
+        vmId: machine,
+        harness,
+        org: "",
+        code: params.code ?? "",
+        handle: params.handle ?? "",
+      },
       { region: params.region },
     );
     return toAgentLoginResult(resp);
@@ -1353,7 +1359,7 @@ export class MachineAgents {
   async getLogin(machine: string, harness: string, opts: RegionOption = {}): Promise<AgentLogin> {
     const resp = await this.transport.unary(
       BoxdApiDefinition.methods.getAgentLogin,
-      { vmId: machine, harness },
+      { vmId: machine, harness, org: "" },
       { region: opts.region },
     );
     return toAgentLogin(resp);
@@ -1364,7 +1370,7 @@ export class MachineAgents {
   async logout(machine: string, harness: string, opts: RegionOption = {}): Promise<void> {
     await this.transport.unary(
       BoxdApiDefinition.methods.deleteAgentLogin,
-      { vmId: machine, harness },
+      { vmId: machine, harness, org: "" },
       { region: opts.region },
     );
   }
