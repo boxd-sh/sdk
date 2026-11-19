@@ -1574,6 +1574,25 @@ keys[0].expiresAt;    // Date | null — null = no expiry
 keys[0].org; keys[0].kind;   // "member" | "org"
 await boxd.apiKeys.delete(key.id);
 
+// A token that acts on a few machines only, for code you don't fully trust
+// (an eval worker, an agent). It can run commands, move files, drive the
+// machines' lifecycle and change their settings. It can't delete them,
+// create or fork machines, change networks, egress or secrets, or reach
+// anything else. Minted with an API key, it never outlives that key. A
+// command or file transfer still running when it expires is ended.
+// The API enforces this. A command the token runs inside a machine has what
+// any process in that machine has: on a machine that is not isolated, that
+// includes the machine's own boxd access, which reaches the rest of the org.
+// For code you don't trust, use isolated machines (`isolated: true` on
+// `machines.create`).
+const t = await boxd.machineTokens.create({
+  machines: ["eval-1"],
+  expiresIn: 3600,   // seconds; omit or 0 for 1 hour, at most 24 hours
+});
+t.token;         // "bxdm_…", shown once
+t.expiresAt; t.machineIds;
+const worker = new Boxd({ token: t.token });   // or BOXD_TOKEN
+
 const me = await boxd.account.get();
 me.userId;
 me.displayName;          // string | null — falls back to `userId`

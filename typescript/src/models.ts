@@ -18,6 +18,7 @@ import type {
   CheckpointInfo,
   BillingActivityEntry as WireBillingActivityEntry,
   CreateApiKeyResponse,
+  CreateMachineTokenResponse,
   CreateCheckpointResponse,
   CreateDiskResponse,
   CreateOrgResponse,
@@ -1949,6 +1950,26 @@ export interface CreatedApiKey {
 
 export function toCreatedApiKey(r: CreateApiKeyResponse): CreatedApiKey {
   return { id: r.id, apiKey: r.apiKey, expiresAt: optionalSecondsToDate(r.expiresAt) };
+}
+
+/** A token that acts on a few machines only (`boxd.machineTokens.create`). */
+export interface MachineToken {
+  /** The token (`bxdm_…`), shown once. Pass it as `new Boxd({ token })` or `BOXD_TOKEN`. */
+  token: string;
+  /** The token's id. */
+  id: string;
+  expiresAt: Date;
+  /** The machines it acts on, by id, in the order asked. */
+  machineIds: string[];
+}
+
+export function toMachineToken(r: CreateMachineTokenResponse): MachineToken {
+  return {
+    token: r.token,
+    id: r.jti,
+    expiresAt: secondsToDate(r.expiresAt),
+    machineIds: r.machineIds ?? [],
+  };
 }
 
 // ─── Billing ─────────────────────────────────────────────────────────────

@@ -29,6 +29,7 @@ import {
   Disks,
   Domains,
   EnvVars,
+  MachineTokens,
   Machines,
   Orgs,
   Secrets,
@@ -1732,6 +1733,31 @@ describe("apiKeys", () => {
     await keys.delete("k1");
     expect(t.calls.map((c) => c.method)).toEqual(["ListApiKeys", "DeleteApiKey"]);
     expect(t.calls[1]!.req.id).toBe("k1");
+  });
+});
+
+describe("machineTokens", () => {
+  it("create names the machines and maps the token", async () => {
+    const t = new FakeTransport([
+      { token: "bxdm_abc", expiresAt: 1_800_000_000, jti: "j-1", machineIds: ["vm-1", "vm-2"] },
+    ]);
+    const token = await new MachineTokens(asTransport(t)).create({
+      machines: ["alpha", "vm-2"],
+      expiresIn: 600,
+    });
+    expect(t.calls[0]!.method).toBe("CreateMachineToken");
+    expect(t.calls[0]!.req).toEqual({ machines: ["alpha", "vm-2"], expiresInSecs: 600 });
+    expect(token.token).toBe("bxdm_abc");
+    expect(token.id).toBe("j-1");
+    expect(token.machineIds).toEqual(["vm-1", "vm-2"]);
+    expect(token.expiresAt).toEqual(new Date(1_800_000_000 * 1000));
+  });
+
+  it("create defaults to the server's lifetime", async () => {
+    const t = new FakeTransport([{ token: "bxdm_x", expiresAt: 1, jti: "j" }]);
+    const token = await new MachineTokens(asTransport(t)).create({ machines: ["alpha"] });
+    expect(t.calls[0]!.req.expiresInSecs).toBe(0);
+    expect(token.machineIds).toEqual([]);
   });
 });
 

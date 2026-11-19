@@ -118,6 +118,7 @@ describe("generated stubs are current", () => {
       "createToken",
       "listTokens",
       "revokeToken",
+      "createMachineToken",
       "getBilling",
       "createCheckoutSession",
       "createBillingPortalSession",

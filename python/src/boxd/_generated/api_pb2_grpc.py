@@ -274,6 +274,11 @@ class BoxdApiStub(object):
                 request_serializer=api__pb2.RevokeTokenRequest.SerializeToString,
                 response_deserializer=api__pb2.RevokeTokenResponse.FromString,
                 _registered_method=True)
+        self.CreateMachineToken = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/CreateMachineToken',
+                request_serializer=api__pb2.CreateMachineTokenRequest.SerializeToString,
+                response_deserializer=api__pb2.CreateMachineTokenResponse.FromString,
+                _registered_method=True)
         self.LinkSshKey = channel.unary_unary(
                 '/boxd.api.v1.BoxdApi/LinkSshKey',
                 request_serializer=api__pb2.LinkSshKeyRequest.SerializeToString,
@@ -1177,6 +1182,23 @@ class BoxdApiServicer(object):
 
     def RevokeToken(self, request, context):
         """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CreateMachineToken(self, request, context):
+        """A short-lived token that acts on the named machines only: run commands,
+        move files, drive their lifecycle and settings, everything but delete
+        them. It cannot create, fork or delete machines, change networks, egress
+        or secrets, or reach any other machine or account setting. Minted with an
+        interactive login or an API key (never from inside a machine); a token
+        minted with an API key stops working when that key is deleted, and a
+        stream it opened ends when it expires. The API enforces this. A command
+        the token runs inside a machine has what any process in that machine
+        has: on a machine that is not isolated, that includes the machine's own
+        boxd access, which reaches the rest of the org. For code you don't
+        trust, use isolated machines.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -2231,6 +2253,11 @@ def add_BoxdApiServicer_to_server(servicer, server):
                     servicer.RevokeToken,
                     request_deserializer=api__pb2.RevokeTokenRequest.FromString,
                     response_serializer=api__pb2.RevokeTokenResponse.SerializeToString,
+            ),
+            'CreateMachineToken': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreateMachineToken,
+                    request_deserializer=api__pb2.CreateMachineTokenRequest.FromString,
+                    response_serializer=api__pb2.CreateMachineTokenResponse.SerializeToString,
             ),
             'LinkSshKey': grpc.unary_unary_rpc_method_handler(
                     servicer.LinkSshKey,
@@ -4049,6 +4076,33 @@ class BoxdApi(object):
             '/boxd.api.v1.BoxdApi/RevokeToken',
             api__pb2.RevokeTokenRequest.SerializeToString,
             api__pb2.RevokeTokenResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CreateMachineToken(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/CreateMachineToken',
+            api__pb2.CreateMachineTokenRequest.SerializeToString,
+            api__pb2.CreateMachineTokenResponse.FromString,
             options,
             channel_credentials,
             insecure,

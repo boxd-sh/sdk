@@ -10,6 +10,7 @@ import type { Transport } from "./_rpc.js";
 import { deriveExchangeUrl, rawKeyAllowed, readEnv } from "./utils.js";
 import { AccountNamespace } from "./account.js";
 import { ApiKeys } from "./apiKeys.js";
+import { MachineTokens } from "./machineTokens.js";
 import { Disks } from "./disks.js";
 import { Domains } from "./domains.js";
 import { Machines } from "./machines.js";
@@ -135,6 +136,8 @@ export class BoxdCore {
   readonly orgs: Orgs;
   readonly teams: Teams;
   readonly apiKeys: ApiKeys;
+  /** Short-lived tokens that act on a few machines only. */
+  readonly machineTokens: MachineTokens;
   readonly account: AccountNamespace;
   /** The regions boxd runs in, and which ones your org can use. */
   readonly regions: Regions;
@@ -163,6 +166,7 @@ export class BoxdCore {
     this.orgs = new Orgs(transport);
     this.teams = new Teams(transport);
     this.apiKeys = new ApiKeys(transport);
+    this.machineTokens = new MachineTokens(transport);
     this.account = new AccountNamespace(transport);
     this.regions = new Regions(transport);
   }

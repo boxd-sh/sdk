@@ -12,7 +12,12 @@ from ._regions import AsyncRouter, SyncRouter
 from ._transport import AsyncTransport, SyncTransport
 from ._urls import DEFAULT_BASE_URL, exchange_url_for, resolve_base_url
 from .resources.account import Account, AsyncAccount
-from .resources.credentials import ApiKeys, AsyncApiKeys
+from .resources.credentials import (
+    ApiKeys,
+    AsyncApiKeys,
+    AsyncMachineTokens,
+    MachineTokens,
+)
 from .resources.disks import AsyncDisks, Disks
 from .resources.domains import AsyncDomains, Domains
 from .resources.machines import AsyncMachines, Machines
@@ -95,6 +100,7 @@ class Boxd:
         self.orgs = Orgs(self._transport)
         self.teams = Teams(self._transport)
         self.api_keys = ApiKeys(self._transport)
+        self.machine_tokens = MachineTokens(self._transport)
         self.account = Account(self._transport)
         self.regions = Regions(self._transport)
 
@@ -169,6 +175,7 @@ class AsyncBoxd:
         self.orgs = AsyncOrgs(self._transport)
         self.teams = AsyncTeams(self._transport)
         self.api_keys = AsyncApiKeys(self._transport)
+        self.machine_tokens = AsyncMachineTokens(self._transport)
         self.account = AsyncAccount(self._transport)
         self.regions = AsyncRegions(self._transport)
 

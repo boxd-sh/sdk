@@ -1,14 +1,12 @@
-"""`boxd.api_keys` and `boxd.tokens` — long-lived keys and scoped JWTs.
-
-Two parallel credential systems live side by side in the same proto. Both are
-exposed for now; whether `tokens` is legacy is unresolved.
+"""`boxd.api_keys` and `boxd.machine_tokens` — long-lived keys, and short-lived
+tokens that act on a few machines only.
 """
 
 from __future__ import annotations
 
 from .. import _mappers as m
 from .._generated import api_pb2
-from ..models import ApiKey, CreatedApiKey
+from ..models import ApiKey, CreatedApiKey, MachineToken
 from . import Namespace
 
 
@@ -103,3 +101,58 @@ class AsyncApiKeys(Namespace):
         )
 
 
+_MACHINE_TOKEN_DOC = """Mint a token that acts on `machines` (names or ids) only.
+
+        Hand it to code you don't fully trust, such as an eval worker or an
+        agent: ``Boxd(token=t.token)`` can run commands, move files, drive the
+        machines' lifecycle and change their settings, and nothing else. It
+        cannot delete them, create or fork machines, change networks, egress
+        or secrets, see other machines, or manage the account.
+
+        The API enforces this. A command the token runs inside a machine has
+        what any process in that machine has: on a machine that is not
+        isolated, that includes the machine's own boxd access, which reaches
+        the rest of the org. For code you don't trust, use isolated machines
+        (``machines.create(..., isolated=True)``).
+
+        The token is pinned to the machines' ids, so a rename keeps it.
+        `expires_in` is in seconds: 0 = 1 hour, at most 24 hours. Minted with
+        an API key, it never outlives that key, and deleting the key ends
+        every token minted with it. A command or file transfer still running
+        when the token expires is ended. Mint it in the machines' region (the
+        client's `region=`).
+        """
+
+
+class MachineTokens(Namespace):
+    """Short-lived `bxdm_` tokens fenced to a few machines."""
+
+    def create(self, machines: list[str], *, expires_in: int = 0) -> MachineToken:
+        return m.machine_token(
+            self._transport.call(
+                "CreateMachineToken",
+                api_pb2.CreateMachineTokenRequest(
+                    machines=list(machines), expires_in_secs=expires_in
+                ),
+            )
+        )
+
+    create.__doc__ = _MACHINE_TOKEN_DOC
+
+
+class AsyncMachineTokens(Namespace):
+    """Async twin of :class:`MachineTokens`."""
+
+    async def create(
+        self, machines: list[str], *, expires_in: int = 0
+    ) -> MachineToken:
+        return m.machine_token(
+            await self._transport.call(
+                "CreateMachineToken",
+                api_pb2.CreateMachineTokenRequest(
+                    machines=list(machines), expires_in_secs=expires_in
+                ),
+            )
+        )
+
+    create.__doc__ = _MACHINE_TOKEN_DOC

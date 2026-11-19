@@ -35,6 +35,7 @@ describe("Boxd construction", () => {
       "secrets",
       "orgs",
       "apiKeys",
+      "machineTokens",
       "account",
     ] as const) {
       expect(boxd[ns]).toBeDefined();

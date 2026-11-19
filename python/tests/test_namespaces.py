@@ -1603,6 +1603,42 @@ def test_api_keys_create_returns_the_raw_key_once():
 
 
 
+def test_machine_tokens_create_names_the_machines_and_maps_the_token():
+    from boxd.resources.credentials import MachineTokens
+
+    transport = FakeTransport(
+        [
+            api_pb2.CreateMachineTokenResponse(
+                token="bxdm_abc",
+                expires_at=1_800_000_000,
+                jti="j-1",
+                machine_ids=["vm-1", "vm-2"],
+            )
+        ]
+    )
+    token = MachineTokens(transport).create(["alpha", "vm-2"], expires_in=600)
+    method, request = transport.calls[0]
+    assert method == "CreateMachineToken"
+    assert list(request.machines) == ["alpha", "vm-2"]
+    assert request.expires_in_secs == 600
+    assert token.token == "bxdm_abc"
+    assert token.id == "j-1"
+    assert token.machine_ids == ["vm-1", "vm-2"]
+    assert token.expires_at == datetime.fromtimestamp(1_800_000_000, timezone.utc)
+
+
+async def test_async_machine_tokens_create_matches_sync():
+    from boxd.resources.credentials import AsyncMachineTokens
+
+    transport = FakeAsyncTransport(
+        [api_pb2.CreateMachineTokenResponse(token="bxdm_x", expires_at=1, jti="j")]
+    )
+    token = await AsyncMachineTokens(transport).create(["alpha"])
+    assert transport.calls[0][0] == "CreateMachineToken"
+    assert transport.calls[0][1].expires_in_secs == 0
+    assert token.token == "bxdm_x"
+
+
 def test_account_link_ssh_key_sends_empty_strings_for_unset():
     from boxd.resources.account import Account
 
@@ -1862,6 +1898,7 @@ def test_sync_and_async_clients_expose_the_same_namespaces():
         "orgs",
         "teams",
         "api_keys",
+        "machine_tokens",
         "account",
         "regions",
     }
@@ -1896,6 +1933,7 @@ def _namespace_pairs():
         (disks.Disks, disks.AsyncDisks),
         (orgs.Orgs, orgs.AsyncOrgs),
         (credentials.ApiKeys, credentials.AsyncApiKeys),
+        (credentials.MachineTokens, credentials.AsyncMachineTokens),
         (account.Account, account.AsyncAccount),
     ]
 

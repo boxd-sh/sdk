@@ -1463,6 +1463,19 @@ class CreatedApiKey(BaseModel):
     expires_at: datetime | None
 
 
+class MachineToken(BaseModel):
+    """A token that acts on a few machines only (`boxd.machine_tokens.create`)."""
+
+    token: str
+    """The token (`bxdm_…`) — shown once, never stored. Pass it as
+    ``Boxd(token=...)`` or `BOXD_TOKEN`."""
+    id: str
+    """The token's id."""
+    expires_at: datetime
+    machine_ids: list[str]
+    """The machines it acts on, by id, in the order asked."""
+
+
 
 
 class Billing(BaseModel):
@@ -1722,6 +1735,7 @@ __all__ = [
     "ExposedPort",
     "Harness",
     "Machine",
+    "MachineToken",
     "MachineAccess",
     "MachineIdle",
     "MachineOs",

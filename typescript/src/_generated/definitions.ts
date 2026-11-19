@@ -2036,6 +2036,30 @@ export interface RevokeTokenResponse {
 }
 
 /**
+ * The machines are named by name or id; all must be in one org and reachable
+ * with the credential that mints the token. The token is pinned to their ids,
+ * so renaming a machine keeps it, and a new machine that takes a name later
+ * is never reached.
+ */
+export interface CreateMachineTokenRequest {
+  /** at least one, at most 100 */
+  machines: string[];
+  /** 0 = 1 hour; at most 24 hours */
+  expiresInSecs: number;
+}
+
+export interface CreateMachineTokenResponse {
+  /** starts with "bxdm_"; use it as a bearer token, shown once */
+  token: string;
+  /** unix seconds */
+  expiresAt: number;
+  /** the token's id, for RevokeToken */
+  jti: string;
+  /** the machines it acts on, in request order */
+  machineIds: string[];
+}
+
+/**
  * Link an SSH public key to the caller's account. `pubkey` is the OpenSSH
  * authorized_keys line (`ssh-ed25519 AAAA... [comment]`) — the verbatim
  * contents of a `.pub` file. The comment is ignored.
@@ -16688,6 +16712,202 @@ export const RevokeTokenResponse: MessageFns<RevokeTokenResponse> = {
   },
   fromPartial(_: DeepPartial<RevokeTokenResponse>): RevokeTokenResponse {
     const message = createBaseRevokeTokenResponse();
+    return message;
+  },
+};
+
+function createBaseCreateMachineTokenRequest(): CreateMachineTokenRequest {
+  return { machines: [], expiresInSecs: 0 };
+}
+
+export const CreateMachineTokenRequest: MessageFns<CreateMachineTokenRequest> = {
+  encode(message: CreateMachineTokenRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    for (const v of message.machines) {
+      writer.uint32(10).string(v!);
+    }
+    if (message.expiresInSecs !== 0) {
+      writer.uint32(16).uint64(message.expiresInSecs);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): CreateMachineTokenRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseCreateMachineTokenRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.machines.push(reader.string());
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.expiresInSecs = longToNumber(reader.uint64());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): CreateMachineTokenRequest {
+    return {
+      machines: globalThis.Array.isArray(object?.machines) ? object.machines.map((e: any) => globalThis.String(e)) : [],
+      expiresInSecs: isSet(object.expiresInSecs)
+        ? globalThis.Number(object.expiresInSecs)
+        : isSet(object.expires_in_secs)
+        ? globalThis.Number(object.expires_in_secs)
+        : 0,
+    };
+  },
+
+  toJSON(message: CreateMachineTokenRequest): unknown {
+    const obj: any = {};
+    if (message.machines?.length) {
+      obj.machines = message.machines;
+    }
+    if (message.expiresInSecs !== 0) {
+      obj.expiresInSecs = Math.round(message.expiresInSecs);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<CreateMachineTokenRequest>): CreateMachineTokenRequest {
+    return CreateMachineTokenRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<CreateMachineTokenRequest>): CreateMachineTokenRequest {
+    const message = createBaseCreateMachineTokenRequest();
+    message.machines = object.machines?.map((e) => e) || [];
+    message.expiresInSecs = object.expiresInSecs ?? 0;
+    return message;
+  },
+};
+
+function createBaseCreateMachineTokenResponse(): CreateMachineTokenResponse {
+  return { token: "", expiresAt: 0, jti: "", machineIds: [] };
+}
+
+export const CreateMachineTokenResponse: MessageFns<CreateMachineTokenResponse> = {
+  encode(message: CreateMachineTokenResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.token !== "") {
+      writer.uint32(10).string(message.token);
+    }
+    if (message.expiresAt !== 0) {
+      writer.uint32(16).int64(message.expiresAt);
+    }
+    if (message.jti !== "") {
+      writer.uint32(26).string(message.jti);
+    }
+    for (const v of message.machineIds) {
+      writer.uint32(34).string(v!);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): CreateMachineTokenResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseCreateMachineTokenResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.token = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.expiresAt = longToNumber(reader.int64());
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.jti = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.machineIds.push(reader.string());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): CreateMachineTokenResponse {
+    return {
+      token: isSet(object.token) ? globalThis.String(object.token) : "",
+      expiresAt: isSet(object.expiresAt)
+        ? globalThis.Number(object.expiresAt)
+        : isSet(object.expires_at)
+        ? globalThis.Number(object.expires_at)
+        : 0,
+      jti: isSet(object.jti) ? globalThis.String(object.jti) : "",
+      machineIds: globalThis.Array.isArray(object?.machineIds)
+        ? object.machineIds.map((e: any) => globalThis.String(e))
+        : globalThis.Array.isArray(object?.machine_ids)
+        ? object.machine_ids.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: CreateMachineTokenResponse): unknown {
+    const obj: any = {};
+    if (message.token !== "") {
+      obj.token = message.token;
+    }
+    if (message.expiresAt !== 0) {
+      obj.expiresAt = Math.round(message.expiresAt);
+    }
+    if (message.jti !== "") {
+      obj.jti = message.jti;
+    }
+    if (message.machineIds?.length) {
+      obj.machineIds = message.machineIds;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<CreateMachineTokenResponse>): CreateMachineTokenResponse {
+    return CreateMachineTokenResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<CreateMachineTokenResponse>): CreateMachineTokenResponse {
+    const message = createBaseCreateMachineTokenResponse();
+    message.token = object.token ?? "";
+    message.expiresAt = object.expiresAt ?? 0;
+    message.jti = object.jti ?? "";
+    message.machineIds = object.machineIds?.map((e) => e) || [];
     return message;
   },
 };
@@ -40537,6 +40757,27 @@ export const BoxdApiDefinition = {
       requestType: RevokeTokenRequest as typeof RevokeTokenRequest,
       requestStream: false,
       responseType: RevokeTokenResponse as typeof RevokeTokenResponse,
+      responseStream: false,
+      options: {},
+    },
+    /**
+     * A short-lived token that acts on the named machines only: run commands,
+     * move files, drive their lifecycle and settings, everything but delete
+     * them. It cannot create, fork or delete machines, change networks, egress
+     * or secrets, or reach any other machine or account setting. Minted with an
+     * interactive login or an API key (never from inside a machine); a token
+     * minted with an API key stops working when that key is deleted, and a
+     * stream it opened ends when it expires. The API enforces this. A command
+     * the token runs inside a machine has what any process in that machine
+     * has: on a machine that is not isolated, that includes the machine's own
+     * boxd access, which reaches the rest of the org. For code you don't
+     * trust, use isolated machines.
+     */
+    createMachineToken: {
+      name: "CreateMachineToken",
+      requestType: CreateMachineTokenRequest as typeof CreateMachineTokenRequest,
+      requestStream: false,
+      responseType: CreateMachineTokenResponse as typeof CreateMachineTokenResponse,
       responseStream: false,
       options: {},
     },

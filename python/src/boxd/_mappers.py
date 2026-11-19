@@ -75,6 +75,7 @@ from .models import (
     BillingActivityEntry,
     BillingActivityPage,
     Machine,
+    MachineToken,
     MachineAccess,
     MachineIdle,
     MachineNetworking,
@@ -1052,6 +1053,15 @@ def api_key(msg) -> ApiKey:
 def created_api_key(msg) -> CreatedApiKey:
     return CreatedApiKey(
         id=msg.id, api_key=msg.api_key, expires_at=_epoch(msg.expires_at)
+    )
+
+
+def machine_token(msg) -> MachineToken:
+    return MachineToken(
+        token=msg.token,
+        id=msg.jti,
+        expires_at=_epoch_always(msg.expires_at),
+        machine_ids=list(msg.machine_ids),
     )
 
 

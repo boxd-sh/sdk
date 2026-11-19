@@ -144,6 +144,18 @@ service BoxdApi {
   rpc CreateToken(CreateTokenRequest)       returns (CreateTokenResponse);
   rpc ListTokens(ListTokensRequest)         returns (ListTokensResponse);
   rpc RevokeToken(RevokeTokenRequest)       returns (RevokeTokenResponse);
+  // A short-lived token that acts on the named machines only: run commands,
+  // move files, drive their lifecycle and settings, everything but delete
+  // them. It cannot create, fork or delete machines, change networks, egress
+  // or secrets, or reach any other machine or account setting. Minted with an
+  // interactive login or an API key (never from inside a machine); a token
+  // minted with an API key stops working when that key is deleted, and a
+  // stream it opened ends when it expires. The API enforces this. A command
+  // the token runs inside a machine has what any process in that machine
+  // has: on a machine that is not isolated, that includes the machine's own
+  // boxd access, which reaches the rest of the org. For code you don't
+  // trust, use isolated machines.
+  rpc CreateMachineToken(CreateMachineTokenRequest) returns (CreateMachineTokenResponse);
   // Link an SSH public key to the caller's account so `ssh <vm>.boxd`
   // authenticates by that key's fingerprint. Idempotent for the caller.
   rpc LinkSshKey(LinkSshKeyRequest)         returns (LinkSshKeyResponse);
@@ -1650,6 +1662,22 @@ message RevokeTokenRequest {
 }
 
 message RevokeTokenResponse {}
+
+// The machines are named by name or id; all must be in one org and reachable
+// with the credential that mints the token. The token is pinned to their ids,
+// so renaming a machine keeps it, and a new machine that takes a name later
+// is never reached.
+message CreateMachineTokenRequest {
+  repeated string machines = 1;  // at least one, at most 100
+  uint64 expires_in_secs   = 2;  // 0 = 1 hour; at most 24 hours
+}
+
+message CreateMachineTokenResponse {
+  string token               = 1;  // starts with "bxdm_"; use it as a bearer token, shown once
+  int64  expires_at          = 2;  // unix seconds
+  string jti                 = 3;  // the token's id, for RevokeToken
+  repeated string machine_ids = 4; // the machines it acts on, in request order
+}
 
 // Link an SSH public key to the caller's account. `pubkey` is the OpenSSH
 // authorized_keys line (`ssh-ed25519 AAAA... [comment]`) — the verbatim

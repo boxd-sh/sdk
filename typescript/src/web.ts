@@ -192,6 +192,8 @@ export type { TimeBound } from "./utils.js";
 export { Teams } from "./teams.js";
 export { ApiKeys } from "./apiKeys.js";
 export type { ApiKeyCreateParams } from "./apiKeys.js";
+export { MachineTokens } from "./machineTokens.js";
+export type { MachineTokenCreateParams } from "./machineTokens.js";
 export { AccountNamespace } from "./account.js";
 export type { LinkSshKeyParams } from "./account.js";
 export { Regions } from "./regions.js";
@@ -246,6 +248,7 @@ export type {
   MachineSource,
   MachineSourceKind,
   MachineStatus,
+  MachineToken,
   MachineUsage,
   MachineUsageReport,
   MachineLimitRequest,

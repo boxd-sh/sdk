@@ -1464,6 +1464,30 @@ boxd.api_keys.delete(key.id)
 Every key is fenced to exactly one organization. Deleting one takes effect
 immediately.
 
+A machine token acts on a few machines only. Hand it to code you don't fully
+trust, such as an eval worker or an agent:
+
+```python
+t = boxd.machine_tokens.create(["eval-1"], expires_in=3600)  # 0 = 1 hour, at most 24 hours
+t.token                              # "bxdm_…" — shown once
+t.expires_at, t.machine_ids
+
+worker = Boxd(token=t.token)         # or BOXD_TOKEN
+worker.machines.exec("eval-1", "python run.py")
+```
+
+With the token, a client can run commands, move files, drive the machines'
+lifecycle and change their settings. It can't delete them, create or fork
+machines, change networks, egress or secrets, see other machines, or manage the
+account. The machines must be in one organization. A token minted with an API
+key never outlives that key, and deleting the key ends every token minted with
+it. A command or file transfer still running when the token expires is ended.
+
+The API enforces this. A command the token runs inside a machine has what any
+process in that machine has: on a machine that is not isolated, that includes
+the machine's own boxd access, which reaches the rest of the org. For code you
+don't trust, use isolated machines (`boxd.machines.create(..., isolated=True)`).
+
 ```python
 from pathlib import Path
 
