@@ -23,8 +23,10 @@
  * `runs()` reads how finished turns went, across your machines, from the
  * platform's run history instead: it never wakes a machine.
  *
- * `startLogin()` signs an agent in for your machines, with the platform's
- * own sign-in to Claude Code or Codex.
+ * Signing Claude Code or Codex in is `boxd.integrations`: a sign-in is yours
+ * in an organization, and every private machine of yours there uses it. The
+ * machine-based `startLogin()` and the other login methods here still work
+ * and are deprecated.
  */
 import type { ReadableCall, Transport } from "./_rpc.js";
 import { BoxdError, isRetryable } from "./errors.js";
@@ -730,6 +732,56 @@ export function toAgentLoginResult(r: PbCompleteAgentLoginResponse): AgentLoginR
   return result;
 }
 
+/**
+ * A Codex (`device_code`) sign-in's wait, shared by `integrations.wait()` and
+ * `machines.agents.waitForLogin()`: `ask` with the start's handle every
+ * `intervalSecs` until it's no longer pending, giving up once the code
+ * expires or after `timeoutMs`. `calls` name the caller's own methods in its
+ * messages.
+ * @internal
+ */
+export async function waitForDeviceLogin(
+  harness: string,
+  start: AgentLoginStart,
+  timeoutMs: number | undefined,
+  ask: (handle: string) => Promise<AgentLoginResult>,
+  calls: { startCall: string; completeCall: string; waitCall: string },
+): Promise<AgentLogin> {
+  if (start.method === "paste_code") {
+    throw new BoxdError(
+      "a paste_code sign-in can't be waited on: pass the code its page shows you " +
+        `after you approve to ${calls.completeCall}`,
+    );
+  }
+  if (start.method !== "device_code") {
+    throw new BoxdError(`${calls.waitCall} waits on a device_code sign-in, not ${start.method}`);
+  }
+  const handle = start.handle;
+  if (!handle) {
+    throw new BoxdError(`the sign-in has no handle: pass what ${calls.startCall} returned`);
+  }
+  const intervalMs = (start.intervalSecs || LOGIN_INTERVAL_SECS) * 1000;
+  const expiresAt = start.expiresAt?.getTime() ?? Infinity;
+  const timeoutAt = timeoutMs === undefined ? Infinity : Date.now() + timeoutMs;
+  for (;;) {
+    const r = await ask(handle);
+    if (!r.pending) {
+      if (r.login) return r.login;
+      throw new BoxdError(`the ${harness} sign-in ended without a login`);
+    }
+    const left = Math.min(expiresAt, timeoutAt) - Date.now();
+    if (left <= 0) {
+      throw new BoxdError(
+        timeoutAt < expiresAt
+          ? `the ${harness} sign-in wasn't approved within ${timeoutMs}ms`
+          : `the ${harness} sign-in code expired before it was approved: ` +
+              `start again with ${calls.startCall}`,
+      );
+    }
+    await sleep(Math.min(intervalMs, left));
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -1258,6 +1310,9 @@ export class MachineAgents {
    * A machine that would never get the login (a shared or isolated one,
    * another member's, a Windows one) is refused with a `ConflictError`
    * saying what to do instead.
+   *
+   * @deprecated Use `boxd.integrations.connect()`: a sign-in is kept in an
+   * organization, not for a machine.
    */
   async startLogin(
     machine: string,
@@ -1277,6 +1332,8 @@ export class MachineAgents {
    * is the code the page showed you after you approved, and you're signed
    * in. Codex: `handle` is the start's, and the result is `pending` until
    * you've approved; `waitForLogin()` asks again for you.
+   *
+   * @deprecated Use `boxd.integrations.complete()`.
    */
   async completeLogin(
     machine: string,
@@ -1309,6 +1366,8 @@ export class MachineAgents {
    * expires (`expiresAt`), or after `timeout` milliseconds when that comes
    * first. A Claude Code (`paste_code`) sign-in can't be waited on: pass the
    * code its page shows you to `completeLogin()`.
+   *
+   * @deprecated Use `boxd.integrations.wait()`.
    */
   async waitForLogin(
     machine: string,
@@ -1319,43 +1378,18 @@ export class MachineAgents {
       timeout?: number;
     } & RegionOption = {},
   ): Promise<AgentLogin> {
-    if (start.method === "paste_code") {
-      throw new BoxdError(
-        "a paste_code sign-in can't be waited on: pass the code its page shows you " +
-          "after you approve to completeLogin()",
-      );
-    }
-    if (start.method !== "device_code") {
-      throw new BoxdError(`waitForLogin() waits on a device_code sign-in, not ${start.method}`);
-    }
-    const handle = start.handle;
-    if (!handle) {
-      throw new BoxdError("the sign-in has no handle: pass what startLogin() returned");
-    }
-    const intervalMs = (start.intervalSecs || LOGIN_INTERVAL_SECS) * 1000;
-    const expiresAt = start.expiresAt?.getTime() ?? Infinity;
-    const timeoutAt = opts.timeout === undefined ? Infinity : Date.now() + opts.timeout;
-    for (;;) {
-      const r = await this.completeLogin(machine, harness, { handle, region: opts.region });
-      if (!r.pending) {
-        if (r.login) return r.login;
-        throw new BoxdError(`the ${harness} sign-in ended without a login`);
-      }
-      const left = Math.min(expiresAt, timeoutAt) - Date.now();
-      if (left <= 0) {
-        throw new BoxdError(
-          timeoutAt < expiresAt
-            ? `the ${harness} sign-in wasn't approved within ${opts.timeout}ms`
-            : `the ${harness} sign-in code expired before it was approved: ` +
-                "start again with startLogin()",
-        );
-      }
-      await sleep(Math.min(intervalMs, left));
-    }
+    return waitForDeviceLogin(
+      harness,
+      start,
+      opts.timeout,
+      (handle) => this.completeLogin(machine, harness, { handle, region: opts.region }),
+      { startCall: "startLogin()", completeCall: "completeLogin()", waitCall: "waitForLogin()" },
+    );
   }
 
   /** Whether you're signed in to `harness` for `machine`, and as whom: the
-   *  login kept in the machine's organization. */
+   *  login kept in the machine's organization, or why the machine gets none.
+   *  @deprecated Use `boxd.integrations.get()`. */
   async getLogin(machine: string, harness: string, opts: RegionOption = {}): Promise<AgentLogin> {
     const resp = await this.transport.unary(
       BoxdApiDefinition.methods.getAgentLogin,
@@ -1366,7 +1400,8 @@ export class MachineAgents {
   }
 
   /** Forget your sign-in to `harness` in the machine's organization. It
-   *  isn't revoked at Anthropic or OpenAI; do that from your account there. */
+   *  isn't revoked at Anthropic or OpenAI; do that from your account there.
+   *  @deprecated Use `boxd.integrations.disconnect()`. */
   async logout(machine: string, harness: string, opts: RegionOption = {}): Promise<void> {
     await this.transport.unary(
       BoxdApiDefinition.methods.deleteAgentLogin,

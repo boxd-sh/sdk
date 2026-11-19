@@ -826,6 +826,7 @@ def test_login_result_pending_or_signed_in():
     )
 
 
+@pytest.mark.filterwarnings("ignore:machines.agents:DeprecationWarning")
 def test_start_login():
     a, t = agents(
         api_pb2.StartAgentLoginResponse(
@@ -844,6 +845,7 @@ def test_start_login():
     assert t.regions == [None, "nyc"]
 
 
+@pytest.mark.filterwarnings("ignore:machines.agents:DeprecationWarning")
 def test_complete_login_sends_the_code_or_the_handle():
     a, t = agents(approved(harness="claude-code"), *pending(1))
     done = a.complete_login("box", "claude-code", code="abc#state")
@@ -866,6 +868,7 @@ def test_complete_login_sends_the_code_or_the_handle():
     assert t.regions == [None, "lon"]
 
 
+@pytest.mark.filterwarnings("ignore:machines.agents:DeprecationWarning")
 def test_get_login_and_logout():
     a, t = agents(a_login(account=""), api_pb2.DeleteAgentLoginResponse())
     login = a.get_login("box", "codex", region="nyc")
@@ -916,6 +919,7 @@ def device_start(*, expires_in=900, interval=5):
     )
 
 
+@pytest.mark.filterwarnings("ignore:machines.agents:DeprecationWarning")
 def test_wait_for_login_asks_with_the_handle_until_it_is_approved(clock):
     a, t = agents(*pending(2), approved())
     login = a.wait_for_login("box", "codex", device_start(), region="nyc")
@@ -929,6 +933,7 @@ def test_wait_for_login_asks_with_the_handle_until_it_is_approved(clock):
     assert clock.slept == [5, 5]
 
 
+@pytest.mark.filterwarnings("ignore:machines.agents:DeprecationWarning")
 def test_wait_for_login_gives_up_once_the_code_expires(clock):
     a, t = agents(*pending(10))
     with pytest.raises(
@@ -941,6 +946,7 @@ def test_wait_for_login_gives_up_once_the_code_expires(clock):
     assert len(t.calls) == 4
 
 
+@pytest.mark.filterwarnings("ignore:machines.agents:DeprecationWarning")
 def test_wait_for_login_gives_up_after_its_timeout_when_that_comes_first(clock):
     a, t = agents(*pending(10))
     with pytest.raises(TimeoutError, match="the codex sign-in wasn't approved within 7s"):
@@ -949,6 +955,7 @@ def test_wait_for_login_gives_up_after_its_timeout_when_that_comes_first(clock):
     assert len(t.calls) == 3
 
 
+@pytest.mark.filterwarnings("ignore:machines.agents:DeprecationWarning")
 def test_wait_for_login_asks_every_5s_when_the_start_does_not_say(clock):
     a, _ = agents(*pending(1), approved())
     start = AgentLoginStart(method="device_code", url="https://x", handle="h-1")
@@ -956,6 +963,7 @@ def test_wait_for_login_asks_every_5s_when_the_start_does_not_say(clock):
     assert clock.slept == [5]
 
 
+@pytest.mark.filterwarnings("ignore:machines.agents:DeprecationWarning")
 def test_wait_for_login_refuses_a_paste_code_sign_in():
     a, t = agents()
     with pytest.raises(ValueError, match="a paste_code sign-in can't be waited on"):
@@ -973,6 +981,7 @@ def test_wait_for_login_refuses_a_paste_code_sign_in():
     assert t.calls == []
 
 
+@pytest.mark.filterwarnings("ignore:machines.agents:DeprecationWarning")
 async def test_async_logins(clock):
     t = FakeAsyncTransport(
         [

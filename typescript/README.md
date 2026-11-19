@@ -1142,6 +1142,28 @@ a turn runs. `start` and `send` are sent again after a lost connection with
 the same request id, so a repeat never starts a second session or delivers a
 message twice; `interrupt` is sent once. More: [Coding agent sessions](https://docs.boxd.sh/guides/coding-agents).
 
+Signing Claude Code or Codex in is `boxd.integrations`, as Integrations in the
+console and `boxd manage integrations connect` on the command line: a sign-in
+is yours in an organization, every private machine of yours there uses it, and
+boxd keeps it fresh.
+
+```ts
+const start = await boxd.integrations.connect("codex");      // or "claude"
+console.log(`Open ${start.url} and enter ${start.userCode}`);
+const login = await boxd.integrations.wait("codex", start);  // until you approve
+
+const claude = await boxd.integrations.connect("claude");    // Claude shows a code once you approve
+const done = await boxd.integrations.complete("claude", { code });
+
+await boxd.integrations.get("claude");                       // signedIn, account
+await boxd.integrations.disconnect("claude");
+```
+
+`org` picks the organization (a name or id); without it, your default one, or
+the one your API key is for. An organization API key can't sign in: a sign-in
+belongs to a person. The machine-based `machines.agents.startLogin()` and the
+other login methods still work and are deprecated.
+
 ### Files, ports, proxies, checkpoints
 
 ```typescript

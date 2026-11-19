@@ -32,12 +32,16 @@ platform's run history instead: it never wakes a machine::
     for run in page.runs:
         print(run.session_id, run.turn, run.reason, run.error or "")
 
-``start_login()`` signs an agent in for your machines, with the platform's
-own sign-in to Claude Code or Codex::
+Signing Claude Code or Codex in is ``boxd.integrations``: a sign-in is yours
+in an organization, and every private machine of yours there uses it::
 
-    start = boxd.machines.agents.start_login("my-box", "codex")
+    start = boxd.integrations.connect("codex")
     print(f"Open {start.url} and enter {start.user_code}")
-    login = boxd.machines.agents.wait_for_login("my-box", "codex", start)
+    login = boxd.integrations.wait("codex", start)
+
+The machine-based ``start_login()``, ``complete_login()``,
+``wait_for_login()``, ``get_login()`` and ``logout()`` still work and are
+deprecated.
 """
 
 from __future__ import annotations
@@ -46,6 +50,7 @@ import asyncio
 import math
 import time
 import uuid
+import warnings
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
@@ -175,27 +180,47 @@ def _complete_login(
     )
 
 
+def _moved(old: str, new: str) -> None:
+    """Warn that `old` (a machine-based sign-in method) is now `new`."""
+    warnings.warn(
+        f"machines.agents.{old}() is deprecated: a sign-in is yours in an "
+        f"organization, not a machine's. Use boxd.integrations.{new}() instead.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
 _LOGIN_INTERVAL_SECS = 5
 """How often `wait_for_login` asks when the start doesn't say, in seconds."""
 
 
 class _LoginWait:
-    """`wait_for_login`'s schedule, shared by both namespaces: the handle it
-    asks with, how long it waits before asking again, and when it gives up."""
+    """A Codex sign-in's wait, shared by `wait_for_login` and
+    `integrations.wait` (sync and async): the handle it asks with, how long it
+    waits before asking again, and when it gives up. `start_call` and
+    `complete_call` name the caller's own methods in its messages."""
 
-    def __init__(self, harness: str, start: AgentLoginStart, timeout: float | None):
+    def __init__(
+        self,
+        harness: str,
+        start: AgentLoginStart,
+        timeout: float | None,
+        *,
+        start_call: str = "start_login()",
+        complete_call: str = "complete_login(code=...)",
+        wait_call: str = "wait_for_login()",
+    ):
         if start.method == "paste_code":
             raise ValueError(
                 "a paste_code sign-in can't be waited on: pass the code its page "
-                "shows you after you approve to complete_login(code=...)"
+                f"shows you after you approve to {complete_call}"
             )
         if start.method != "device_code":
-            raise ValueError(
-                f"wait_for_login() waits on a device_code sign-in, not {start.method!r}"
-            )
+            raise ValueError(f"{wait_call} waits on a device_code sign-in, not {start.method!r}")
         if not start.handle:
-            raise ValueError("the sign-in has no handle: pass what start_login() returned")
+            raise ValueError(f"the sign-in has no handle: pass what {start_call} returned")
         self.handle = start.handle
+        self._start_call = start_call
         self._harness = harness
         self._timeout = timeout
         self._interval = start.interval_secs or _LOGIN_INTERVAL_SECS
@@ -220,7 +245,7 @@ class _LoginWait:
                 )
             raise TimeoutError(
                 f"the {self._harness} sign-in code expired before it was approved: "
-                "start again with start_login()"
+                f"start again with {self._start_call}"
             )
         return min(self._interval, left)
 
@@ -769,7 +794,12 @@ class Agents(Namespace):
         A machine that would never get the login (a shared or isolated one,
         another member's, a Windows one) is refused with a
         :class:`~boxd.errors.ConflictError` saying what to do instead.
+
+        .. deprecated:: Use :meth:`boxd.integrations.connect
+           <boxd.resources.integrations.Integrations.connect>`: a sign-in is
+           kept in an organization, not for a machine.
         """
+        _moved("start_login", "connect")
         return m.agent_login_start(
             self._transport.call(
                 "StartAgentLogin",
@@ -791,7 +821,23 @@ class Agents(Namespace):
         Code: `code` is the code the page showed you after you approved, and
         you're signed in. Codex: `handle` is the start's, and the result is
         ``pending`` until you've approved; :meth:`wait_for_login` asks again
-        for you."""
+        for you.
+
+        .. deprecated:: Use :meth:`boxd.integrations.complete
+           <boxd.resources.integrations.Integrations.complete>`.
+        """
+        _moved("complete_login", "complete")
+        return self._complete_login(machine_id, harness, code=code, handle=handle, region=region)
+
+    def _complete_login(
+        self,
+        machine_id: str,
+        harness: str,
+        *,
+        code: str | None = None,
+        handle: str | None = None,
+        region: str | None = None,
+    ) -> AgentLoginResult:
         return m.agent_login_result(
             self._transport.call(
                 "CompleteAgentLogin",
@@ -818,10 +864,14 @@ class Agents(Namespace):
         A Claude Code (``"paste_code"``) sign-in can't be waited on
         (:class:`ValueError`): pass the code its page shows you to
         :meth:`complete_login`.
+
+        .. deprecated:: Use :meth:`boxd.integrations.wait
+           <boxd.resources.integrations.Integrations.wait>`.
         """
+        _moved("wait_for_login", "wait")
         wait = _LoginWait(harness, start, timeout)
         while True:
-            result = self.complete_login(
+            result = self._complete_login(
                 machine_id, harness, handle=wait.handle, region=region
             )
             if not result.pending:
@@ -832,7 +882,13 @@ class Agents(Namespace):
         self, machine_id: str, harness: str, *, region: str | None = None
     ) -> AgentLogin:
         """Whether you're signed in to `harness` for `machine_id`, and as
-        whom: the login kept in the machine's organization."""
+        whom: the login kept in the machine's organization, or why the machine
+        gets none.
+
+        .. deprecated:: Use :meth:`boxd.integrations.get
+           <boxd.resources.integrations.Integrations.get>`.
+        """
+        _moved("get_login", "get")
         return m.agent_login(
             self._transport.call(
                 "GetAgentLogin",
@@ -844,7 +900,12 @@ class Agents(Namespace):
     def logout(self, machine_id: str, harness: str, *, region: str | None = None) -> None:
         """Forget your sign-in to `harness` in the machine's organization. It
         isn't revoked at Anthropic or OpenAI; do that from your account
-        there."""
+        there.
+
+        .. deprecated:: Use :meth:`boxd.integrations.disconnect
+           <boxd.resources.integrations.Integrations.disconnect>`.
+        """
+        _moved("logout", "disconnect")
         self._transport.call(
             "DeleteAgentLogin",
             api_pb2.DeleteAgentLoginRequest(vm_id=machine_id, harness=harness),
@@ -1163,7 +1224,11 @@ class AsyncAgents(Namespace):
         self, machine_id: str, harness: str, *, region: str | None = None
     ) -> AgentLoginStart:
         """Sign a coding agent in for `machine_id`. See
-        :meth:`Agents.start_login`."""
+        :meth:`Agents.start_login`.
+
+        .. deprecated:: Use ``boxd.integrations.connect()``.
+        """
+        _moved("start_login", "connect")
         return m.agent_login_start(
             await self._transport.call(
                 "StartAgentLogin",
@@ -1181,7 +1246,24 @@ class AsyncAgents(Namespace):
         handle: str | None = None,
         region: str | None = None,
     ) -> AgentLoginResult:
-        """Finish a sign-in, in one call. See :meth:`Agents.complete_login`."""
+        """Finish a sign-in, in one call. See :meth:`Agents.complete_login`.
+
+        .. deprecated:: Use ``boxd.integrations.complete()``.
+        """
+        _moved("complete_login", "complete")
+        return await self._complete_login(
+            machine_id, harness, code=code, handle=handle, region=region
+        )
+
+    async def _complete_login(
+        self,
+        machine_id: str,
+        harness: str,
+        *,
+        code: str | None = None,
+        handle: str | None = None,
+        region: str | None = None,
+    ) -> AgentLoginResult:
         return m.agent_login_result(
             await self._transport.call(
                 "CompleteAgentLogin",
@@ -1200,10 +1282,14 @@ class AsyncAgents(Namespace):
         region: str | None = None,
     ) -> AgentLogin:
         """Wait until you've approved a Codex sign-in. See
-        :meth:`Agents.wait_for_login`."""
+        :meth:`Agents.wait_for_login`.
+
+        .. deprecated:: Use ``boxd.integrations.wait()``.
+        """
+        _moved("wait_for_login", "wait")
         wait = _LoginWait(harness, start, timeout)
         while True:
-            result = await self.complete_login(
+            result = await self._complete_login(
                 machine_id, harness, handle=wait.handle, region=region
             )
             if not result.pending:
@@ -1214,7 +1300,11 @@ class AsyncAgents(Namespace):
         self, machine_id: str, harness: str, *, region: str | None = None
     ) -> AgentLogin:
         """Whether you're signed in to `harness` for `machine_id`. See
-        :meth:`Agents.get_login`."""
+        :meth:`Agents.get_login`.
+
+        .. deprecated:: Use ``boxd.integrations.get()``.
+        """
+        _moved("get_login", "get")
         return m.agent_login(
             await self._transport.call(
                 "GetAgentLogin",
@@ -1226,7 +1316,11 @@ class AsyncAgents(Namespace):
     async def logout(
         self, machine_id: str, harness: str, *, region: str | None = None
     ) -> None:
-        """Forget your sign-in to `harness`. See :meth:`Agents.logout`."""
+        """Forget your sign-in to `harness`. See :meth:`Agents.logout`.
+
+        .. deprecated:: Use ``boxd.integrations.disconnect()``.
+        """
+        _moved("logout", "disconnect")
         await self._transport.call(
             "DeleteAgentLogin",
             api_pb2.DeleteAgentLoginRequest(vm_id=machine_id, harness=harness),

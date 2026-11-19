@@ -16,6 +16,7 @@ import { Domains } from "./domains.js";
 import { Machines } from "./machines.js";
 import { Orgs } from "./orgs.js";
 import { Regions } from "./regions.js";
+import { Integrations } from "./integrations.js";
 import { Snapshots } from "./snapshots.js";
 import { Teams } from "./teams.js";
 import { EnvVars, Secrets } from "./vars.js";
@@ -141,6 +142,9 @@ export class BoxdCore {
   readonly account: AccountNamespace;
   /** The regions boxd runs in, and which ones your org can use. */
   readonly regions: Regions;
+  /** Your sign-ins to the coding agents (`"claude"`, `"codex"`), kept per
+   *  organization: the same as Integrations in the console. */
+  readonly integrations: Integrations;
 
   /**
    * `home` talks to `baseURL`; `connect` makes a transport for another
@@ -169,6 +173,7 @@ export class BoxdCore {
     this.machineTokens = new MachineTokens(transport);
     this.account = new AccountNamespace(transport);
     this.regions = new Regions(transport);
+    this.integrations = new Integrations(transport);
   }
 
   /** The client's region (`region` or `BOXD_REGION`); `undefined` = the

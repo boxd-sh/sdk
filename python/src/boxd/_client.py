@@ -20,6 +20,7 @@ from .resources.credentials import (
 )
 from .resources.disks import AsyncDisks, Disks
 from .resources.domains import AsyncDomains, Domains
+from .resources.integrations import AsyncIntegrations, Integrations
 from .resources.machines import AsyncMachines, Machines
 from .resources.orgs import AsyncOrgs, Orgs
 from .resources.regions import AsyncRegions, Regions
@@ -103,6 +104,7 @@ class Boxd:
         self.machine_tokens = MachineTokens(self._transport)
         self.account = Account(self._transport)
         self.regions = Regions(self._transport)
+        self.integrations = Integrations(self._transport)
 
     @property
     def base_url(self) -> str:
@@ -178,6 +180,7 @@ class AsyncBoxd:
         self.machine_tokens = AsyncMachineTokens(self._transport)
         self.account = AsyncAccount(self._transport)
         self.regions = AsyncRegions(self._transport)
+        self.integrations = AsyncIntegrations(self._transport)
 
     @property
     def base_url(self) -> str:

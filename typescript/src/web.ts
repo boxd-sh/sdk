@@ -144,6 +144,8 @@ export type {
 export { MachinePorts } from "./ports.js";
 export { MachineProxies } from "./proxies.js";
 export { MachineAgents } from "./agents.js";
+export { Integrations } from "./integrations.js";
+export type { IntegrationOrgOption } from "./integrations.js";
 export type {
   AgentDelivery,
   AgentEvent,

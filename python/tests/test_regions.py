@@ -621,6 +621,7 @@ def test_an_agent_call_on_the_machine_says_where_the_machine_is():
         )
 
 
+@pytest.mark.filterwarnings("ignore:machines.agents:DeprecationWarning")
 def test_an_agent_sign_in_says_where_the_machine_is():
     router, _, _ = make(
         {
@@ -640,6 +641,16 @@ def test_an_agent_sign_in_says_where_the_machine_is():
     ):
         with pytest.raises(NotFoundError, match='pass region="nyc"'):
             call()
+
+
+def test_an_org_sign_in_not_found_is_not_looked_up():
+    # `integrations` names an org, never a machine: nothing to look up.
+    from boxd.resources.integrations import Integrations
+
+    router, home, _ = make({"GetAgentLogin": NotFoundError("org not found: acme")})
+    with pytest.raises(NotFoundError, match="org not found"):
+        Integrations(router).get("claude", org="acme")
+    assert home.methods() == ["GetAgentLogin"]
 
 
 def test_an_agent_session_not_found_is_not_looked_up():

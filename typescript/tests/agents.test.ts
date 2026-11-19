@@ -20,7 +20,14 @@ import type { CallOptions, MethodDef, Transport, UnaryOptions } from "../src/_rp
 import { withRetries } from "../src/_retry.js";
 import { APIConnectionError, BoxdError } from "../src/errors.js";
 import { toAgentEvent, toAgentLoginStart, toAgentRun } from "../src/agents.js";
-import { MachineAgents, Machines, type AgentEvent, type AgentRunParams } from "../src/index.js";
+import {
+  Boxd,
+  Integrations,
+  MachineAgents,
+  Machines,
+  type AgentEvent,
+  type AgentRunParams,
+} from "../src/index.js";
 
 interface Recorded {
   method: string;
@@ -1220,5 +1227,67 @@ describe("machines.agents.run", () => {
     expect([r.reply, r.reason]).toEqual(["Hello", "done"]);
     const follows = t.calls.filter((c) => c.method === "AgentEvents");
     expect(follows.map((c) => c.req.afterSeq)).toEqual([3, 5]);
+  });
+});
+
+describe("integrations", () => {
+  const integrations = (t: FakeTransport) => new Integrations(t as Transport);
+
+  it("connect, complete, get and disconnect name the org, never a machine", async () => {
+    const t = new FakeTransport([
+      aDeviceStart(),
+      { pending: false, login: aLogin({ harness: "claude" }) },
+      aLogin({ account: "", updatedAtMs: 0 }),
+      {},
+    ]);
+    const i = integrations(t);
+    const start = await i.connect("codex", { org: "acme" });
+    expect(start).toMatchObject({ method: "device_code", userCode: "ABCD-1234", handle: "h-1" });
+    const done = await i.complete("claude", { code: "abc#state" });
+    expect(done.login?.harness).toBe("claude");
+    expect(await i.get("codex")).toEqual({ harness: "codex", signedIn: true, orgId: "org-1" });
+    await i.disconnect("claude", { org: "acme" });
+    expect(t.calls.map((c) => [c.method, c.req])).toEqual([
+      ["StartAgentLogin", { vmId: "", harness: "codex", org: "acme" }],
+      [
+        "CompleteAgentLogin",
+        { vmId: "", harness: "claude", org: "", code: "abc#state", handle: "" },
+      ],
+      ["GetAgentLogin", { vmId: "", harness: "codex", org: "" }],
+      ["DeleteAgentLogin", { vmId: "", harness: "claude", org: "acme" }],
+    ]);
+  });
+
+  it("wait asks with the handle until it's approved", async () => {
+    const t = new FakeTransport([...pending(2), { pending: false, login: aLogin() }]);
+    const login = await integrations(t).wait("codex", deviceStart(2), { org: "acme" });
+    expect(login.signedIn).toBe(true);
+    expect(t.calls.map((c) => c.req)).toEqual(
+      Array.from({ length: 3 }, () => ({
+        vmId: "",
+        harness: "codex",
+        org: "acme",
+        code: "",
+        handle: "h-1",
+      })),
+    );
+  });
+
+  it("wait names its own methods when it can't wait", async () => {
+    const t = new FakeTransport(pending(1000));
+    const expired = await integrations(t)
+      .wait("codex", deviceStart(5, 30))
+      .catch((e) => e);
+    expect(expired.message).toBe(
+      "the codex sign-in code expired before it was approved: start again with connect()",
+    );
+    const paste = await integrations(new FakeTransport())
+      .wait("claude", { method: "paste_code", url: "https://claude.ai/oauth" })
+      .catch((e) => e);
+    expect(paste.message).toContain("to complete()");
+  });
+
+  it("is on the client", () => {
+    expect(new Boxd({ token: "t" }).integrations).toBeInstanceOf(Integrations);
   });
 });
