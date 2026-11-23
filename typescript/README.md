@@ -1082,7 +1082,11 @@ message starts after that many seconds or steps (model calls for Claude Code,
 tool calls for Codex). `interrupt()` stops the running turn
 (`{ clearQueue: true }` also drops the waiting messages), `close()` ends the
 session, and `list(machine, { all: true })` also shows closed and failed
-sessions.
+sessions. `interrupt(machine, id, { turn })` interrupts only that turn: it is
+stopped if it is the one running, and withdrawn if its message is still
+waiting. `close(machine, id, { whenDone: true })` closes the session once it
+has nothing left to do (no turn, no waiting message, no command the agent left
+running in the background), and resolves to `{ pending, background }`.
 
 `start` and `send` are retried after a lost connection without running
 anything twice: each carries a `requestId`, and a repeat with the same one
@@ -1106,7 +1110,9 @@ SDK doesn't know is skipped. Without `follow`, `events()` ends after the latest
 event; with it, it has no deadline, and a `break` ends the call.
 
 `run()` does one task in one call: it starts a session, sends the task, waits
-for that turn to end and closes the session again:
+for that turn to end and closes the session again; if the agent left commands
+running in the background, the session closes by itself once they are done
+(`result.closesWhenDone`):
 
 ```typescript
 const result = await agents.run("my-box", {
@@ -1124,7 +1130,7 @@ turn ended (a turn that doesn't end `"done"` resolves rather than throws),
 `result.effort` the session's agent, model and effort (`null`: the agent's own
 default). `keep: true` leaves the session open, `session` sends
 the task to an open session instead, `onEvent` sees each event as it happens,
-and aborting `signal` interrupts the turn.
+and aborting `signal` interrupts that turn and no other.
 
 `runs()` reads how finished turns went from the platform's run history, newest
 first, across the machines you can see:

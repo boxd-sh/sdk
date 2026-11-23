@@ -1039,6 +1039,11 @@ turn the message starts after that many seconds or steps (model calls for
 Claude Code, tool calls for Codex). `interrupt()` stops the running turn
 (`clear_queue=True` also drops the waiting messages), `close()` ends the
 session, and `list(machine, all=True)` also shows closed and failed sessions.
+`interrupt(turn=...)` touches only that turn: stopped if it is running, taken
+out of the queue if its message is still waiting. `close(when_done=True)`
+closes the session once it has nothing left to do (no turn, no waiting message,
+no command the agent left running in the background), and its result says
+whether that is still `pending`.
 
 `harnesses()` lists the agents a machine can run, with the `models` and
 reasoning `efforts` each one takes. `start(..., model=..., effort=...)` picks
@@ -1078,7 +1083,11 @@ turn ended (a turn that doesn't end `"done"` is returned, not raised),
 `result.effort` the session's agent, model and effort (`None`: the agent's own
 default). `keep=True` leaves the session open, `session=` sends
 the task to an open session instead, `on_event=` sees each event as it happens,
-and Ctrl-C (or cancelling the task, with `AsyncBoxd`) interrupts the turn.
+and Ctrl-C (or cancelling the task, with `AsyncBoxd`) interrupts that turn and
+no other, withdrawing it if it was still waiting. When the agent left commands
+running in the background, the session closes by itself once they are done
+instead of at once: `result.closes_when_done` is then true, and
+`result.background` says how many still run.
 
 `runs()` reads how finished turns went from the platform's run history, newest
 first, across the machines you can see:

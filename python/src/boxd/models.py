@@ -831,7 +831,20 @@ class AgentInterruptResult(BaseModel):
     """What ``machines.agents.interrupt`` stopped."""
 
     turn: int | None
-    """The turn that was interrupted; None when none was running."""
+    """The turn that was interrupted; None when none was running. With
+    ``turn=``: that turn, when it was stopped or taken out of the queue; None
+    when it was neither (it had ended)."""
+
+
+class AgentCloseResult(BaseModel):
+    """What ``machines.agents.close`` did."""
+
+    pending: bool
+    """With ``when_done``: the session still has work, and closes by itself
+    when that is done. False: it is closed now."""
+    background: int
+    """With ``pending``: how many commands the agent still runs in the
+    background."""
 
 
 class AgentEventBase(BaseModel):
@@ -1032,8 +1045,16 @@ class AgentRunResult(BaseModel):
     """The tokens the turn used, as last reported; None when the agent
     reported none."""
     kept: bool
-    """Whether the session is still open: ``keep``, ``session``, or a
-    session this started that it couldn't close."""
+    """Whether the session stays open until you close it: ``keep``,
+    ``session``, or a session this started that it couldn't close. False for
+    one that closes by itself (``closes_when_done``)."""
+    closes_when_done: bool = False
+    """The session this started is still open and closes by itself once it
+    has nothing left to do: the agent left commands running in the background
+    (``background``), or started a turn of its own."""
+    background: int = 0
+    """With ``closes_when_done``: how many commands the agent still runs in
+    the background."""
 
 
 AgentLoginMethod = Literal["paste_code", "device_code", "unknown"]
@@ -1709,6 +1730,7 @@ class RegionalList(list, Generic[_T]):
 
 __all__ = [
     "Account",
+    "AgentCloseResult",
     "AgentDelivery",
     "AgentEvent",
     "AgentEventBase",

@@ -147,8 +147,20 @@ export interface AgentSendResult {
 }
 
 export interface AgentInterruptResult {
-  /** The turn that was interrupted; `null` when none was running. */
+  /** The turn that was interrupted; `null` when none was running. With
+   *  `turn`: that turn when it was stopped or taken out of the queue, `null`
+   *  when it was left alone (it had ended). */
   turn: number | null;
+}
+
+/** What `close()` did. */
+export interface AgentCloseResult {
+  /** With `whenDone`: the session still has work, and closes by itself when
+   *  that is done. `false`: it is closed now. */
+  pending: boolean;
+  /** With `pending`: how many commands the agent still runs in the
+   *  background. */
+  background: number;
 }
 
 interface AgentEventBase {
@@ -294,8 +306,8 @@ export interface AgentRunParams extends RegionOption {
   session?: string;
   /** Leave the session this starts open afterwards, to `send()` it more. */
   keep?: boolean;
-  /** Aborting it interrupts the turn, closes a session this started (unless
-   *  `keep`), and rejects with the abort's reason. */
+  /** Aborting it interrupts this task's own turn, closes a session this
+   *  started (unless `keep`), and rejects with the abort's reason. */
   signal?: AbortSignal;
   /** Called with each of the turn's events as it happens, for progress. */
   onEvent?: (ev: AgentEvent) => void;
@@ -325,9 +337,17 @@ export interface AgentRunResult {
   /** The tokens the turn used, as last reported; absent when the agent
    *  reported none. */
   usage?: AgentRunUsage;
-  /** Whether the session is still open: `keep`, `session`, or a session
-   *  this started that it couldn't close. */
+  /** Whether the session is left open, for the caller to close: `keep`,
+   *  `session`, or a session this started that it couldn't close. `false`
+   *  for one that closes by itself (`closesWhenDone`). */
   kept: boolean;
+  /** The session this started is still open for what the agent left to do,
+   *  such as commands running in the background, and closes by itself once
+   *  that is done. `false`: it is closed now, or `kept`. */
+  closesWhenDone: boolean;
+  /** With `closesWhenDone`: how many commands the agent still runs in the
+   *  background. Otherwise 0. */
+  background: number;
 }
 
 /** What started a turn: a message sent to the session (`message`), a
@@ -1083,30 +1103,53 @@ export class MachineAgents {
 
   /** Interrupt the running turn; its last event says `interrupted`.
    *  `clearQueue` also drops the messages waiting for the next turns;
-   *  without it the next one starts once the interrupted turn has ended. */
+   *  without it the next one starts once the interrupted turn has ended.
+   *  `turn` interrupts only that turn, whatever else the session does: it
+   *  is stopped if it is the one running, taken out of the queue if its
+   *  message is still waiting (it then ends as `interrupted` without having
+   *  run), and left alone if it has ended. Not with `clearQueue`. */
   async interrupt(
     machine: string,
     sessionId: string,
-    params: { clearQueue?: boolean } & RegionOption = {},
+    params: { clearQueue?: boolean; turn?: number } & RegionOption = {},
   ): Promise<AgentInterruptResult> {
+    if (params.turn !== undefined && params.clearQueue) {
+      throw new BoxdError("turn interrupts that turn only: leave out clearQueue with it");
+    }
     const resp = await this.transport.unary(
       BoxdApiDefinition.methods.interruptAgent,
-      { vmId: machine, sessionId, clearQueue: params.clearQueue ?? false },
+      {
+        vmId: machine,
+        sessionId,
+        clearQueue: params.clearQueue ?? false,
+        turn: params.turn ?? 0,
+      },
       // Not repeated after a lost answer: it could stop the turn the next
-      // waiting message has just started.
+      // waiting message has just started, and with `turn` the repeat would
+      // answer that nothing was interrupted.
       { region: params.region, retry: false },
     );
     return { turn: resp.turn === 0 ? null : resp.turn };
   }
 
   /** End the session: a running turn is interrupted, waiting messages are
-   *  dropped, and its events stay readable. */
-  async close(machine: string, sessionId: string, opts: RegionOption = {}): Promise<void> {
-    await this.transport.unary(
+   *  dropped, and its events stay readable. With `whenDone` it is closed
+   *  once it has nothing left to do instead: no turn running, no message
+   *  waiting, and no command the agent left running in the background.
+   *  Until then it stays open and takes messages as before, and the result
+   *  says so (`pending`). */
+  async close(
+    machine: string,
+    sessionId: string,
+    params: { whenDone?: boolean } & RegionOption = {},
+  ): Promise<AgentCloseResult> {
+    const resp = await this.transport.unary(
       BoxdApiDefinition.methods.closeAgentSession,
-      { vmId: machine, sessionId },
-      { region: opts.region },
+      { vmId: machine, sessionId, whenDone: params.whenDone ?? false },
+      { region: params.region },
     );
+    // A server from before `whenDone` answers nothing: it closed the session.
+    return { pending: resp.pending ?? false, background: resp.background ?? 0 };
   }
 
   async get(machine: string, sessionId: string, opts: RegionOption = {}): Promise<AgentSession> {
@@ -1149,11 +1192,17 @@ export class MachineAgents {
    *
    * A turn that ends other than `done` doesn't reject: `reason` (and
    * `error`) says how it ended. A session this starts is closed afterwards,
-   * also when following the turn fails, unless `keep`. Aborting `signal`
-   * interrupts the turn, closes a session this started (unless `keep`), and
-   * rejects with the abort's reason. The start and the send are retried as
-   * `start()` and `send()` are, and an event stream that breaks is followed
-   * again from the last event seen, up to 5 times.
+   * also when following the turn fails, unless `keep`. After a turn that
+   * ended, it is closed once the agent has nothing left to do: commands the
+   * agent left running in the background go on, the session stays open for
+   * them and closes by itself when they are done, and the result says so
+   * (`closesWhenDone`, `background`). Aborting `signal` interrupts this
+   * task's own turn and no other (stopped if it is running, withdrawn if its
+   * message is still waiting in the `session`), closes a session this
+   * started at once (unless `keep`), and rejects with the abort's reason.
+   * The start and the send are retried as `start()` and `send()` are, and an
+   * event stream that breaks is followed again from the last event seen, up
+   * to 5 times.
    */
   async run(machine: string, params: AgentRunParams): Promise<AgentRunResult> {
     const { harness, signal, region } = params;
@@ -1205,17 +1254,22 @@ export class MachineAgents {
       }));
       outcome = await this.#followTurn(machine, session, turn, params);
     } catch (err) {
-      // Best effort: what the caller hears about is `err`.
+      // Best effort: what the caller hears about is `err`. Only its own
+      // turn: another one running in a `session` it was given isn't its to
+      // stop, and its message may still be waiting behind that one.
       if (turn !== undefined && signal?.aborted) {
-        await this.interrupt(machine, session.id, { region }).catch(() => {});
+        await this.interrupt(machine, session.id, { turn, region }).catch(() => {});
       }
       if (close) await this.close(machine, session.id, { region }).catch(() => {});
       throw err;
     }
     let kept = !close;
+    let closing: AgentCloseResult = { pending: false, background: 0 };
     if (close) {
       try {
-        await this.close(machine, session.id, { region });
+        // Not at once: that would stop the commands the agent left running
+        // in the background.
+        closing = await this.close(machine, session.id, { whenDone: true, region });
       } catch {
         // The turn's reply isn't lost to it: `kept` says it's still open.
         kept = true;
@@ -1231,6 +1285,8 @@ export class MachineAgents {
       reason: outcome.reason ?? "unknown",
       reply: outcome.reply,
       kept,
+      closesWhenDone: closing.pending,
+      background: closing.background,
     };
     if (outcome.error) result.error = outcome.error;
     if (outcome.usage) result.usage = outcome.usage;

@@ -40,6 +40,7 @@ from .errors import (
 )
 from .models import (
     Account,
+    AgentCloseResult,
     AgentDelivery,
     AgentEvent,
     AgentEventBase,
@@ -202,6 +203,7 @@ __all__ = [
     "OutputChunk",
     # Models
     "Account",
+    "AgentCloseResult",
     "AgentDelivery",
     "AgentEvent",
     "AgentEventBase",

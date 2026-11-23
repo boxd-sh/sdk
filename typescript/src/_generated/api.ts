@@ -2728,10 +2728,20 @@ export interface InterruptAgentRequest {
    * waiting message starts its turn once the interrupted one has ended.
    */
   clearQueue: boolean;
+  /**
+   * Only this turn: stopped if it is the one running, taken out of the queue
+   * if its message is still waiting (it then ends as interrupted without
+   * having run), and left alone if it is neither (it has ended). 0: the
+   * running turn, whichever it is. Not together with `clear_queue`.
+   */
+  turn: number;
 }
 
 export interface InterruptAgentResponse {
-  /** The turn that was interrupted; 0 when none was running. */
+  /**
+   * The turn that was interrupted, or with `turn` taken out of the queue; 0
+   * when none was.
+   */
   turn: number;
 }
 
@@ -2739,9 +2749,25 @@ export interface CloseAgentSessionRequest {
   /** machine name or id */
   vmId: string;
   sessionId: string;
+  /**
+   * Close once the session has nothing left to do, instead of at once: no
+   * turn running, no message waiting, and no command the agent left running
+   * in the background (Claude Code's background tasks; the agent reports
+   * their end in a turn of its own, which is waited for too). Until then the
+   * session stays open and takes messages as before. A close without this
+   * closes it at once, whatever is left.
+   */
+  whenDone: boolean;
 }
 
 export interface CloseAgentSessionResponse {
+  /**
+   * With `when_done`: the session still has work, and closes by itself when
+   * that is done. False: it is closed now.
+   */
+  pending: boolean;
+  /** With `pending`: how many commands the agent still runs in the background. */
+  background: number;
 }
 
 export interface GetAgentSessionRequest {
@@ -22661,7 +22687,7 @@ export const SendToAgentResponse: MessageFns<SendToAgentResponse> = {
 };
 
 function createBaseInterruptAgentRequest(): InterruptAgentRequest {
-  return { vmId: "", sessionId: "", clearQueue: false };
+  return { vmId: "", sessionId: "", clearQueue: false, turn: 0 };
 }
 
 export const InterruptAgentRequest: MessageFns<InterruptAgentRequest> = {
@@ -22674,6 +22700,9 @@ export const InterruptAgentRequest: MessageFns<InterruptAgentRequest> = {
     }
     if (message.clearQueue !== false) {
       writer.uint32(24).bool(message.clearQueue);
+    }
+    if (message.turn !== 0) {
+      writer.uint32(32).uint64(message.turn);
     }
     return writer;
   },
@@ -22709,6 +22738,14 @@ export const InterruptAgentRequest: MessageFns<InterruptAgentRequest> = {
           message.clearQueue = reader.bool();
           continue;
         }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.turn = longToNumber(reader.uint64());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -22735,6 +22772,7 @@ export const InterruptAgentRequest: MessageFns<InterruptAgentRequest> = {
         : isSet(object.clear_queue)
         ? globalThis.Boolean(object.clear_queue)
         : false,
+      turn: isSet(object.turn) ? globalThis.Number(object.turn) : 0,
     };
   },
 
@@ -22749,6 +22787,9 @@ export const InterruptAgentRequest: MessageFns<InterruptAgentRequest> = {
     if (message.clearQueue !== false) {
       obj.clearQueue = message.clearQueue;
     }
+    if (message.turn !== 0) {
+      obj.turn = Math.round(message.turn);
+    }
     return obj;
   },
 
@@ -22760,6 +22801,7 @@ export const InterruptAgentRequest: MessageFns<InterruptAgentRequest> = {
     message.vmId = object.vmId ?? "";
     message.sessionId = object.sessionId ?? "";
     message.clearQueue = object.clearQueue ?? false;
+    message.turn = object.turn ?? 0;
     return message;
   },
 };
@@ -22823,7 +22865,7 @@ export const InterruptAgentResponse: MessageFns<InterruptAgentResponse> = {
 };
 
 function createBaseCloseAgentSessionRequest(): CloseAgentSessionRequest {
-  return { vmId: "", sessionId: "" };
+  return { vmId: "", sessionId: "", whenDone: false };
 }
 
 export const CloseAgentSessionRequest: MessageFns<CloseAgentSessionRequest> = {
@@ -22833,6 +22875,9 @@ export const CloseAgentSessionRequest: MessageFns<CloseAgentSessionRequest> = {
     }
     if (message.sessionId !== "") {
       writer.uint32(18).string(message.sessionId);
+    }
+    if (message.whenDone !== false) {
+      writer.uint32(24).bool(message.whenDone);
     }
     return writer;
   },
@@ -22860,6 +22905,14 @@ export const CloseAgentSessionRequest: MessageFns<CloseAgentSessionRequest> = {
           message.sessionId = reader.string();
           continue;
         }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.whenDone = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -22881,6 +22934,11 @@ export const CloseAgentSessionRequest: MessageFns<CloseAgentSessionRequest> = {
         : isSet(object.session_id)
         ? globalThis.String(object.session_id)
         : "",
+      whenDone: isSet(object.whenDone)
+        ? globalThis.Boolean(object.whenDone)
+        : isSet(object.when_done)
+        ? globalThis.Boolean(object.when_done)
+        : false,
     };
   },
 
@@ -22892,6 +22950,9 @@ export const CloseAgentSessionRequest: MessageFns<CloseAgentSessionRequest> = {
     if (message.sessionId !== "") {
       obj.sessionId = message.sessionId;
     }
+    if (message.whenDone !== false) {
+      obj.whenDone = message.whenDone;
+    }
     return obj;
   },
 
@@ -22902,16 +22963,23 @@ export const CloseAgentSessionRequest: MessageFns<CloseAgentSessionRequest> = {
     const message = createBaseCloseAgentSessionRequest();
     message.vmId = object.vmId ?? "";
     message.sessionId = object.sessionId ?? "";
+    message.whenDone = object.whenDone ?? false;
     return message;
   },
 };
 
 function createBaseCloseAgentSessionResponse(): CloseAgentSessionResponse {
-  return {};
+  return { pending: false, background: 0 };
 }
 
 export const CloseAgentSessionResponse: MessageFns<CloseAgentSessionResponse> = {
-  encode(_: CloseAgentSessionResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(message: CloseAgentSessionResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.pending !== false) {
+      writer.uint32(8).bool(message.pending);
+    }
+    if (message.background !== 0) {
+      writer.uint32(16).uint32(message.background);
+    }
     return writer;
   },
 
@@ -22922,6 +22990,22 @@ export const CloseAgentSessionResponse: MessageFns<CloseAgentSessionResponse> = 
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.pending = reader.bool();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.background = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -22931,20 +23015,31 @@ export const CloseAgentSessionResponse: MessageFns<CloseAgentSessionResponse> = 
     return message;
   },
 
-  fromJSON(_: any): CloseAgentSessionResponse {
-    return {};
+  fromJSON(object: any): CloseAgentSessionResponse {
+    return {
+      pending: isSet(object.pending) ? globalThis.Boolean(object.pending) : false,
+      background: isSet(object.background) ? globalThis.Number(object.background) : 0,
+    };
   },
 
-  toJSON(_: CloseAgentSessionResponse): unknown {
+  toJSON(message: CloseAgentSessionResponse): unknown {
     const obj: any = {};
+    if (message.pending !== false) {
+      obj.pending = message.pending;
+    }
+    if (message.background !== 0) {
+      obj.background = Math.round(message.background);
+    }
     return obj;
   },
 
   create(base?: DeepPartial<CloseAgentSessionResponse>): CloseAgentSessionResponse {
     return CloseAgentSessionResponse.fromPartial(base ?? {});
   },
-  fromPartial(_: DeepPartial<CloseAgentSessionResponse>): CloseAgentSessionResponse {
+  fromPartial(object: DeepPartial<CloseAgentSessionResponse>): CloseAgentSessionResponse {
     const message = createBaseCloseAgentSessionResponse();
+    message.pending = object.pending ?? false;
+    message.background = object.background ?? 0;
     return message;
   },
 };

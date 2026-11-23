@@ -131,6 +131,7 @@ export { MachineAgents } from "./agents.js";
 export { Integrations } from "./integrations.js";
 export type { IntegrationOrgOption } from "./integrations.js";
 export type {
+  AgentCloseResult,
   AgentDelivery,
   AgentEvent,
   AgentEventType,

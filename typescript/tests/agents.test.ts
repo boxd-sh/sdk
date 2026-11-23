@@ -332,10 +332,62 @@ describe("machines.agents", () => {
   it("interrupt maps turn 0 to null", async () => {
     const t = new FakeTransport([{ turn: 3 }, { turn: 0 }]);
     expect(await agents(t).interrupt("box", "s-1", { clearQueue: true })).toEqual({ turn: 3 });
-    expect(t.calls[0]!.req).toEqual({ vmId: "box", sessionId: "s-1", clearQueue: true });
+    expect(t.calls[0]!.req).toEqual({ vmId: "box", sessionId: "s-1", clearQueue: true, turn: 0 });
     expect(t.calls[0]!.opts).toEqual({ region: undefined, retry: false });
     expect(await agents(t).interrupt("box", "s-1")).toEqual({ turn: null });
-    expect(t.calls[1]!.req).toEqual({ vmId: "box", sessionId: "s-1", clearQueue: false });
+    expect(t.calls[1]!.req).toEqual({
+      vmId: "box",
+      sessionId: "s-1",
+      clearQueue: false,
+      turn: 0,
+    });
+  });
+
+  it("interrupt with a turn sends it, and refuses it with clearQueue", async () => {
+    // Turn 4 was hit (stopped, or taken out of the queue); turn 2 had ended.
+    const t = new FakeTransport([{ turn: 4 }, { turn: 0 }]);
+    expect(await agents(t).interrupt("box", "s-1", { turn: 4, region: "nyc" })).toEqual({
+      turn: 4,
+    });
+    expect(t.calls[0]).toEqual({
+      method: "InterruptAgent",
+      req: { vmId: "box", sessionId: "s-1", clearQueue: false, turn: 4 },
+      opts: { region: "nyc", retry: false },
+    });
+    expect(await agents(t).interrupt("box", "s-1", { turn: 2 })).toEqual({ turn: null });
+    expect(t.calls[1]!.req).toMatchObject({ turn: 2, clearQueue: false });
+    await expect(
+      agents(t).interrupt("box", "s-1", { turn: 4, clearQueue: true }),
+    ).rejects.toThrow("turn interrupts that turn only: leave out clearQueue with it");
+    // Not refused: no turn named, or the queue left alone.
+    await agents(t).interrupt("box", "s-1", { turn: undefined, clearQueue: true });
+    await agents(t).interrupt("box", "s-1", { turn: 4, clearQueue: false });
+    expect(t.calls).toHaveLength(4);
+  });
+
+  it("close with whenDone sends it and maps the answer, an empty one too", async () => {
+    const t = new FakeTransport([
+      { pending: true, background: 2 },
+      { pending: false, background: 0 },
+      {}, // a server from before whenDone: it closed the session
+      {},
+    ]);
+    const a = agents(t);
+    expect(await a.close("box", "s-1", { whenDone: true, region: "nyc" })).toEqual({
+      pending: true,
+      background: 2,
+    });
+    expect(t.calls[0]).toEqual({
+      method: "CloseAgentSession",
+      req: { vmId: "box", sessionId: "s-1", whenDone: true },
+      opts: { region: "nyc" },
+    });
+    const closed = { pending: false, background: 0 };
+    expect(await a.close("box", "s-1", { whenDone: true })).toEqual(closed);
+    expect(await a.close("box", "s-1", { whenDone: true })).toEqual(closed);
+    // Without it: at once, as before.
+    expect(await a.close("box", "s-1")).toEqual(closed);
+    expect(t.calls[3]!.req).toEqual({ vmId: "box", sessionId: "s-1", whenDone: false });
   });
 
   it("close, get and list", async () => {
@@ -354,7 +406,7 @@ describe("machines.agents", () => {
     const got = await agents(t).get("box", "s-1");
     const all = await agents(t).list("box", { all: true });
     expect(t.calls.map((c) => [c.method, c.req])).toEqual([
-      ["CloseAgentSession", { vmId: "box", sessionId: "s-1" }],
+      ["CloseAgentSession", { vmId: "box", sessionId: "s-1", whenDone: false }],
       ["GetAgentSession", { vmId: "box", sessionId: "s-1" }],
       ["ListAgentSessions", { vmId: "box", all: true }],
     ]);
@@ -1003,6 +1055,8 @@ describe("machines.agents.run", () => {
       reply: "Fixed: 2 tests.",
       usage: { inputTokens: 5, outputTokens: 7, cacheReadTokens: 100, cacheWriteTokens: 0 },
       kept: false,
+      closesWhenDone: false,
+      background: 0,
     });
     expect("error" in r).toBe(false);
     expect(seen).toEqual([
@@ -1042,7 +1096,8 @@ describe("machines.agents.run", () => {
     });
     expect(send!.req.requestId).toMatch(UUID);
     expect(events!.req).toEqual({ vmId: "box", sessionId: "s-1", afterSeq: 0, follow: true });
-    expect(close!.req).toEqual({ vmId: "box", sessionId: "s-1" });
+    // Once the session has nothing left to do: not on the agent's background work.
+    expect(close!.req).toEqual({ vmId: "box", sessionId: "s-1", whenDone: true });
     expect(t.calls.map((c) => c.opts?.region)).toEqual(["nyc", "nyc", "nyc", "nyc"]);
     // The follow stream is ended once the turn has.
     expect(t.streams[0]!.cancelled).toBe(true);
@@ -1099,6 +1154,8 @@ describe("machines.agents.run", () => {
       reason: "done",
       reply: "ours",
       kept: true,
+      closesWhenDone: false,
+      background: 0,
     });
     expect(seen).toEqual([43, 44]);
     expect(t.calls.map((c) => [c.method, c.req.afterSeq])).toEqual([
@@ -1185,6 +1242,8 @@ describe("machines.agents.run", () => {
       error: "overloaded",
       reply: "",
       kept: false,
+      closesWhenDone: false,
+      background: 0,
     });
     expect("usage" in r).toBe(false);
     expect(t.calls.at(-1)!.method).toBe("CloseAgentSession");
@@ -1196,7 +1255,30 @@ describe("machines.agents.run", () => {
       [{ chunks: [ev(1, { message: { text: "done" } }), finished(2)] }],
     );
     const r = await agents(t).run("box", { harness: "claude-code", text: "x" });
-    expect([r.reply, r.kept]).toEqual(["done", true]);
+    expect([r.reply, r.kept, r.closesWhenDone, r.background]).toEqual(["done", true, false, 0]);
+  });
+
+  it("a session with work left closes when that is done, and the result says so", async () => {
+    // The agent left two commands running in the background.
+    const t = new RunTransport(
+      [aSession(), sent(1), { pending: true, background: 2 }],
+      [{ chunks: [ev(1, { message: { text: "started the build" } }), finished(2)] }],
+    );
+    const r = await agents(t).run("box", { harness: "claude-code", text: "x" });
+    expect([r.reply, r.reason]).toEqual(["started the build", "done"]);
+    expect([r.kept, r.closesWhenDone, r.background]).toEqual([false, true, 2]);
+    expect(t.calls.at(-1)).toMatchObject({
+      method: "CloseAgentSession",
+      req: { vmId: "box", sessionId: "s-1", whenDone: true },
+    });
+
+    // Nothing left: it is closed now.
+    const t2 = new RunTransport(
+      [aSession(), sent(1), { pending: false, background: 0 }],
+      [{ chunks: [finished(1)] }],
+    );
+    const r2 = await agents(t2).run("box", { harness: "claude-code", text: "x" });
+    expect([r2.kept, r2.closesWhenDone, r2.background]).toEqual([false, false, 0]);
   });
 
   it("an abort interrupts the turn, closes the session it started and rejects", async () => {
@@ -1224,9 +1306,64 @@ describe("machines.agents.run", () => {
         "InterruptAgent",
         ...(keep ? [] : ["CloseAgentSession"]),
       ]);
-      expect(t.calls[3]!.req).toEqual({ vmId: "box", sessionId: "s-1", clearQueue: false });
+      // Its own turn, and the session it started at once: nothing waits.
+      expect(t.calls[3]!.req).toEqual({
+        vmId: "box",
+        sessionId: "s-1",
+        clearQueue: false,
+        turn: 1,
+      });
+      if (!keep) {
+        expect(t.calls[4]!.req).toEqual({ vmId: "box", sessionId: "s-1", whenDone: false });
+      }
       expect(t.streams[0]!.cancelled).toBe(true);
     }
+  });
+
+  it("an abort with session interrupts its own turn, also one still waiting", async () => {
+    // The session runs someone else's turn 3; this task's message waits as
+    // turn 4. The abort withdraws turn 4 and leaves turn 3 running.
+    const t = new RunTransport(
+      [
+        aSession({
+          id: "s-7",
+          harness: "codex",
+          state: AgentSessionState.AGENT_SESSION_STATE_RUNNING,
+          turn: 3,
+          lastSeq: 40,
+        }),
+        sent(4, AgentDelivery.AGENT_DELIVERY_QUEUED),
+        { turn: 4 },
+      ],
+      [{ chunks: [onTurn(3, ev(41, { messageDelta: { text: "still at it" } }))], stayOpen: true }],
+    );
+    const ctl = new AbortController();
+    const stop = new Error("stop");
+    setTimeout(() => ctl.abort(stop), 20);
+    const seen: number[] = [];
+    const err = await agents(t)
+      .run("box", {
+        harness: "codex",
+        text: "mine",
+        session: "s-7",
+        signal: ctl.signal,
+        onEvent: (e) => seen.push(e.turn),
+      })
+      .catch((e) => e);
+    expect(err).toBe(stop);
+    expect(seen).toEqual([]);
+    // The session was given: interrupted by turn, and not closed.
+    expect(t.calls.map((c) => c.method)).toEqual([
+      "GetAgentSession",
+      "SendToAgent",
+      "AgentEvents",
+      "InterruptAgent",
+    ]);
+    expect(t.calls[3]).toEqual({
+      method: "InterruptAgent",
+      req: { vmId: "box", sessionId: "s-7", clearQueue: false, turn: 4 },
+      opts: { region: undefined, retry: false },
+    });
   });
 
   it("an aborted signal starts nothing; an abort before the send closes the session", async () => {
@@ -1251,6 +1388,7 @@ describe("machines.agents.run", () => {
     );
     // Nothing was sent, so nothing to interrupt.
     expect(t2.calls.map((c) => c.method)).toEqual(["StartAgentSession", "CloseAgentSession"]);
+    expect(t2.calls[1]!.req).toMatchObject({ whenDone: false });
   });
 
   it("an error while following still closes the session; onEvent's isn't retried", async () => {
@@ -1272,6 +1410,8 @@ describe("machines.agents.run", () => {
       "AgentEvents",
       "CloseAgentSession",
     ]);
+    // At once: the turn didn't end, so nothing of it is left to wait for.
+    expect(t.calls[3]!.req).toMatchObject({ whenDone: false });
 
     const t2 = new RunTransport(
       [aSession(), sent(1), {}],

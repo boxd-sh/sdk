@@ -17,6 +17,7 @@ import grpc
 import pytest
 
 from boxd import (
+    AgentCloseResult,
     AgentInterruptResult,
     AgentLogin,
     AgentLoginResult,
@@ -572,6 +573,48 @@ def test_interrupt():
     assert t.call_options == [{"retry": False}, {"retry": False}]
 
 
+def test_interrupt_one_turn():
+    a, t = agents(
+        api_pb2.InterruptAgentResponse(turn=4), api_pb2.InterruptAgentResponse()
+    )
+    # Stopped, or taken out of the queue.
+    assert a.interrupt("box", "s-1", turn=4, region="nyc") == AgentInterruptResult(turn=4)
+    # Neither: it had ended.
+    assert a.interrupt("box", "s-1", turn=2).turn is None
+    assert [c[1] for c in t.calls] == [
+        api_pb2.InterruptAgentRequest(vm_id="box", session_id="s-1", turn=4),
+        api_pb2.InterruptAgentRequest(vm_id="box", session_id="s-1", turn=2),
+    ]
+    assert t.regions == ["nyc", None]
+    assert t.call_options == [{"retry": False}, {"retry": False}]
+
+
+def test_interrupt_refuses_a_turn_with_clear_queue():
+    a, t = agents()
+    with pytest.raises(ValueError, match="pass turn or clear_queue, not both"):
+        a.interrupt("box", "s-1", turn=4, clear_queue=True)
+    assert t.calls == []
+
+
+def test_close_when_done_says_whether_the_session_is_still_open():
+    a, t = agents(
+        api_pb2.CloseAgentSessionResponse(pending=True, background=2),
+        api_pb2.CloseAgentSessionResponse(),
+    )
+    assert a.close("box", "s-1", when_done=True, region="nyc") == AgentCloseResult(
+        pending=True, background=2
+    )
+    # Nothing left to do: closed now. A server from before `when_done`
+    # answers the same, an empty message.
+    assert a.close("box", "s-1", when_done=True) == AgentCloseResult(
+        pending=False, background=0
+    )
+    closing = api_pb2.CloseAgentSessionRequest(vm_id="box", session_id="s-1", when_done=True)
+    assert [c[1] for c in t.calls] == [closing, closing]
+    assert t.regions == ["nyc", None]
+    assert t.call_options == [{}, {}]
+
+
 def test_close_get_and_list():
     a, t = agents(
         api_pb2.CloseAgentSessionResponse(),
@@ -579,7 +622,7 @@ def test_close_get_and_list():
         api_pb2.ListAgentSessionsResponse(sessions=[a_session(), a_session(id="s-2")]),
         api_pb2.ListAgentSessionsResponse(),
     )
-    assert a.close("box", "s-1") is None
+    assert a.close("box", "s-1") == AgentCloseResult(pending=False, background=0)
     assert a.get("box", "s-1").state == "running"
     assert [s.id for s in a.list("box", all=True)] == ["s-1", "s-2"]
     assert a.list("box") == []
@@ -644,7 +687,7 @@ async def test_async_twin_sends_the_same():
     assert [(e.seq, e.type) for e in events] == [(1, "plan"), (3, "turn.finished")]
     assert isinstance(events[0], AgentPlan) and events[1].reason == "interrupted"
     assert (await a.interrupt("box", "s-1", clear_queue=True)).turn == 1
-    assert await a.close("box", "s-1") is None
+    assert await a.close("box", "s-1") == AgentCloseResult(pending=False, background=0)
     assert (await a.get("box", "s-1")).state == "idle"
     assert len(await a.list("box", all=True)) == 1
 
@@ -756,6 +799,33 @@ async def test_async_runs_and_iter_runs():
     assert [r.turn async for r in a.iter_runs(session="s-1")] == [2, 1]
     assert [c[1].page_token for c in t.calls[1:]] == ["", "p2"]
     assert t.call_options == [{}, {}, {}]
+
+
+async def test_async_interrupt_one_turn_and_close_when_done():
+    t = FakeAsyncTransport(
+        [
+            api_pb2.InterruptAgentResponse(turn=4),
+            api_pb2.CloseAgentSessionResponse(pending=True, background=1),
+            api_pb2.CloseAgentSessionResponse(),
+        ]
+    )
+    a = AsyncMachines(t).agents
+    assert await a.interrupt("box", "s-1", turn=4) == AgentInterruptResult(turn=4)
+    assert await a.close("box", "s-1", when_done=True) == AgentCloseResult(
+        pending=True, background=1
+    )
+    assert await a.close("box", "s-1", when_done=True) == AgentCloseResult(
+        pending=False, background=0
+    )
+    with pytest.raises(ValueError, match="pass turn or clear_queue, not both"):
+        await a.interrupt("box", "s-1", turn=4, clear_queue=True)
+    closing = api_pb2.CloseAgentSessionRequest(vm_id="box", session_id="s-1", when_done=True)
+    assert [c[1] for c in t.calls] == [
+        api_pb2.InterruptAgentRequest(vm_id="box", session_id="s-1", turn=4),
+        closing,
+        closing,
+    ]
+    assert [o.get("retry", True) for o in t.call_options] == [False, True, True]
 
 
 async def test_async_send_refuses_an_unknown_when():
@@ -1407,14 +1477,34 @@ def test_run_starts_a_session_follows_its_turn_and_closes_it():
         request_id=send.request_id,
     )
     assert events == api_pb2.AgentEventsRequest(vm_id="box", session_id="s-1", follow=True)
-    assert close == api_pb2.CloseAgentSessionRequest(vm_id="box", session_id="s-1")
+    # Once it has nothing left to do, which here is now.
+    assert close == api_pb2.CloseAgentSessionRequest(
+        vm_id="box", session_id="s-1", when_done=True
+    )
     assert t.regions == ["nyc"] * 4
+
+
+def test_run_leaves_what_the_agent_runs_in_the_background():
+    a, t = agents(
+        a_session(),
+        sent(1),
+        [message(1, "The build is running."), finished(2)],
+        api_pb2.CloseAgentSessionResponse(pending=True, background=2),
+    )
+    result = a.run("box", "claude-code", "start the build")
+    assert (result.reply, result.reason) == ("The build is running.", "done")
+    # Still open, and closes by itself: not `kept`, which is the caller's to close.
+    assert (result.kept, result.closes_when_done, result.background) == (False, True, 2)
+    assert t.calls[-1] == (
+        "CloseAgentSession",
+        api_pb2.CloseAgentSessionRequest(vm_id="box", session_id="s-1", when_done=True),
+    )
 
 
 def test_run_keep_leaves_the_session_it_started_open():
     a, t = agents(a_session(), sent(1), [finished(1)])
     result = a.run("box", "claude-code", "hi", keep=True)
-    assert result.kept is True
+    assert (result.kept, result.closes_when_done, result.background) == (True, False, 0)
     assert [c[0] for c in t.calls] == ["StartAgentSession", "SendToAgent", "AgentEvents"]
 
 
@@ -1521,7 +1611,7 @@ def test_run_keeps_the_reply_of_a_session_it_could_not_close():
         APIConnectionError("connection reset"),
     )
     result = a.run("box", "claude-code", "x")
-    assert (result.reply, result.kept) == ("done", True)
+    assert (result.reply, result.kept, result.closes_when_done) == ("done", True, False)
 
 
 @pytest.mark.parametrize("keep", [False, True])
@@ -1542,7 +1632,42 @@ def test_run_ctrl_c_interrupts_the_turn_and_closes_the_session_it_started(keep):
         "InterruptAgent",
         *([] if keep else ["CloseAgentSession"]),
     ]
-    assert t.calls[3][1] == api_pb2.InterruptAgentRequest(vm_id="box", session_id="s-1")
+    # Its own turn; and the session is closed at once, whatever it still runs.
+    assert t.calls[3][1] == api_pb2.InterruptAgentRequest(
+        vm_id="box", session_id="s-1", turn=1
+    )
+    if not keep:
+        assert t.calls[4][1] == api_pb2.CloseAgentSessionRequest(vm_id="box", session_id="s-1")
+
+
+def test_run_ctrl_c_while_its_message_still_waits_interrupts_only_its_own_turn():
+    # The session is running turn 3, someone else's; the task waits as turn 4.
+    a, t = agents(
+        a_session(id="s-7", state=api_pb2.AGENT_SESSION_STATE_RUNNING, turn=3, last_seq=40),
+        sent(4, api_pb2.AGENT_DELIVERY_QUEUED),
+        broken(delta(41, "theirs", turn=3), error=KeyboardInterrupt()),
+        api_pb2.InterruptAgentResponse(turn=4),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        a.run("box", "claude-code", "x", session="s-7")
+    assert [c[0] for c in t.calls] == [
+        "GetAgentSession",
+        "SendToAgent",
+        "AgentEvents",
+        "InterruptAgent",
+    ]
+    # Turn 4 is taken out of the queue; turn 3 runs on.
+    assert t.calls[3][1] == api_pb2.InterruptAgentRequest(
+        vm_id="box", session_id="s-7", turn=4
+    )
+
+
+def test_run_ctrl_c_before_the_send_returned_interrupts_nothing():
+    # No turn to name: the session it started is closed, which ends any turn.
+    a, t = agents(a_session(), KeyboardInterrupt(), CLOSED)
+    with pytest.raises(KeyboardInterrupt):
+        a.run("box", "claude-code", "x")
+    assert [c[0] for c in t.calls] == ["StartAgentSession", "SendToAgent", "CloseAgentSession"]
 
 
 def test_run_an_error_while_following_still_closes_the_session():
@@ -1708,6 +1833,25 @@ async def test_async_run_is_the_same():
     ]
     assert t.calls[0][1].cwd == "/srv"
     assert t.calls[0][1].effort == "medium"
+    assert t.calls[3][1].when_done is True
+    assert (result.closes_when_done, result.background) == (False, 0)
+
+
+async def test_async_run_leaves_what_the_agent_runs_in_the_background():
+    t = FakeAsyncTransport(
+        [
+            a_session(),
+            sent(1),
+            [message(1, "The build is running."), finished(2)],
+            api_pb2.CloseAgentSessionResponse(pending=True, background=2),
+        ]
+    )
+    result = await AsyncMachines(t).agents.run("box", "claude-code", "start the build")
+    assert (result.kept, result.closes_when_done, result.background) == (False, True, 2)
+    assert t.calls[-1] == (
+        "CloseAgentSession",
+        api_pb2.CloseAgentSessionRequest(vm_id="box", session_id="s-1", when_done=True),
+    )
 
 
 class QuietAsyncTransport(FakeAsyncTransport):
@@ -1732,7 +1876,7 @@ class QuietAsyncTransport(FakeAsyncTransport):
 @pytest.mark.parametrize("keep", [False, True])
 async def test_async_run_cancelled_interrupts_the_turn_and_closes_the_session(keep):
     t = QuietAsyncTransport(
-        [a_session(), sent(1), api_pb2.InterruptAgentResponse(turn=1), CLOSED],
+        [a_session(), sent(1), [], api_pb2.InterruptAgentResponse(turn=1), CLOSED],
         [an_event(1, turn_started=api_pb2.AgentTurnStarted())],
     )
     started = asyncio.Event()
@@ -1752,6 +1896,41 @@ async def test_async_run_cancelled_interrupts_the_turn_and_closes_the_session(ke
         "InterruptAgent",
         *([] if keep else ["CloseAgentSession"]),
     ]
+    assert t.calls[3][1] == api_pb2.InterruptAgentRequest(
+        vm_id="box", session_id="s-1", turn=1
+    )
+    if not keep:
+        assert t.calls[4][1] == api_pb2.CloseAgentSessionRequest(vm_id="box", session_id="s-1")
+
+
+async def test_async_run_cancelled_while_its_message_still_waits_interrupts_only_its_own_turn():
+    # The session is running turn 3, someone else's; the task waits as turn 4.
+    t = QuietAsyncTransport(
+        [
+            a_session(id="s-7", state=api_pb2.AGENT_SESSION_STATE_RUNNING, turn=3, last_seq=40),
+            sent(4, api_pb2.AGENT_DELIVERY_QUEUED),
+            [],
+            api_pb2.InterruptAgentResponse(turn=4),
+        ],
+        [delta(41, "theirs", turn=3)],
+    )
+    task = asyncio.create_task(
+        AsyncMachines(t).agents.run("box", "claude-code", "x", session="s-7")
+    )
+    while "AgentEvents" not in [c[0] for c in t.calls]:
+        await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert [c[0] for c in t.calls] == [
+        "GetAgentSession",
+        "SendToAgent",
+        "AgentEvents",
+        "InterruptAgent",
+    ]
+    assert t.calls[3][1] == api_pb2.InterruptAgentRequest(
+        vm_id="box", session_id="s-7", turn=4
+    )
 
 
 async def test_async_run_an_error_while_following_still_closes_the_session(clock):

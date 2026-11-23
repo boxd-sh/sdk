@@ -5,6 +5,8 @@
  * and the client's region router must not let that end past the error), and
  * a follow stream on a path that goes silent fails, by the channel's
  * keepalive, instead of waiting forever, so `run()` follows its turn again.
+ * And an interrupt's `turn` and a close's `whenDone` reach the server, with
+ * their answers back.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import net from "node:net";
@@ -23,7 +25,10 @@ import {
   type AgentEvent,
   type AgentEventsRequest,
   type AgentSession,
+  type CloseAgentSessionRequest,
+  type CloseAgentSessionResponse,
   type GetAgentSessionRequest,
+  type InterruptAgentRequest,
 } from "../src/_generated/api.js";
 import { Transport } from "../src/_transport.js";
 import { MachineAgents } from "../src/agents.js";
@@ -33,7 +38,8 @@ import { Boxd } from "../src/index.js";
 
 /**
  * A machine with one session whose events the test appends. The machine
- * named `forgetful` knows no session when its events are asked for.
+ * named `forgetful` knows no session when its events are asked for, and the
+ * session `busy` has two commands running in the background.
  */
 async function startServer() {
   /** The calls the server got, in order. */
@@ -85,13 +91,18 @@ async function startServer() {
         append({ turnStarted: {} });
         cb(null, { turn: 1, delivery: AgentDelivery.AGENT_DELIVERY_STARTED });
       },
-      interruptAgent(_call: unknown, cb: sendUnaryData<unknown>) {
-        calls.push("interrupt");
-        cb(null, { turn: 1 });
+      interruptAgent(call: { request: InterruptAgentRequest }, cb: sendUnaryData<unknown>) {
+        calls.push(`interrupt turn ${call.request.turn}`);
+        cb(null, { turn: call.request.turn || 1 });
       },
-      closeAgentSession(_call: unknown, cb: sendUnaryData<unknown>) {
-        calls.push("close");
-        cb(null, {});
+      closeAgentSession(
+        call: { request: CloseAgentSessionRequest },
+        cb: sendUnaryData<CloseAgentSessionResponse>,
+      ) {
+        const { sessionId, whenDone } = call.request;
+        calls.push(whenDone ? "close when done" : "close");
+        const pending = whenDone && sessionId === "busy";
+        cb(null, { pending, background: pending ? 2 : 0 });
       },
       agentEvents(call: ServerWritableStream<AgentEventsRequest, AgentEvent>) {
         const { vmId, sessionId, afterSeq, follow } = call.request;
@@ -180,14 +191,29 @@ afterEach(async () => {
   running = undefined;
 });
 
-describe("machines.agents over grpc-js: a not-found on the event stream", () => {
-  const client = (port: number) => {
-    const baseURL = `http://127.0.0.1:${port}`;
-    const boxd = new Boxd({ token: "test-token", baseURL, maxRetries: 0 });
-    closers.push(() => boxd.close());
-    return boxd.machines.agents;
-  };
+/** `machines.agents` of a `Boxd` client for the server on `port`. */
+function client(port: number) {
+  const baseURL = `http://127.0.0.1:${port}`;
+  const boxd = new Boxd({ token: "test-token", baseURL, maxRetries: 0 });
+  closers.push(() => boxd.close());
+  return boxd.machines.agents;
+}
 
+describe("machines.agents over grpc-js: interrupt and close", () => {
+  it("an interrupt's turn and a close's whenDone reach the server, its answers the caller", async () => {
+    running = await startServer();
+    const agents = client(running.port);
+    expect(await agents.interrupt("box", "s-1", { turn: 4 })).toEqual({ turn: 4 });
+    expect(await agents.close("box", "busy", { whenDone: true })).toEqual({
+      pending: true,
+      background: 2,
+    });
+    expect(await agents.close("box", "busy")).toEqual({ pending: false, background: 0 });
+    expect(running.calls).toEqual(["interrupt turn 4", "close when done", "close"]);
+  });
+});
+
+describe("machines.agents over grpc-js: a not-found on the event stream", () => {
   it("events() for a session the machine doesn't have rejects with NotFoundError", async () => {
     running = await startServer();
     const agents = client(running.port);
@@ -261,6 +287,12 @@ describe("machines.agents over grpc-js: a path that goes silent", () => {
     });
     expect([result.reason, result.reply, result.kept]).toEqual(["done", "Fixed.", false]);
     expect(seen).toEqual(["turn.started", "message", "turn.finished"]);
-    expect(calls).toEqual(["start", "send", "events after 0", "events after 1", "close"]);
+    expect(calls).toEqual([
+      "start",
+      "send",
+      "events after 0",
+      "events after 1",
+      "close when done",
+    ]);
   }, 15_000);
 });

@@ -19,6 +19,7 @@ from . import spec as _spec
 
 from .models import (
     Account,
+    AgentCloseResult,
     AgentDelivery,
     AgentEvent,
     AgentFinishReason,
@@ -759,6 +760,11 @@ def agent_send_result(msg) -> AgentSendResult:
 def agent_interrupt_result(msg) -> AgentInterruptResult:
     # Turns are numbered from 1: 0 is "nothing was running".
     return AgentInterruptResult(turn=msg.turn or None)
+
+
+def agent_close_result(msg) -> AgentCloseResult:
+    # A server from before `when_done` answers an empty message: closed now.
+    return AgentCloseResult(pending=msg.pending, background=msg.background)
 
 
 def _tool_input(raw: str) -> Any:

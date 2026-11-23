@@ -2201,19 +2201,38 @@ message InterruptAgentRequest {
   // Also drop the messages waiting for the next turns. Without it, the next
   // waiting message starts its turn once the interrupted one has ended.
   bool clear_queue  = 3;
+  // Only this turn: stopped if it is the one running, taken out of the queue
+  // if its message is still waiting (it then ends as interrupted without
+  // having run), and left alone if it is neither (it has ended). 0: the
+  // running turn, whichever it is. Not together with `clear_queue`.
+  uint64 turn       = 4;
 }
 
 message InterruptAgentResponse {
-  // The turn that was interrupted; 0 when none was running.
+  // The turn that was interrupted, or with `turn` taken out of the queue; 0
+  // when none was.
   uint64 turn = 1;
 }
 
 message CloseAgentSessionRequest {
   string vm_id      = 1;  // machine name or id
   string session_id = 2;
+  // Close once the session has nothing left to do, instead of at once: no
+  // turn running, no message waiting, and no command the agent left running
+  // in the background (Claude Code's background tasks; the agent reports
+  // their end in a turn of its own, which is waited for too). Until then the
+  // session stays open and takes messages as before. A close without this
+  // closes it at once, whatever is left.
+  bool when_done    = 3;
 }
 
-message CloseAgentSessionResponse {}
+message CloseAgentSessionResponse {
+  // With `when_done`: the session still has work, and closes by itself when
+  // that is done. False: it is closed now.
+  bool pending      = 1;
+  // With `pending`: how many commands the agent still runs in the background.
+  uint32 background = 2;
+}
 
 message GetAgentSessionRequest {
   string vm_id      = 1;  // machine name or id

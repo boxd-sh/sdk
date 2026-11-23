@@ -66,6 +66,7 @@ from .. import _requests as req
 from .._generated import api_pb2
 from ..errors import BoxdError
 from ..models import (
+    AgentCloseResult,
     AgentEvent,
     AgentFinishReason,
     AgentInterruptResult,
@@ -144,6 +145,16 @@ def _send(
         # Kept across the transport's retries: a repeat gets the first
         # attempt's answer instead of sending the message twice.
         request_id=request_id or str(uuid.uuid4()),
+    )
+
+
+def _interrupt(
+    machine_id: str, session_id: str, *, clear_queue: bool, turn: int | None
+) -> api_pb2.InterruptAgentRequest:
+    if turn and clear_queue:
+        raise ValueError("pass turn or clear_queue, not both")
+    return api_pb2.InterruptAgentRequest(
+        vm_id=machine_id, session_id=session_id, clear_queue=clear_queue, turn=turn or 0
     )
 
 
@@ -367,7 +378,11 @@ class _TurnFollow:
             "it may have been closed"
         )
 
-    def result(self, session: AgentSession, *, kept: bool) -> AgentRunResult:
+    def result(
+        self, session: AgentSession, *, kept: bool, closed: AgentCloseResult | None
+    ) -> AgentRunResult:
+        """`closed`: what closing the session answered; None when it wasn't
+        closed (kept, or the close failed)."""
         return AgentRunResult(
             session_id=session.id,
             machine_id=session.machine_id,
@@ -380,6 +395,8 @@ class _TurnFollow:
             reply=self._streamed if self._streamed.strip() else self._reply,
             usage=self._usage,
             kept=kept,
+            closes_when_done=closed is not None and closed.pending,
+            background=closed.background if closed is not None else 0,
         )
 
 
@@ -534,6 +551,7 @@ class Agents(Namespace):
         session_id: str,
         *,
         clear_queue: bool = False,
+        turn: int | None = None,
         region: str | None = None,
     ) -> AgentInterruptResult:
         """Stop the session's running turn; its last event says
@@ -543,28 +561,51 @@ class Agents(Namespace):
         `clear_queue` also drops the messages waiting for the next turns.
         Without it, the next waiting message starts its turn once the
         interrupted one has ended.
+
+        `turn` interrupts only that turn, whichever turn is running: stopped
+        if it is the one running, taken out of the queue if its message is
+        still waiting (it then ends as ``"interrupted"`` without having run),
+        and left alone if it has ended. The result's ``turn`` is then that
+        turn when it was stopped or taken out, None when it was neither. Not
+        together with `clear_queue`.
         """
         # Sent once: sent again after a lost answer, it could interrupt the
         # turn the next waiting message just started.
         return m.agent_interrupt_result(
             self._transport.call(
                 "InterruptAgent",
-                api_pb2.InterruptAgentRequest(
-                    vm_id=machine_id, session_id=session_id, clear_queue=clear_queue
-                ),
+                _interrupt(machine_id, session_id, clear_queue=clear_queue, turn=turn),
                 region=region,
                 retry=False,
             )
         )
 
-    def close(self, machine_id: str, session_id: str, *, region: str | None = None) -> None:
+    def close(
+        self,
+        machine_id: str,
+        session_id: str,
+        *,
+        when_done: bool = False,
+        region: str | None = None,
+    ) -> AgentCloseResult:
         """End a session: interrupts its running turn, drops the messages
         waiting for it and stops its agent. Its events stay readable. Closing
-        a closed session does nothing."""
-        self._transport.call(
-            "CloseAgentSession",
-            api_pb2.CloseAgentSessionRequest(vm_id=machine_id, session_id=session_id),
-            region=region,
+        a closed session does nothing.
+
+        `when_done` closes it once it has nothing left to do instead: no turn
+        running, no message waiting, and no command the agent left running in
+        the background. Until then it stays open and takes messages as
+        before: the result's ``pending`` says it closes later by itself, and
+        ``background`` how many commands still run.
+        """
+        return m.agent_close_result(
+            self._transport.call(
+                "CloseAgentSession",
+                api_pb2.CloseAgentSessionRequest(
+                    vm_id=machine_id, session_id=session_id, when_done=when_done
+                ),
+                region=region,
+            )
         )
 
     def get(
@@ -629,12 +670,19 @@ class Agents(Namespace):
 
         A turn that ends other than ``"done"`` doesn't raise: ``reason`` (and
         ``error``) says how it ended. A session this starts is closed
-        afterwards, also when following the turn fails, unless `keep`.
-        Ctrl-C (:class:`KeyboardInterrupt`) interrupts the turn, closes a
-        session this started (unless `keep`) and is raised again. The start
-        and the send are retried as :meth:`start` and :meth:`send` are, and
-        an event stream that breaks is followed again from the last event
-        seen, up to 5 times.
+        afterwards, also when following the turn fails, unless `keep`. After
+        the turn it is closed once it has nothing left to do, not at once, so
+        a command the agent left running in the background isn't stopped: the
+        result's ``closes_when_done`` then says the session is still open and
+        closes by itself, and ``background`` how many commands still run.
+
+        Ctrl-C (:class:`KeyboardInterrupt`) interrupts this task's turn and no
+        other: stopped if it is running, withdrawn if its message is still
+        waiting behind another turn of `session`. It closes a session this
+        started at once (unless `keep`) and is raised again. The start and
+        the send are retried as :meth:`start` and :meth:`send` are, and an
+        event stream that breaks is followed again from the last event seen,
+        up to 5 times.
         """
         _check_run(
             session, model=model, effort=effort, cwd=cwd, instructions=instructions, env=env
@@ -670,7 +718,8 @@ class Agents(Namespace):
             # Exception (Ctrl-C, SystemExit): the caller is stopping.
             if sent is not None and not isinstance(e, Exception):
                 try:
-                    self.interrupt(machine_id, s.id, region=region)
+                    # Its own turn, not whichever one the session is running.
+                    self.interrupt(machine_id, s.id, turn=sent.turn, region=region)
                 except Exception:
                     pass
             if close:
@@ -679,14 +728,16 @@ class Agents(Namespace):
                 except Exception:
                     pass
             raise
-        kept = not close
+        kept, closed = not close, None
         if close:
             try:
-                self.close(machine_id, s.id, region=region)
+                # Not at once: that would stop what the agent left running in
+                # the background.
+                closed = self.close(machine_id, s.id, when_done=True, region=region)
             except BoxdError:
                 # The turn's reply isn't lost to it: `kept` says it's still open.
                 kept = True
-        return follow.result(s, kept=kept)
+        return follow.result(s, kept=kept, closed=closed)
 
     def _follow_turn(
         self,
@@ -1044,28 +1095,36 @@ class AsyncAgents(Namespace):
         session_id: str,
         *,
         clear_queue: bool = False,
+        turn: int | None = None,
         region: str | None = None,
     ) -> AgentInterruptResult:
         """Stop the session's running turn. See :meth:`Agents.interrupt`."""
         return m.agent_interrupt_result(
             await self._transport.call(
                 "InterruptAgent",
-                api_pb2.InterruptAgentRequest(
-                    vm_id=machine_id, session_id=session_id, clear_queue=clear_queue
-                ),
+                _interrupt(machine_id, session_id, clear_queue=clear_queue, turn=turn),
                 region=region,
                 retry=False,
             )
         )
 
     async def close(
-        self, machine_id: str, session_id: str, *, region: str | None = None
-    ) -> None:
+        self,
+        machine_id: str,
+        session_id: str,
+        *,
+        when_done: bool = False,
+        region: str | None = None,
+    ) -> AgentCloseResult:
         """End a session. See :meth:`Agents.close`."""
-        await self._transport.call(
-            "CloseAgentSession",
-            api_pb2.CloseAgentSessionRequest(vm_id=machine_id, session_id=session_id),
-            region=region,
+        return m.agent_close_result(
+            await self._transport.call(
+                "CloseAgentSession",
+                api_pb2.CloseAgentSessionRequest(
+                    vm_id=machine_id, session_id=session_id, when_done=when_done
+                ),
+                region=region,
+            )
         )
 
     async def get(
@@ -1111,8 +1170,9 @@ class AsyncAgents(Namespace):
         """Run one task, start to reply. See :meth:`Agents.run`.
 
         Cancelling the task (``task.cancel()``, ``asyncio.timeout``)
-        interrupts the turn, closes a session this started (unless `keep`),
-        and the :class:`asyncio.CancelledError` is raised again."""
+        interrupts its turn and no other, as Ctrl-C does, closes a session
+        this started at once (unless `keep`), and the
+        :class:`asyncio.CancelledError` is raised again."""
         _check_run(
             session, model=model, effort=effort, cwd=cwd, instructions=instructions, env=env
         )
@@ -1149,7 +1209,8 @@ class AsyncAgents(Namespace):
             # Exception (cancelled, Ctrl-C): the caller is stopping.
             if sent is not None and not isinstance(e, Exception):
                 try:
-                    await self.interrupt(machine_id, s.id, region=region)
+                    # Its own turn, not whichever one the session is running.
+                    await self.interrupt(machine_id, s.id, turn=sent.turn, region=region)
                 except Exception:
                     pass
             if close:
@@ -1158,13 +1219,15 @@ class AsyncAgents(Namespace):
                 except Exception:
                     pass
             raise
-        kept = not close
+        kept, closed = not close, None
         if close:
             try:
-                await self.close(machine_id, s.id, region=region)
+                # Not at once: that would stop what the agent left running in
+                # the background.
+                closed = await self.close(machine_id, s.id, when_done=True, region=region)
             except BoxdError:
                 kept = True
-        return follow.result(s, kept=kept)
+        return follow.result(s, kept=kept, closed=closed)
 
     async def _follow_turn(
         self,
