@@ -28,9 +28,29 @@ _BACKOFF_BASE_SECS = 0.5
 # directions to 64 MiB — enough for realistic single-message file reads while
 # still bounding memory. Larger transfers should use the streaming file path.
 _MAX_MESSAGE_BYTES = 64 * 1024 * 1024
+
+# HTTP/2 keepalive, as the CLI's. A stream that is followed (an agent's
+# events, an exec) has no deadline and can be quiet for minutes. If the path
+# dies without a word meanwhile (a NAT or firewall dropping the idle
+# connection), nothing would ever end it: ``events(follow=True)`` and
+# ``run()`` would wait forever. So while a call is open the client sends a
+# PING after this long without hearing from the server, and the call fails
+# (`unavailable`) when no answer comes within the timeout. With no call open
+# nothing is sent, so an idle client inside a machine doesn't keep it awake.
+_KEEPALIVE_SECS = 45
+_KEEPALIVE_TIMEOUT_SECS = 20
+
 _CHANNEL_OPTIONS = [
     ("grpc.max_receive_message_length", _MAX_MESSAGE_BYTES),
     ("grpc.max_send_message_length", _MAX_MESSAGE_BYTES),
+    ("grpc.keepalive_time_ms", _KEEPALIVE_SECS * 1000),
+    # The wait for a PING's answer. gRPC goes by one or the other depending
+    # on its version (grpcio 1.85 by the second: a minute when unset).
+    ("grpc.keepalive_timeout_ms", _KEEPALIVE_TIMEOUT_SECS * 1000),
+    ("grpc.http2.ping_timeout_ms", _KEEPALIVE_TIMEOUT_SECS * 1000),
+    # Unset, gRPC allows itself two PINGs without sending data in between,
+    # and on a quiet stream the client sends none: the keepalive would stop.
+    ("grpc.http2.max_pings_without_data", 0),
 ]
 
 

@@ -29,7 +29,7 @@
  * and are deprecated.
  */
 import type { ReadableCall, Transport } from "./_rpc.js";
-import { BoxdError, isRetryable } from "./errors.js";
+import { BoxdError, GrpcStatus } from "./errors.js";
 import type { RegionOption } from "./regions.js";
 import type { TimeBound } from "./utils.js";
 import {
@@ -837,6 +837,30 @@ function abortableSleep(ms: number, signal: AbortSignal | undefined): Promise<vo
  *  breaks (a network blip, a proxy restart), from the last event it saw. */
 const RUN_RECONNECTS = 5;
 
+/** Statuses that answer the request itself (no such session, not allowed,
+ *  …): following again would get the same answer, so `run()` rejects with
+ *  them. Any other failure is a break on the way and is followed again. */
+const RUN_FINAL_STATUSES: ReadonlySet<number> = new Set([
+  GrpcStatus.NOT_FOUND,
+  GrpcStatus.PERMISSION_DENIED,
+  GrpcStatus.UNAUTHENTICATED,
+  GrpcStatus.INVALID_ARGUMENT,
+  GrpcStatus.FAILED_PRECONDITION,
+  GrpcStatus.UNIMPLEMENTED,
+  GrpcStatus.OUT_OF_RANGE,
+  GrpcStatus.ALREADY_EXISTS,
+]);
+
+/** Whether `run()` follows its turn again after its event stream failed
+ *  with `err`. */
+function followAgain(err: unknown): boolean {
+  return !(
+    err instanceof BoxdError &&
+    err.grpcCode !== undefined &&
+    RUN_FINAL_STATUSES.has(err.grpcCode)
+  );
+}
+
 /** What a turn came to, from its events (`run()`): its last whole reply (or,
  *  for an agent that only streams, what the pieces since add up to), its
  *  tokens, and how it ended. */
@@ -1215,9 +1239,9 @@ export class MachineAgents {
 
   /** `run()`'s wait: the session's events from after `session.lastSeq`
    *  until `turn`'s `turn.finished`, the other turns' skipped. A stream that
-   *  breaks is followed again from the last event seen: one that fails to
-   *  open only after a lost connection, one that has carried events after
-   *  any failure. */
+   *  fails is followed again from the last event seen, whether or not it
+   *  had carried an event yet, unless the failure answers the request itself
+   *  ({@link RUN_FINAL_STATUSES}) or the caller aborted. */
   async #followTurn(
     machine: string,
     session: AgentSession,
@@ -1235,14 +1259,15 @@ export class MachineAgents {
         signal,
         region,
       });
-      let carried = false;
       try {
         for (;;) {
           let next: IteratorResult<AgentEvent, void>;
           try {
             next = await stream.next();
           } catch (err) {
-            if (reconnects < RUN_RECONNECTS && (carried || isRetryable(err))) break;
+            // The caller's abort ends the run, whatever the stream said.
+            signal?.throwIfAborted();
+            if (reconnects < RUN_RECONNECTS && followAgain(err)) break;
             throw err;
           }
           if (next.done) {
@@ -1252,7 +1277,6 @@ export class MachineAgents {
             );
           }
           const ev = next.value;
-          carried = true;
           after = ev.seq;
           if (ev.turn !== turn) continue;
           outcome.observe(ev);

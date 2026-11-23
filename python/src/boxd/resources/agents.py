@@ -64,7 +64,7 @@ from datetime import datetime
 from .. import _mappers as m
 from .. import _requests as req
 from .._generated import api_pb2
-from ..errors import APIConnectionError, BoxdError
+from ..errors import BoxdError
 from ..models import (
     AgentEvent,
     AgentFinishReason,
@@ -261,6 +261,22 @@ _RUN_RECONNECTS = 5
 """How many times `run` follows its turn again after the event stream breaks
 (a network blip, a proxy restart), from the last event it saw."""
 
+_RUN_FINAL = frozenset(
+    {
+        "not_found",
+        "permission_denied",
+        "unauthenticated",
+        "invalid_argument",
+        "failed_precondition",
+        "unimplemented",
+        "out_of_range",
+        "already_exists",
+    }
+)
+"""The statuses (an error's ``code``) that answer `run`'s request for the
+events itself (no such session, not allowed): asking again would get the same
+answer, so `run` raises them instead of following again."""
+
 
 def _check_run(
     session: str | None,
@@ -301,7 +317,6 @@ class _TurnFollow:
         self.turn = turn
         self._after = session.last_seq
         self._reconnects = 0
-        self._carried = False
         self._reply = ""
         self._streamed = ""
         self._usage: AgentRunUsage | None = None
@@ -310,12 +325,10 @@ class _TurnFollow:
 
     def connect(self) -> int:
         """A new stream: the ``seq`` to follow on from."""
-        self._carried = False
         return self._after
 
     def take(self, event: AgentEvent) -> bool:
         """Note one event; True when it is the turn's own."""
-        self._carried = True
         self._after = event.seq
         if event.turn != self.turn:
             return False
@@ -338,11 +351,12 @@ class _TurnFollow:
 
     def again(self, err: BoxdError) -> float | None:
         """Seconds to wait before following again after `err`, or None to
-        raise it. A stream that failed to open is followed again only after
-        a lost connection; one that had carried events, after any failure."""
-        if self._reconnects >= _RUN_RECONNECTS:
-            return None
-        if not (self._carried or isinstance(err, APIConnectionError)):
+        raise it. A stream that failed to open can't always be told from one
+        that opened and broke before its first event, so the error decides:
+        an answer about the request itself (`_RUN_FINAL`) is raised, and any
+        other failure (a lost connection, no answer in time, the server or
+        the way to the machine breaking) is followed again."""
+        if self._reconnects >= _RUN_RECONNECTS or err.code in _RUN_FINAL:
             return None
         self._reconnects += 1
         return float(self._reconnects)

@@ -4,7 +4,8 @@
  * follow stream, the call ended when the reader stops early), the run
  * history (`runs`, its pages and their iterator), signing an agent in
  * (`startLogin`, `completeLogin`, `waitForLogin`, `getLogin`, `logout`), and
- * one task start to reply (`run`: its session, its reply, abort, cleanup).
+ * one task start to reply (`run`: its session, its reply, abort, cleanup,
+ * and which failures of its event stream it follows again).
  */
 import { describe, expect, it } from "bun:test";
 import {
@@ -18,7 +19,15 @@ import {
 } from "../src/_generated/definitions.js";
 import type { CallOptions, MethodDef, Transport, UnaryOptions } from "../src/_rpc.js";
 import { withRetries } from "../src/_retry.js";
-import { APIConnectionError, BoxdError } from "../src/errors.js";
+import {
+  APIConnectionError,
+  APIStatusError,
+  BoxdError,
+  ConflictError,
+  GrpcStatus,
+  NotFoundError,
+  PermissionDeniedError,
+} from "../src/errors.js";
 import { toAgentEvent, toAgentLoginStart, toAgentRun } from "../src/agents.js";
 import {
   Boxd,
@@ -893,6 +902,51 @@ const onTurn = (turn: number, e: PbAgentEvent): PbAgentEvent => ({ ...e, turn })
 const finished = (seq: number, reason = AgentFinishReason.AGENT_FINISH_REASON_DONE, error = "") =>
   ev(seq, { turnFinished: { reason, error } });
 
+/** Runs `fn` with `run()`'s pauses before it follows again (whole seconds)
+ *  cut to a millisecond each; `slept` is what it asked for, in order. */
+async function withShortBackoff<T>(fn: (slept: number[]) => Promise<T>): Promise<T> {
+  const real = globalThis.setTimeout;
+  const slept: number[] = [];
+  globalThis.setTimeout = ((cb: () => void, ms?: number) => {
+    if (ms === undefined || ms < 1000) return real(cb, ms);
+    slept.push(ms);
+    return real(cb, 1);
+  }) as typeof setTimeout;
+  try {
+    return await fn(slept);
+  } finally {
+    globalThis.setTimeout = real;
+  }
+}
+
+/** A transport whose event stream reads from one log, after the request's
+ *  `afterSeq` as the service does, and breaks after every `perStream` events
+ *  until the log has been read to its end. */
+class LogTransport extends FakeTransport {
+  constructor(
+    responses: unknown[],
+    private readonly log: PbAgentEvent[],
+    private readonly perStream: number,
+  ) {
+    super(responses);
+  }
+  override serverStream<Req>(
+    method: MethodDef<Req, unknown>,
+    req: Req,
+    opts?: CallOptions & { deadline?: boolean },
+  ) {
+    this.calls.push({ method: method.name, req: req as Record<string, unknown>, opts });
+    const left = this.log.filter((e) => e.seq > (req as { afterSeq: number }).afterSeq);
+    const s = new FakeStream(
+      left.slice(0, this.perStream),
+      left.length > this.perStream ? new APIConnectionError("connection reset") : undefined,
+      true,
+    );
+    this.streams.push(s);
+    return s;
+  }
+}
+
 describe("machines.agents.run", () => {
   it("starts a session, sends the task, follows its turn and closes the session", async () => {
     const t = new RunTransport(
@@ -1202,10 +1256,15 @@ describe("machines.agents.run", () => {
   it("an error while following still closes the session; onEvent's isn't retried", async () => {
     const t = new RunTransport(
       [aSession(), sent(1), {}],
-      [{ chunks: [], error: new Error("machine went away") }],
+      [
+        {
+          chunks: [],
+          error: new ConflictError("this session is closed", GrpcStatus.FAILED_PRECONDITION),
+        },
+      ],
     );
     await expect(agents(t).run("box", { harness: "codex", text: "x" })).rejects.toThrow(
-      "machine went away",
+      "this session is closed",
     );
     expect(t.calls.map((c) => c.method)).toEqual([
       "StartAgentSession",
@@ -1264,6 +1323,185 @@ describe("machines.agents.run", () => {
     expect([r.reply, r.reason]).toEqual(["Hello", "done"]);
     const follows = t.calls.filter((c) => c.method === "AgentEvents");
     expect(follows.map((c) => c.req.afterSeq)).toEqual([3, 5]);
+  });
+
+  it("a stream that breaks before its first event is followed again, whatever broke it", async () => {
+    for (const broke of [
+      new APIStatusError("error reading a body from connection", GrpcStatus.UNKNOWN),
+      new APIStatusError("h2 protocol error: stream reset", GrpcStatus.INTERNAL),
+      new APIStatusError("the agent service didn't answer in time", GrpcStatus.DEADLINE_EXCEEDED),
+      // The server gave the call up (it is stopping), not the caller.
+      new APIStatusError("Call cancelled", GrpcStatus.CANCELLED),
+      new APIConnectionError("connection reset", GrpcStatus.UNAVAILABLE),
+      // A failure of the connection itself, with no status at all.
+      new TypeError("network error"),
+    ]) {
+      const t = new RunTransport(
+        [aSession({ lastSeq: 3 }), sent(2), {}],
+        [
+          { chunks: [], error: broke },
+          { chunks: [onTurn(2, ev(4, { message: { text: "done" } })), onTurn(2, finished(5))] },
+        ],
+      );
+      const [r, slept] = await withShortBackoff(async (slept) => [
+        await agents(t).run("box", { harness: "codex", text: "x" }),
+        slept,
+      ]);
+      expect([r.reply, r.reason, r.kept]).toEqual(["done", "done", false]);
+      expect(slept).toEqual([1000]);
+      const follows = t.calls.filter((c) => c.method === "AgentEvents");
+      expect(follows.map((c) => c.req.afterSeq)).toEqual([3, 3]);
+    }
+  });
+
+  it("an answer about the request itself is not followed again", async () => {
+    for (const refused of [
+      new NotFoundError('no session "s-1" on this machine', GrpcStatus.NOT_FOUND),
+      new PermissionDeniedError("this account is disabled", GrpcStatus.PERMISSION_DENIED),
+    ]) {
+      // Refused at once, and after the stream had carried events.
+      for (const chunks of [[], [ev(1, { turnStarted: {} })]]) {
+        const t = new RunTransport(
+          [aSession(), sent(1), {}],
+          [{ chunks, error: refused }, { chunks: [finished(2)] }],
+        );
+        const [err, slept] = await withShortBackoff(async (slept) => [
+          await agents(t)
+            .run("box", { harness: "codex", text: "x" })
+            .catch((e) => e),
+          slept,
+        ]);
+        expect(err).toBe(refused);
+        expect(slept).toEqual([]);
+        expect(t.calls.map((c) => c.method)).toEqual([
+          "StartAgentSession",
+          "SendToAgent",
+          "AgentEvents",
+          "CloseAgentSession",
+        ]);
+      }
+    }
+  });
+
+  it("no event reaches onEvent twice when the stream is followed again", async () => {
+    const log = [
+      ev(1, { turnStarted: {} }),
+      ev(2, { messageDelta: { text: "a" } }),
+      ev(3, { messageDelta: { text: "b" } }),
+      ev(4, { messageDelta: { text: "c" } }),
+      ev(5, { message: { text: "abc" } }),
+      finished(6),
+    ];
+    // Two events a stream, then it breaks: three streams read the six.
+    const t = new LogTransport([aSession(), sent(1), {}], log, 2);
+    const seen: number[] = [];
+    const r = await withShortBackoff(() =>
+      agents(t).run("box", { harness: "codex", text: "x", onEvent: (e) => seen.push(e.seq) }),
+    );
+    expect(seen).toEqual([1, 2, 3, 4, 5, 6]);
+    expect([r.reply, r.reason]).toEqual(["abc", "done"]);
+    const follows = t.calls.filter((c) => c.method === "AgentEvents");
+    expect(follows.map((c) => c.req.afterSeq)).toEqual([0, 2, 4]);
+  });
+
+  it("follows again 5 times in a run, then rejects and closes the session it started", async () => {
+    const broke = (n: number) => new APIStatusError(`reset ${n}`, GrpcStatus.INTERNAL);
+    const t = new RunTransport(
+      [aSession(), sent(1), {}],
+      [
+        // Each stream gets further before it breaks: the count is the run's.
+        ...[1, 2, 3, 4, 5, 6].map((n) => ({
+          chunks: [ev(n, { messageDelta: { text: "." } })],
+          error: broke(n),
+        })),
+        { chunks: [finished(7)] },
+      ],
+    );
+    const [err, slept] = await withShortBackoff(async (slept) => [
+      await agents(t)
+        .run("box", { harness: "codex", text: "x" })
+        .catch((e) => e),
+      slept,
+    ]);
+    expect(err).toBeInstanceOf(APIStatusError);
+    expect(err.message).toBe("reset 6");
+    expect(slept).toEqual([1000, 2000, 3000, 4000, 5000]);
+    const follows = t.calls.filter((c) => c.method === "AgentEvents");
+    expect(follows.map((c) => c.req.afterSeq)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(t.calls.at(-1)!.method).toBe("CloseAgentSession");
+  });
+
+  it("an abort while it waits to follow again rejects at once", async () => {
+    const t = new RunTransport(
+      [aSession(), sent(1), { turn: 1 }, {}],
+      [
+        { chunks: [ev(1, { turnStarted: {} })], error: new APIConnectionError("connection reset") },
+        { chunks: [finished(2)] },
+      ],
+    );
+    const ctl = new AbortController();
+    const stop = new Error("stop");
+    const started = Date.now();
+    const err = await agents(t)
+      .run("box", {
+        harness: "codex",
+        text: "x",
+        signal: ctl.signal,
+        // The stream breaks right after this event; the abort comes during
+        // the second it then waits.
+        onEvent: () => setTimeout(() => ctl.abort(stop), 20),
+      })
+      .catch((e) => e);
+    expect(err).toBe(stop);
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(t.calls.map((c) => c.method)).toEqual([
+      "StartAgentSession",
+      "SendToAgent",
+      "AgentEvents",
+      "InterruptAgent",
+      "CloseAgentSession",
+    ]);
+  });
+
+  it("an abort that comes with a stream's failure is the abort, not a break", async () => {
+    let ctl = new AbortController();
+    const stop = new Error("stop");
+    /** Aborts as soon as the stream has reported its failure. */
+    class AbortingTransport extends RunTransport {
+      override serverStream<Req>(
+        method: MethodDef<Req, unknown>,
+        req: Req,
+        opts?: CallOptions & { deadline?: boolean },
+      ) {
+        const s = super.serverStream(method, req, opts);
+        const on = s.on.bind(s);
+        s.on = (event, fn) =>
+          on(event, (arg) => {
+            fn(arg);
+            if (event === "error") ctl.abort(stop);
+          });
+        return s;
+      }
+    }
+    for (const broke of [
+      new APIConnectionError("connection reset"),
+      new NotFoundError('no session "s-1" on this machine', GrpcStatus.NOT_FOUND),
+    ]) {
+      ctl = new AbortController();
+      const t = new AbortingTransport(
+        [aSession(), sent(1), { turn: 1 }, {}],
+        [{ chunks: [], error: broke }, { chunks: [finished(1)] }],
+      );
+      const [err, slept] = await withShortBackoff(async (slept) => [
+        await agents(t)
+          .run("box", { harness: "codex", text: "x", signal: ctl.signal })
+          .catch((e) => e),
+        slept,
+      ]);
+      expect(err).toBe(stop);
+      expect(slept).toEqual([]);
+      expect(t.calls.filter((c) => c.method === "AgentEvents")).toHaveLength(1);
+    }
   });
 });
 

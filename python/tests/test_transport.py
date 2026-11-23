@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import socket
+import threading
+import time
+from concurrent import futures
+
 import grpc
 import pytest
 
+from boxd import _transport
 from boxd._generated import api_pb2
 from boxd._transport import AsyncTransport, SyncTransport
 from boxd._version_check import REQ_HEADER
@@ -469,3 +475,223 @@ async def test_async_credential_refusal_is_not_retried(monkeypatch):
     with pytest.raises(AuthenticationError):
         await t.call("GetVm", REQUEST)
     assert t._credentials.fetches == 1
+
+
+# --- keepalive: a path that dies without a word ---
+
+KEEPALIVE = {
+    "grpc.keepalive_time_ms": 45_000,
+    "grpc.keepalive_timeout_ms": 20_000,
+    "grpc.http2.ping_timeout_ms": 20_000,
+    "grpc.http2.max_pings_without_data": 0,
+}
+
+
+class RecordedChannel:
+    """Takes the stub's method registrations; no call is made on it."""
+
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: None
+
+
+def recording(made):
+    def factory(target, *credentials, options):
+        made.append(dict(options))
+        return RecordedChannel()
+
+    return factory
+
+
+CHANNELS = [
+    ("http://localhost:9443", "insecure_channel"),
+    ("https://boxd.example.com:9443", "secure_channel"),
+]
+
+
+@pytest.mark.parametrize("base_url, factory", CHANNELS)
+def test_the_channel_is_made_with_keepalive(monkeypatch, base_url, factory):
+    made: list = []
+    monkeypatch.setattr(grpc, factory, recording(made))
+    t = SyncTransport(
+        base_url=base_url, credentials=FakeCredentials(), timeout=1.0, max_retries=0
+    )
+    t._ensure_stub()
+    assert len(made) == 1
+    assert KEEPALIVE.items() <= made[0].items()
+    # The larger messages are still asked for.
+    assert made[0]["grpc.max_receive_message_length"] == 64 * 1024 * 1024
+
+
+@pytest.mark.parametrize("base_url, factory", CHANNELS)
+async def test_the_async_channel_is_made_with_keepalive(monkeypatch, base_url, factory):
+    made: list = []
+    monkeypatch.setattr(grpc.aio, factory, recording(made))
+    t = AsyncTransport(
+        base_url=base_url, credentials=FakeAsyncCredentials(), timeout=1.0, max_retries=0
+    )
+    await t._ensure_stub()
+    assert len(made) == 1
+    assert KEEPALIVE.items() <= made[0].items()
+
+
+class SilentRelay:
+    """A TCP relay to a local port that can go silent: nothing more passes
+    either way, and nothing is closed (no FIN, no RST), as when a NAT drops
+    an idle connection. It counts the client's HTTP/2 PINGs and the server's
+    answers to them."""
+
+    PREFACE = len(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+
+    def __init__(self, port):
+        self._upstream = port
+        self._listener = socket.socket()
+        self._listener.bind(("127.0.0.1", 0))
+        self._listener.listen()
+        self.port = self._listener.getsockname()[1]
+        self._silent = threading.Event()
+        self._sockets = [self._listener]
+        self.pings = 0
+        self.answered = 0
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while True:
+            try:
+                client, _ = self._listener.accept()
+                server = socket.create_connection(("127.0.0.1", self._upstream))
+            except OSError:
+                return
+            self._sockets += [client, server]
+            for src, dst, from_client in ((client, server, True), (server, client, False)):
+                threading.Thread(
+                    target=self._pump, args=(src, dst, from_client), daemon=True
+                ).start()
+
+    def _pump(self, src, dst, from_client):
+        buffered, skip = b"", self.PREFACE if from_client else 0
+        while True:
+            try:
+                data = src.recv(65536)
+                if not data:
+                    return
+                if not self._silent.is_set():
+                    dst.sendall(data)
+            except OSError:
+                return
+            # Frames: a 9-byte header (length, type, flags, stream), then the
+            # payload. A PING is type 6; flag 1 marks the answer to one.
+            buffered += data
+            while len(buffered) >= skip + 9:
+                length = int.from_bytes(buffered[skip : skip + 3], "big")
+                if len(buffered) < skip + 9 + length:
+                    break
+                if buffered[skip + 3] == 6:
+                    answer = buffered[skip + 4] & 1
+                    if from_client and not answer:
+                        self.pings += 1
+                    elif not from_client and answer:
+                        self.answered += 1
+                buffered, skip = buffered[skip + 9 + length :], 0
+
+    def silence(self):
+        self._silent.set()
+
+    def close(self):
+        for sock in self._sockets:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)  # ends a read that is waiting
+            except OSError:
+                pass
+            sock.close()
+
+
+def quiet_events_server():
+    """A gRPC server on a local port whose AgentEvents carries one event and
+    then nothing, until `release` is set."""
+    release = threading.Event()
+
+    def events(request, context):
+        yield api_pb2.AgentEvent(seq=1, turn=1, turn_started=api_pb2.AgentTurnStarted())
+        release.wait()
+
+    server = grpc.server(
+        futures.ThreadPoolExecutor(max_workers=2),
+        handlers=[
+            grpc.method_handlers_generic_handler(
+                "boxd.api.v1.BoxdApi",
+                {
+                    "AgentEvents": grpc.unary_stream_rpc_method_handler(
+                        events,
+                        request_deserializer=api_pb2.AgentEventsRequest.FromString,
+                        response_serializer=api_pb2.AgentEvent.SerializeToString,
+                    )
+                },
+            )
+        ],
+        # gRPC's own server refuses a client that pings every second; the
+        # platform's answers every PING.
+        options=[
+            ("grpc.http2.min_ping_interval_without_data_ms", 100),
+            ("grpc.http2.max_ping_strikes", 0),
+        ],
+    )
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    return server, port, release
+
+
+def test_a_quiet_stream_on_a_path_that_dies_silently_fails_instead_of_hanging(monkeypatch):
+    # gRPC sends PINGs a second apart at least, so this takes about 3 s.
+    options = dict(_transport._CHANNEL_OPTIONS)
+    assert KEEPALIVE.items() <= options.items()
+    options.update(
+        {
+            "grpc.keepalive_time_ms": 1000,
+            "grpc.keepalive_timeout_ms": 1000,
+            "grpc.http2.ping_timeout_ms": 1000,
+            # Whatever proxy the environment names, 127.0.0.1 is dialled.
+            "grpc.enable_http_proxy": 0,
+        }
+    )
+    monkeypatch.setattr(_transport, "_CHANNEL_OPTIONS", list(options.items()))
+    server, port, release = quiet_events_server()
+    relay = SilentRelay(port)
+    t = SyncTransport(
+        base_url=f"http://127.0.0.1:{relay.port}",
+        credentials=FakeCredentials(),
+        timeout=1.0,
+        max_retries=0,
+    )
+    try:
+        stream = t.server_stream(
+            "AgentEvents",
+            api_pb2.AgentEventsRequest(vm_id="box", session_id="s-1", follow=True),
+        )
+        assert next(stream).seq == 1
+        # Quiet from here on. The first PING belongs to the stream's start;
+        # the path dies once a keepalive PING has been answered too.
+        deadline = time.monotonic() + 15
+        while relay.answered < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert relay.answered >= 2
+        relay.silence()
+        ended: list = []
+
+        def read():
+            try:
+                ended.append(next(stream))
+            except BaseException as e:  # noqa: BLE001 - handed to the test
+                ended.append(e)
+
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        reader.join(15)
+        assert not reader.is_alive(), "the stream is still waiting on the dead path"
+        assert isinstance(ended[0], APIConnectionError), ended[0]
+        # What ended it: a PING sent into the dead path, never answered.
+        assert relay.pings > relay.answered
+    finally:
+        release.set()
+        t.close()
+        relay.close()
+        server.stop(0)

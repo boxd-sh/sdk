@@ -53,6 +53,19 @@ import type {
  */
 const MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
 
+/**
+ * HTTP/2 keepalive: a PING every 45 s while a call is open, also one that
+ * carries no data. A follow stream (`machines.agents.events({ follow: true })`,
+ * and `run()` on top of it) has no deadline and can stay quiet for minutes,
+ * so a path that dies silently (a NAT or load balancer that drops the idle
+ * connection, a peer that lost power) would otherwise never be noticed and
+ * the stream would hang forever. 45 s is well under typical NAT timeouts.
+ */
+const KEEPALIVE_TIME_MS = 45_000;
+/** A PING not answered in this long drops the connection: its calls fail as
+ *  a lost connection (UNAVAILABLE). */
+const KEEPALIVE_TIMEOUT_MS = 20_000;
+
 export interface TransportOptions {
   creds: Credentials;
   /** Explicit endpoint. Unset lets the surrounding machine name its cluster. */
@@ -70,6 +83,10 @@ export interface TransportOptions {
   defaultBaseURL: string;
   timeoutMs: number;
   maxRetries: number;
+  /** The keepalive PING's interval and how long its answer may take, in
+   *  milliseconds. Default 45 s and 20 s; a test makes them short. */
+  keepaliveTimeMs?: number;
+  keepaliveTimeoutMs?: number;
 }
 
 function methodPath(method: MethodDef<unknown, unknown>): string {
@@ -96,6 +113,8 @@ export class Transport implements ITransport {
   readonly #defaultBaseURL: string;
   readonly #timeout: number;
   readonly #maxRetries: number;
+  readonly #keepaliveTimeMs: number;
+  readonly #keepaliveTimeoutMs: number;
   #client?: Client;
   #connecting?: Promise<Client>;
 
@@ -111,6 +130,8 @@ export class Transport implements ITransport {
     this.#defaultBaseURL = opts.defaultBaseURL;
     this.#timeout = opts.timeoutMs;
     this.#maxRetries = opts.derived ? 0 : opts.maxRetries;
+    this.#keepaliveTimeMs = opts.keepaliveTimeMs ?? KEEPALIVE_TIME_MS;
+    this.#keepaliveTimeoutMs = opts.keepaliveTimeoutMs ?? KEEPALIVE_TIMEOUT_MS;
   }
 
   /** A region's endpoint, else an explicit baseURL, else the surrounding
@@ -143,6 +164,8 @@ export class Transport implements ITransport {
     const opts: ClientOptions = {
       "grpc.max_receive_message_length": MAX_MESSAGE_BYTES,
       "grpc.max_send_message_length": MAX_MESSAGE_BYTES,
+      "grpc.keepalive_time_ms": this.#keepaliveTimeMs,
+      "grpc.keepalive_timeout_ms": this.#keepaliveTimeoutMs,
     };
     this.#rawKeyOk = endpoint.useTls || isLoopbackHost(endpoint.host);
     this.#client = new Client(endpoint.host, channelCreds, opts);

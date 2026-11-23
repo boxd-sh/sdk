@@ -722,6 +722,49 @@ describe("not found elsewhere", () => {
     const err = await drain().catch((e) => e);
     expect(err.message).toContain('pass { region: "lon" }');
   });
+
+  it('an "end" after the error, as grpc-js emits one, does not hide the error', async () => {
+    /** An endpoint whose failed streams emit "end" right after "error". */
+    class ErrorThenEnd extends Endpoint {
+      override serverStream<Req>(method: MethodDef<Req, unknown>, req: Req) {
+        const call = super.serverStream(method, req);
+        const on = call.on.bind(call) as (event: string, fn: (arg?: unknown) => void) => void;
+        const ends: Array<() => void> = [];
+        call.on = ((event: string, fn: (arg?: unknown) => void) => {
+          if (event === "end") ends.push(fn);
+          on(event, (arg) => {
+            fn(arg);
+            if (event === "error") for (const end of ends) end();
+          });
+        }) as typeof call.on;
+        return call;
+      }
+    }
+    const book = {
+      [HOME]: {
+        StreamLogs: new NotFoundError("machine not found: foo", 5),
+        AgentEvents: new NotFoundError('no session "s-1" on this machine', 5),
+        FindElsewhere: elsewhere([["lon", "foo"]]),
+      },
+    };
+    const router = new RegionRouter(new ErrorThenEnd(async () => HOME, book), {
+      connect: (where) => new ErrorThenEnd(where, book),
+    });
+    const machines = new Machines(router);
+    const drain = async (stream: AsyncIterable<unknown>) => {
+      for await (const _ of stream) {
+        /* drain */
+      }
+    };
+    // Looked up elsewhere first: the "end" is there long before the answer.
+    const logs = await drain(machines.logs("foo")).catch((e) => e);
+    expect(logs).toBeInstanceOf(NotFoundError);
+    expect(logs.message).toContain('pass { region: "lon" }');
+    // Not looked up (the session may be what is missing): the error as it is.
+    const events = await drain(machines.agents.events("foo", "s-1")).catch((e) => e);
+    expect(events).toBeInstanceOf(NotFoundError);
+    expect(events.message).toBe('no session "s-1" on this machine');
+  });
 });
 
 // ── the org's regions ─────────────────────────────────────────────────────

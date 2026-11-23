@@ -699,7 +699,9 @@ export class RegionRouter implements Transport {
 
 /**
  * A call whose not-found error is looked up elsewhere before its error
- * handlers see it. Everything else passes straight through.
+ * handlers see it. Everything else passes straight through, except an "end"
+ * that comes during the lookup: grpc-js emits "end" after "error", and a
+ * reader that saw it first would take the failed call for a finished one.
  */
 function findingCall<C extends ReadableCall<unknown>>(
   call: C,
@@ -707,8 +709,17 @@ function findingCall<C extends ReadableCall<unknown>>(
 ): C {
   const handlers: Array<(err: unknown) => void> = [];
   let hooked = false;
+  // "end" handlers waiting for the lookup, to run after the error's.
+  let held: Array<() => void> | undefined;
   const on = (event: string, fn: (arg: unknown) => void): void => {
     const register = call.on.bind(call) as (event: string, fn: (arg: unknown) => void) => void;
+    if (event === "end") {
+      register(event, (arg) => {
+        if (held) held.push(() => fn(arg));
+        else fn(arg);
+      });
+      return;
+    }
     if (event !== "error") {
       register(event, fn);
       return;
@@ -718,8 +729,18 @@ function findingCall<C extends ReadableCall<unknown>>(
     hooked = true;
     register("error", (err: unknown) => {
       void (async () => {
-        if (err instanceof NotFoundError) await onNotFound(err);
+        if (err instanceof NotFoundError) {
+          held ??= [];
+          try {
+            await onNotFound(err);
+          } catch {
+            // The lookup only adds a hint: without it the error stands as it is.
+          }
+        }
         for (const handler of handlers) handler(err);
+        const ended = held ?? [];
+        held = undefined;
+        for (const end of ended) end();
       })();
     });
   };

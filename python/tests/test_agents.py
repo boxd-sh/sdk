@@ -39,7 +39,13 @@ from boxd import _mappers as m
 from boxd._generated import api_pb2
 from boxd._regions import AsyncRouter, SyncRouter
 from boxd._transport import AsyncTransport, SyncTransport
-from boxd.errors import APIConnectionError, BoxdError, NotFoundError
+from boxd.errors import (
+    APIConnectionError,
+    APIStatusError,
+    BoxdError,
+    NotFoundError,
+    from_grpc_error,
+)
 from boxd.resources.machines import AsyncMachines, Machines
 from fakes import (
     FakeAsyncCredentials,
@@ -1279,6 +1285,38 @@ def broken(*events, error):
     raise error
 
 
+def status(code, details="boom"):
+    """The error the transport raises for a gRPC status."""
+    return from_grpc_error(FakeRpcError(code, details))
+
+
+# What a stream can fail with and be followed again: the connection, a
+# deadline, the server or the way to the machine breaking.
+BREAKS = [
+    grpc.StatusCode.UNKNOWN,
+    grpc.StatusCode.INTERNAL,
+    grpc.StatusCode.DEADLINE_EXCEEDED,
+    grpc.StatusCode.UNAVAILABLE,
+    grpc.StatusCode.CANCELLED,
+    grpc.StatusCode.ABORTED,
+]
+# An answer about the request itself: the same again, however often it's asked.
+ANSWERS = [
+    grpc.StatusCode.NOT_FOUND,
+    grpc.StatusCode.PERMISSION_DENIED,
+    grpc.StatusCode.UNAUTHENTICATED,
+    grpc.StatusCode.INVALID_ARGUMENT,
+    grpc.StatusCode.FAILED_PRECONDITION,
+    grpc.StatusCode.UNIMPLEMENTED,
+    grpc.StatusCode.OUT_OF_RANGE,
+    grpc.StatusCode.ALREADY_EXISTS,
+]
+
+
+def named(codes):
+    return [pytest.param(code, id=code.name.lower()) for code in codes]
+
+
 CLOSED = api_pb2.CloseAgentSessionResponse()
 
 
@@ -1508,10 +1546,12 @@ def test_run_ctrl_c_interrupts_the_turn_and_closes_the_session_it_started(keep):
 
 
 def test_run_an_error_while_following_still_closes_the_session():
-    a, t = agents(a_session(), sent(1), NotFoundError("no session s-1"), CLOSED)
+    a, t = agents(
+        a_session(), sent(1), status(grpc.StatusCode.NOT_FOUND, "no session s-1"), CLOSED
+    )
     with pytest.raises(NotFoundError, match="no session s-1"):
         a.run("box", "codex", "x")
-    # Not a lost connection, and nothing carried yet: not followed again.
+    # An answer about the request, not a break: not followed again.
     assert [c[0] for c in t.calls] == [
         "StartAgentSession",
         "SendToAgent",
@@ -1559,12 +1599,86 @@ def test_run_follows_a_broken_stream_again_from_the_last_event(clock):
     assert clock.slept == [1, 2]
 
 
-def test_run_gives_up_after_five_breaks(clock):
-    streams = [
-        broken(delta(i, "x"), error=APIConnectionError("connection reset")) for i in range(1, 7)
-    ]
-    a, t = agents(a_session(), sent(1), *streams, CLOSED)
-    with pytest.raises(APIConnectionError):
+@pytest.mark.parametrize("code", named(BREAKS))
+def test_run_follows_again_a_stream_that_breaks_before_its_first_event(clock, code):
+    # A quiet turn (a long command: no events for minutes). A stream that
+    # fails before it carries anything may never have opened, or have opened
+    # and broken: followed again either way.
+    a, t = agents(
+        a_session(),
+        sent(1),
+        status(code),
+        broken(
+            an_event(1, turn_started=api_pb2.AgentTurnStarted()),
+            delta(2, "Hel"),
+            error=status(code),
+        ),
+        broken(error=status(code)),
+        [delta(3, "lo"), finished(4)],
+        CLOSED,
+    )
+    seen = []
+    result = a.run("box", "codex", "x", on_event=lambda e: seen.append(e.seq))
+    assert (result.reply, result.reason) == ("Hello", "done")
+    # Followed again from the last event seen: none reaches on_event twice.
+    assert seen == [1, 2, 3, 4]
+    assert [c[1].after_seq for c in t.calls if c[0] == "AgentEvents"] == [0, 0, 2, 2]
+    assert clock.slept == [1, 2, 3]
+    assert t.calls[-1][0] == "CloseAgentSession"
+
+
+def test_run_gives_on_event_each_event_once_across_a_re_follow(clock):
+    # Another turn's events move the place to follow on from too.
+    a, t = agents(
+        a_session(id="s-7", state=api_pb2.AGENT_SESSION_STATE_RUNNING, turn=3, last_seq=40),
+        sent(4, api_pb2.AGENT_DELIVERY_QUEUED),
+        broken(
+            delta(41, "theirs", turn=3),
+            finished(42, turn=3),
+            error=status(grpc.StatusCode.UNKNOWN),
+        ),
+        broken(delta(43, "ou", turn=4), error=status(grpc.StatusCode.INTERNAL)),
+        [delta(44, "rs", turn=4), finished(45, turn=4)],
+    )
+    seen = []
+    result = a.run("box", "claude-code", "x", session="s-7", on_event=lambda e: seen.append(e.seq))
+    assert seen == [43, 44, 45]
+    assert (result.reply, result.reason) == ("ours", "done")
+    assert [c[1].after_seq for c in t.calls if c[0] == "AgentEvents"] == [40, 42, 43]
+    assert clock.slept == [1, 2]
+
+
+@pytest.mark.parametrize("code", named(ANSWERS))
+def test_run_does_not_follow_again_after_an_answer_about_the_request(clock, code):
+    # Whether the stream carried events before it or not.
+    for stream in (status(code), broken(message(1, "half"), error=status(code))):
+        a, t = agents(a_session(), sent(1), stream, CLOSED)
+        with pytest.raises(BoxdError) as e:
+            a.run("box", "codex", "x")
+        assert e.value.code == code.name.lower()
+        assert [c[0] for c in t.calls] == [
+            "StartAgentSession",
+            "SendToAgent",
+            "AgentEvents",
+            "CloseAgentSession",
+        ]
+    assert clock.slept == []
+
+
+@pytest.mark.parametrize(
+    "stream, error",
+    [
+        (
+            lambda seq: broken(delta(seq, "x"), error=APIConnectionError("connection reset")),
+            APIConnectionError,
+        ),
+        (lambda seq: broken(error=status(grpc.StatusCode.UNKNOWN)), APIStatusError),
+    ],
+    ids=["after an event", "before any event"],
+)
+def test_run_gives_up_after_five_breaks(clock, stream, error):
+    a, t = agents(a_session(), sent(1), *(stream(seq) for seq in range(1, 7)), CLOSED)
+    with pytest.raises(error):
         a.run("box", "codex", "x")
     assert clock.slept == [1, 2, 3, 4, 5]
     assert [c[0] for c in t.calls].count("AgentEvents") == 6
@@ -1645,19 +1759,74 @@ async def test_async_run_an_error_while_following_still_closes_the_session(clock
         [
             a_session(),
             sent(1),
-            broken(message(1, "half"), error=NotFoundError("no session s-1")),
-            NotFoundError("no session s-1"),
+            broken(
+                message(1, "half"), error=status(grpc.StatusCode.NOT_FOUND, "no session s-1")
+            ),
             CLOSED,
         ]
     )
     with pytest.raises(NotFoundError):
         await AsyncMachines(t).agents.run("box", "codex", "x")
-    # Carried an event, so followed again once; the second open fails at once.
-    assert clock.slept == [1]
+    # An answer about the request, also after an event: not followed again.
+    assert clock.slept == []
     assert [c[0] for c in t.calls] == [
         "StartAgentSession",
         "SendToAgent",
         "AgentEvents",
-        "AgentEvents",
         "CloseAgentSession",
     ]
+
+
+@pytest.mark.parametrize("code", named(BREAKS))
+async def test_async_run_follows_again_a_stream_that_breaks_before_its_first_event(clock, code):
+    t = FakeAsyncTransport(
+        [
+            a_session(),
+            sent(1),
+            status(code),
+            broken(
+                an_event(1, turn_started=api_pb2.AgentTurnStarted()),
+                delta(2, "Hel"),
+                error=status(code),
+            ),
+            broken(error=status(code)),
+            [delta(3, "lo"), finished(4)],
+            CLOSED,
+        ]
+    )
+    seen = []
+    result = await AsyncMachines(t).agents.run(
+        "box", "codex", "x", on_event=lambda e: seen.append(e.seq)
+    )
+    assert (result.reply, result.reason) == ("Hello", "done")
+    # Followed again from the last event seen: none reaches on_event twice.
+    assert seen == [1, 2, 3, 4]
+    assert [c[1].after_seq for c in t.calls if c[0] == "AgentEvents"] == [0, 0, 2, 2]
+    assert clock.slept == [1, 2, 3]
+    assert t.calls[-1][0] == "CloseAgentSession"
+
+
+@pytest.mark.parametrize("code", named(ANSWERS))
+async def test_async_run_does_not_follow_again_after_an_answer_about_the_request(clock, code):
+    for stream in (status(code), broken(message(1, "half"), error=status(code))):
+        t = FakeAsyncTransport([a_session(), sent(1), stream, CLOSED])
+        with pytest.raises(BoxdError) as e:
+            await AsyncMachines(t).agents.run("box", "codex", "x")
+        assert e.value.code == code.name.lower()
+        assert [c[0] for c in t.calls] == [
+            "StartAgentSession",
+            "SendToAgent",
+            "AgentEvents",
+            "CloseAgentSession",
+        ]
+    assert clock.slept == []
+
+
+async def test_async_run_gives_up_after_five_breaks(clock):
+    streams = [broken(error=status(grpc.StatusCode.UNKNOWN)) for _ in range(6)]
+    t = FakeAsyncTransport([a_session(), sent(1), *streams, CLOSED])
+    with pytest.raises(APIStatusError):
+        await AsyncMachines(t).agents.run("box", "codex", "x")
+    assert clock.slept == [1, 2, 3, 4, 5]
+    assert [c[0] for c in t.calls].count("AgentEvents") == 6
+    assert t.calls[-1][0] == "CloseAgentSession"
