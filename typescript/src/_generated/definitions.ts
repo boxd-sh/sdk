@@ -2574,7 +2574,7 @@ export interface FsRealpathResponse {
 
 /** A coding agent a machine can run. */
 export interface Harness {
-  /** `claude-code`, `codex` or `opencode`. */
+  /** `claude-code` or `codex`. */
   id: string;
   /** The version installed on the machine; empty when it isn't installed. */
   version: string;
@@ -2588,6 +2588,12 @@ export interface Harness {
    * the agent doesn't list them.
    */
   models: string[];
+  /**
+   * Reasoning efforts the agent accepts in `StartAgentSessionRequest.effort`,
+   * least to most: Claude Code `low` to `max`, Codex `minimal` to `xhigh`
+   * (a model may support fewer).
+   */
+  efforts: string[];
 }
 
 export interface ListHarnessesRequest {
@@ -2602,7 +2608,7 @@ export interface ListHarnessesResponse {
 export interface StartAgentSessionRequest {
   /** machine name or id */
   vmId: string;
-  /** `claude-code`, `codex` or `opencode` (ListHarnesses). */
+  /** `claude-code` or `codex` (ListHarnesses). */
   harness: string;
   /** Empty: the agent's own default. */
   model: string;
@@ -2626,6 +2632,11 @@ export interface StartAgentSessionRequest {
    * The SDKs and CLIs make one up for each call they retry.
    */
   requestId: string;
+  /**
+   * How hard the agent thinks: one of the harness's `efforts`. Empty: the
+   * agent's own default.
+   */
+  effort: string;
 }
 
 export interface StartAgentSessionRequest_EnvEntry {
@@ -2655,6 +2666,8 @@ export interface AgentSession {
   createdAtMs: number;
   /** For a failed session: what went wrong and what to do about it. */
   error: string;
+  /** The reasoning effort it was started with; empty: the agent's default. */
+  effort: string;
 }
 
 export interface SendToAgentRequest {
@@ -2777,7 +2790,11 @@ export interface AgentRun {
   endedAtMs: number;
   /** Model calls (Claude Code) or tool calls (Codex) in the turn. */
   steps: number;
-  usage?: AgentUsage | undefined;
+  usage?:
+    | AgentUsage
+    | undefined;
+  /** The session's reasoning effort; empty: the agent's default. */
+  effort: string;
 }
 
 export interface ListAgentRunsResponse {
@@ -21557,7 +21574,7 @@ export const FsRealpathResponse: MessageFns<FsRealpathResponse> = {
 };
 
 function createBaseHarness(): Harness {
-  return { id: "", version: "", midTurnInput: false, models: [] };
+  return { id: "", version: "", midTurnInput: false, models: [], efforts: [] };
 }
 
 export const Harness: MessageFns<Harness> = {
@@ -21573,6 +21590,9 @@ export const Harness: MessageFns<Harness> = {
     }
     for (const v of message.models) {
       writer.uint32(34).string(v!);
+    }
+    for (const v of message.efforts) {
+      writer.uint32(42).string(v!);
     }
     return writer;
   },
@@ -21616,6 +21636,14 @@ export const Harness: MessageFns<Harness> = {
           message.models.push(reader.string());
           continue;
         }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.efforts.push(reader.string());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -21635,6 +21663,7 @@ export const Harness: MessageFns<Harness> = {
         ? globalThis.Boolean(object.mid_turn_input)
         : false,
       models: globalThis.Array.isArray(object?.models) ? object.models.map((e: any) => globalThis.String(e)) : [],
+      efforts: globalThis.Array.isArray(object?.efforts) ? object.efforts.map((e: any) => globalThis.String(e)) : [],
     };
   },
 
@@ -21652,6 +21681,9 @@ export const Harness: MessageFns<Harness> = {
     if (message.models?.length) {
       obj.models = message.models;
     }
+    if (message.efforts?.length) {
+      obj.efforts = message.efforts;
+    }
     return obj;
   },
 
@@ -21664,6 +21696,7 @@ export const Harness: MessageFns<Harness> = {
     message.version = object.version ?? "";
     message.midTurnInput = object.midTurnInput ?? false;
     message.models = object.models?.map((e) => e) || [];
+    message.efforts = object.efforts?.map((e) => e) || [];
     return message;
   },
 };
@@ -21795,7 +21828,7 @@ export const ListHarnessesResponse: MessageFns<ListHarnessesResponse> = {
 };
 
 function createBaseStartAgentSessionRequest(): StartAgentSessionRequest {
-  return { vmId: "", harness: "", model: "", cwd: "", instructions: "", env: {}, requestId: "" };
+  return { vmId: "", harness: "", model: "", cwd: "", instructions: "", env: {}, requestId: "", effort: "" };
 }
 
 export const StartAgentSessionRequest: MessageFns<StartAgentSessionRequest> = {
@@ -21820,6 +21853,9 @@ export const StartAgentSessionRequest: MessageFns<StartAgentSessionRequest> = {
     });
     if (message.requestId !== "") {
       writer.uint32(58).string(message.requestId);
+    }
+    if (message.effort !== "") {
+      writer.uint32(66).string(message.effort);
     }
     return writer;
   },
@@ -21890,6 +21926,14 @@ export const StartAgentSessionRequest: MessageFns<StartAgentSessionRequest> = {
           message.requestId = reader.string();
           continue;
         }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.effort = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -21924,6 +21968,7 @@ export const StartAgentSessionRequest: MessageFns<StartAgentSessionRequest> = {
         : isSet(object.request_id)
         ? globalThis.String(object.request_id)
         : "",
+      effort: isSet(object.effort) ? globalThis.String(object.effort) : "",
     };
   },
 
@@ -21956,6 +22001,9 @@ export const StartAgentSessionRequest: MessageFns<StartAgentSessionRequest> = {
     if (message.requestId !== "") {
       obj.requestId = message.requestId;
     }
+    if (message.effort !== "") {
+      obj.effort = message.effort;
+    }
     return obj;
   },
 
@@ -21979,6 +22027,7 @@ export const StartAgentSessionRequest: MessageFns<StartAgentSessionRequest> = {
       {},
     );
     message.requestId = object.requestId ?? "";
+    message.effort = object.effort ?? "";
     return message;
   },
 };
@@ -22073,6 +22122,7 @@ function createBaseAgentSession(): AgentSession {
     lastSeq: 0,
     createdAtMs: 0,
     error: "",
+    effort: "",
   };
 }
 
@@ -22113,6 +22163,9 @@ export const AgentSession: MessageFns<AgentSession> = {
     }
     if (message.error !== "") {
       writer.uint32(98).string(message.error);
+    }
+    if (message.effort !== "") {
+      writer.uint32(106).string(message.effort);
     }
     return writer;
   },
@@ -22220,6 +22273,14 @@ export const AgentSession: MessageFns<AgentSession> = {
           message.error = reader.string();
           continue;
         }
+        case 13: {
+          if (tag !== 106) {
+            break;
+          }
+
+          message.effort = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -22259,6 +22320,7 @@ export const AgentSession: MessageFns<AgentSession> = {
         ? globalThis.Number(object.created_at_ms)
         : 0,
       error: isSet(object.error) ? globalThis.String(object.error) : "",
+      effort: isSet(object.effort) ? globalThis.String(object.effort) : "",
     };
   },
 
@@ -22300,6 +22362,9 @@ export const AgentSession: MessageFns<AgentSession> = {
     if (message.error !== "") {
       obj.error = message.error;
     }
+    if (message.effort !== "") {
+      obj.effort = message.effort;
+    }
     return obj;
   },
 
@@ -22320,6 +22385,7 @@ export const AgentSession: MessageFns<AgentSession> = {
     message.lastSeq = object.lastSeq ?? 0;
     message.createdAtMs = object.createdAtMs ?? 0;
     message.error = object.error ?? "";
+    message.effort = object.effort ?? "";
     return message;
   },
 };
@@ -23263,6 +23329,7 @@ function createBaseAgentRun(): AgentRun {
     endedAtMs: 0,
     steps: 0,
     usage: undefined,
+    effort: "",
   };
 }
 
@@ -23309,6 +23376,9 @@ export const AgentRun: MessageFns<AgentRun> = {
     }
     if (message.usage !== undefined) {
       AgentUsage.encode(message.usage, writer.uint32(114).fork()).join();
+    }
+    if (message.effort !== "") {
+      writer.uint32(122).string(message.effort);
     }
     return writer;
   },
@@ -23432,6 +23502,14 @@ export const AgentRun: MessageFns<AgentRun> = {
           message.usage = AgentUsage.decode(reader, reader.uint32());
           continue;
         }
+        case 15: {
+          if (tag !== 122) {
+            break;
+          }
+
+          message.effort = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -23485,6 +23563,7 @@ export const AgentRun: MessageFns<AgentRun> = {
         : 0,
       steps: isSet(object.steps) ? globalThis.Number(object.steps) : 0,
       usage: isSet(object.usage) ? AgentUsage.fromJSON(object.usage) : undefined,
+      effort: isSet(object.effort) ? globalThis.String(object.effort) : "",
     };
   },
 
@@ -23532,6 +23611,9 @@ export const AgentRun: MessageFns<AgentRun> = {
     if (message.usage !== undefined) {
       obj.usage = AgentUsage.toJSON(message.usage);
     }
+    if (message.effort !== "") {
+      obj.effort = message.effort;
+    }
     return obj;
   },
 
@@ -23556,6 +23638,7 @@ export const AgentRun: MessageFns<AgentRun> = {
     message.usage = (object.usage !== undefined && object.usage !== null)
       ? AgentUsage.fromPartial(object.usage)
       : undefined;
+    message.effort = object.effort ?? "";
     return message;
   },
 };

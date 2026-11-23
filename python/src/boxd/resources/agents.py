@@ -1,5 +1,5 @@
-"""`boxd.machines.agents` — drive Claude Code, Codex or OpenCode inside a
-machine the same way, through sessions, turns and one typed event stream.
+"""`boxd.machines.agents` — drive Claude Code or Codex inside a machine the
+same way, through sessions, turns and one typed event stream.
 
 A session is one conversation with one agent. A message sent to it starts a
 turn, joins the running turn, or waits for it to end (``send(when=...)``). A
@@ -101,6 +101,7 @@ def _start(
     harness: str,
     *,
     model: str | None,
+    effort: str | None,
     cwd: str | None,
     instructions: str | None,
     env: Mapping[str, str] | None,
@@ -110,6 +111,7 @@ def _start(
         vm_id=machine_id,
         harness=harness,
         model=model or "",
+        effort=effort or "",
         cwd=cwd or "",
         instructions=instructions or "",
         env=dict(env or {}),
@@ -264,15 +266,16 @@ def _check_run(
     session: str | None,
     *,
     model: str | None,
+    effort: str | None,
     cwd: str | None,
     instructions: str | None,
     env: Mapping[str, str] | None,
 ) -> None:
     if session is not None and any(
-        v is not None for v in (model, cwd, instructions, env)
+        v is not None for v in (model, effort, cwd, instructions, env)
     ):
         raise ValueError(
-            "model, cwd, instructions and env are for a new session: "
+            "model, effort, cwd, instructions and env are for a new session: "
             "leave them out with session="
         )
 
@@ -354,6 +357,9 @@ class _TurnFollow:
         return AgentRunResult(
             session_id=session.id,
             machine_id=session.machine_id,
+            harness=session.harness,
+            model=session.model,
+            effort=session.effort,
             turn=self.turn,
             reason=self.reason or "unknown",
             error=self._error,
@@ -390,6 +396,7 @@ class Agents(Namespace):
         harness: str,
         *,
         model: str | None = None,
+        effort: str | None = None,
         cwd: str | None = None,
         instructions: str | None = None,
         env: Mapping[str, str] | None = None,
@@ -400,7 +407,11 @@ class Agents(Namespace):
         :meth:`harnesses` lists what the machine has). Nothing runs until the
         first :meth:`send`.
 
-        `model`: None is the agent's own default. `cwd`: the directory the
+        `model`: None is the agent's own default. `effort`: how hard the
+        agent thinks, one of the harness's ``efforts`` (Claude Code
+        ``"low"``, ``"medium"``, ``"high"``, ``"xhigh"`` or ``"max"``; Codex
+        ``"minimal"``, ``"low"``, ``"medium"``, ``"high"`` or ``"xhigh"``);
+        None is the agent's own default. `cwd`: the directory the
         agent works in; None is the home directory of the machine's user.
         `instructions` are added to the agent's own system prompt, never
         replacing it. `env`: environment variables for this session's agent,
@@ -416,6 +427,7 @@ class Agents(Namespace):
             machine_id,
             harness,
             model=model,
+            effort=effort,
             cwd=cwd,
             instructions=instructions,
             env=env,
@@ -570,6 +582,7 @@ class Agents(Namespace):
         text: str,
         *,
         model: str | None = None,
+        effort: str | None = None,
         cwd: str | None = None,
         instructions: str | None = None,
         env: Mapping[str, str] | None = None,
@@ -592,9 +605,9 @@ class Agents(Namespace):
             if result.reason != "done":
                 print(f"[{result.reason}] {result.error or ''}")
 
-        `model`, `cwd`, `instructions` and `env` are for the session this
-        starts, as in :meth:`start`; `timeout_secs` and `max_steps` limit the
-        turn, as in :meth:`send`. `session`: send the task to this open
+        `model`, `effort`, `cwd`, `instructions` and `env` are for the session
+        this starts, as in :meth:`start`; `timeout_secs` and `max_steps` limit
+        the turn, as in :meth:`send`. `session`: send the task to this open
         session, which must run `harness`, instead of starting one; it stays
         open. `keep`: leave the session this starts open afterwards, to
         :meth:`send` it more. `on_event` is called with each of the turn's
@@ -609,12 +622,15 @@ class Agents(Namespace):
         an event stream that breaks is followed again from the last event
         seen, up to 5 times.
         """
-        _check_run(session, model=model, cwd=cwd, instructions=instructions, env=env)
+        _check_run(
+            session, model=model, effort=effort, cwd=cwd, instructions=instructions, env=env
+        )
         if session is None:
             s = self.start(
                 machine_id,
                 harness,
                 model=model,
+                effort=effort,
                 cwd=cwd,
                 instructions=instructions,
                 env=env,
@@ -934,6 +950,7 @@ class AsyncAgents(Namespace):
         harness: str,
         *,
         model: str | None = None,
+        effort: str | None = None,
         cwd: str | None = None,
         instructions: str | None = None,
         env: Mapping[str, str] | None = None,
@@ -945,6 +962,7 @@ class AsyncAgents(Namespace):
             machine_id,
             harness,
             model=model,
+            effort=effort,
             cwd=cwd,
             instructions=instructions,
             env=env,
@@ -1065,6 +1083,7 @@ class AsyncAgents(Namespace):
         text: str,
         *,
         model: str | None = None,
+        effort: str | None = None,
         cwd: str | None = None,
         instructions: str | None = None,
         env: Mapping[str, str] | None = None,
@@ -1080,12 +1099,15 @@ class AsyncAgents(Namespace):
         Cancelling the task (``task.cancel()``, ``asyncio.timeout``)
         interrupts the turn, closes a session this started (unless `keep`),
         and the :class:`asyncio.CancelledError` is raised again."""
-        _check_run(session, model=model, cwd=cwd, instructions=instructions, env=env)
+        _check_run(
+            session, model=model, effort=effort, cwd=cwd, instructions=instructions, env=env
+        )
         if session is None:
             s = await self.start(
                 machine_id,
                 harness,
                 model=model,
+                effort=effort,
                 cwd=cwd,
                 instructions=instructions,
                 env=env,

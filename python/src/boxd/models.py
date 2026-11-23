@@ -724,7 +724,7 @@ class Harness(BaseModel):
     """A coding agent a machine can run (``machines.agents.harnesses``)."""
 
     id: str
-    """``"claude-code"``, ``"codex"`` or ``"opencode"``."""
+    """``"claude-code"`` or ``"codex"``."""
     version: str | None
     """The version installed on the machine; None when it isn't installed."""
     mid_turn_input: bool
@@ -733,6 +733,11 @@ class Harness(BaseModel):
     models: list[str]
     """Models the agent accepts in ``start(model=...)``; empty when the agent
     doesn't list them."""
+    efforts: list[str] = []
+    """Reasoning efforts the agent accepts in ``start(effort=...)``, least to
+    most: Claude Code ``"low"``, ``"medium"``, ``"high"``, ``"xhigh"``,
+    ``"max"``; Codex ``"minimal"``, ``"low"``, ``"medium"``, ``"high"``,
+    ``"xhigh"``. A model may support fewer."""
 
 
 AgentSessionState = Literal["idle", "running", "closed", "failed", "unknown"]
@@ -796,6 +801,9 @@ class AgentSession(BaseModel):
     session, even if the machine's agent is updated meanwhile."""
     model: str | None
     """None: the agent's own default."""
+    effort: str | None = None
+    """The reasoning effort it was started with; None: the agent's own
+    default."""
     cwd: str
     """The directory the agent works in."""
     state: AgentSessionState
@@ -968,12 +976,14 @@ class AgentRun(BaseModel):
     machine_name: str
     session_id: str
     harness: str
-    """``"claude-code"``, ``"codex"`` or ``"opencode"``."""
+    """``"claude-code"`` or ``"codex"``."""
     harness_version: str
     """The agent version the session ran."""
-    model: str
-    """The model the session asked for; ``""`` when it used the agent's own
-    default."""
+    model: str | None
+    """The model the session asked for; None when it used the agent's own
+    default, as ``AgentSession.model``."""
+    effort: str | None = None
+    """The session's reasoning effort; None: the agent's own default."""
     turn: int
     started_by: AgentRunStartedBy
     reason: AgentFinishReason
@@ -1004,6 +1014,12 @@ class AgentRunResult(BaseModel):
     session_id: str
     machine_id: str
     """The machine's id."""
+    harness: str
+    """The session's agent: ``"claude-code"`` or ``"codex"``."""
+    model: str | None
+    """The session's model; None: the agent's own default."""
+    effort: str | None = None
+    """The session's reasoning effort; None: the agent's own default."""
     turn: int
     reason: AgentFinishReason
     """How the turn ended: anything but ``"done"`` means it didn't finish the

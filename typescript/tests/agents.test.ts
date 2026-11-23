@@ -184,7 +184,14 @@ describe("machines.agents", () => {
     const t = new FakeTransport([
       {
         harnesses: [
-          { id: "claude-code", version: "2.1.317", midTurnInput: true, models: [] },
+          {
+            id: "claude-code",
+            version: "2.1.317",
+            midTurnInput: true,
+            models: [],
+            efforts: ["low", "medium", "high", "xhigh", "max"],
+          },
+          // From a server that doesn't list efforts.
           { id: "codex", version: "", midTurnInput: false, models: ["gpt-5"] },
         ],
       },
@@ -192,13 +199,22 @@ describe("machines.agents", () => {
     const hs = await agents(t).harnesses("box", { region: "nyc" });
     expect(t.calls).toEqual([{ method: "ListHarnesses", req: { vmId: "box" }, opts: { region: "nyc" } }]);
     expect(hs).toEqual([
-      { id: "claude-code", version: "2.1.317", midTurnInput: true, models: [] },
-      { id: "codex", version: null, midTurnInput: false, models: ["gpt-5"] },
+      {
+        id: "claude-code",
+        version: "2.1.317",
+        midTurnInput: true,
+        models: [],
+        efforts: ["low", "medium", "high", "xhigh", "max"],
+      },
+      { id: "codex", version: null, midTurnInput: false, models: ["gpt-5"], efforts: [] },
     ]);
   });
 
   it("start sends every field, defaults to empty, and maps the session", async () => {
-    const t = new FakeTransport([aSession(), aSession({ model: "opus", error: "x" })]);
+    const t = new FakeTransport([
+      aSession(),
+      aSession({ model: "opus", effort: "high", error: "x" }),
+    ]);
     const s = await agents(t).start("box", { harness: "claude-code" });
     expect(t.calls[0]!.method).toBe("StartAgentSession");
     expect(t.calls[0]!.opts).toEqual({ region: undefined });
@@ -208,6 +224,7 @@ describe("machines.agents", () => {
       vmId: "box",
       harness: "claude-code",
       model: "",
+      effort: "",
       cwd: "",
       instructions: "",
       env: {},
@@ -218,6 +235,7 @@ describe("machines.agents", () => {
       harness: "claude-code",
       harnessVersion: "2.1.317",
       model: null,
+      effort: null,
       cwd: "/home/boxd",
       state: "idle",
       turn: 0,
@@ -230,6 +248,7 @@ describe("machines.agents", () => {
     const s2 = await agents(t).start("box", {
       harness: "claude-code",
       model: "opus",
+      effort: "high",
       cwd: "/srv",
       instructions: "be brief",
       env: { A: "1" },
@@ -239,13 +258,13 @@ describe("machines.agents", () => {
       vmId: "box",
       harness: "claude-code",
       model: "opus",
+      effort: "high",
       cwd: "/srv",
       instructions: "be brief",
       env: { A: "1" },
       requestId: "deploy-42",
     });
-    expect(s2.model).toBe("opus");
-    expect(s2.error).toBe("x");
+    expect([s2.model, s2.effort, s2.error]).toEqual(["opus", "high", "x"]);
   });
 
   it("send maps when and limits, with a request id of its own", async () => {
@@ -541,7 +560,9 @@ describe("machines.agents.runs", () => {
           sessionId: "s-1",
           harness: "claude-code",
           harnessVersion: "2.1.317",
-          model: "",
+          // The agent's own default: null, as a session's model and effort.
+          model: null,
+          effort: null,
           turn: 1,
           startedBy: "message",
           reason: "done",
@@ -599,6 +620,10 @@ describe("machines.agents.runs", () => {
     // From a newer server.
     expect(toAgentRun(aRun({ startedBy: "schedule" })).startedBy).toBe("unknown");
     expect(toAgentRun(aRun({ reason: 99 })).reason).toBe("unknown");
+    expect(toAgentRun(aRun({ model: "opus" })).model).toBe("opus");
+    expect(toAgentRun(aRun({ model: "" })).model).toBeNull();
+    expect(toAgentRun(aRun({ effort: "xhigh" })).effort).toBe("xhigh");
+    expect(toAgentRun(aRun({ effort: "" })).effort).toBeNull();
     // No usage on the wire: zeros.
     expect(toAgentRun(aRun({ usage: undefined })).usage).toEqual({
       inputTokens: 0,
@@ -871,7 +896,7 @@ const finished = (seq: number, reason = AgentFinishReason.AGENT_FINISH_REASON_DO
 describe("machines.agents.run", () => {
   it("starts a session, sends the task, follows its turn and closes the session", async () => {
     const t = new RunTransport(
-      [aSession({ lastSeq: 0 }), sent(1), {}],
+      [aSession({ lastSeq: 0, harness: "codex", model: "gpt-5", effort: "high" }), sent(1), {}],
       [
         {
           chunks: [
@@ -904,6 +929,7 @@ describe("machines.agents.run", () => {
       harness: "codex",
       text: "fix it",
       model: "gpt-5",
+      effort: "high",
       cwd: "/srv",
       instructions: "be brief",
       env: { A: "1" },
@@ -915,6 +941,9 @@ describe("machines.agents.run", () => {
     expect(r).toEqual({
       sessionId: "s-1",
       machineId: "vm-1",
+      harness: "codex",
+      model: "gpt-5",
+      effort: "high",
       turn: 1,
       reason: "done",
       reply: "Fixed: 2 tests.",
@@ -943,6 +972,7 @@ describe("machines.agents.run", () => {
       vmId: "box",
       harness: "codex",
       model: "gpt-5",
+      effort: "high",
       cwd: "/srv",
       instructions: "be brief",
       env: { A: "1" },
@@ -1008,6 +1038,9 @@ describe("machines.agents.run", () => {
     expect(r).toEqual({
       sessionId: "s-7",
       machineId: "vm-1",
+      harness: "codex",
+      model: null,
+      effort: null,
       turn: 4,
       reason: "done",
       reply: "ours",
@@ -1040,8 +1073,9 @@ describe("machines.agents.run", () => {
     );
     await expect(run()).rejects.toThrow("session s-1 is failed");
     await expect(run({ cwd: "/srv" })).rejects.toThrow(
-      "model, cwd, instructions and env are for a new session: leave them out with session",
+      "model, effort, cwd, instructions and env are for a new session: leave them out with session",
     );
+    await expect(run({ effort: "high" })).rejects.toThrow("are for a new session");
     expect(t.calls.map((c) => c.method)).toEqual([
       "GetAgentSession",
       "GetAgentSession",
@@ -1089,6 +1123,9 @@ describe("machines.agents.run", () => {
     expect(r).toEqual({
       sessionId: "s-1",
       machineId: "vm-1",
+      harness: "claude-code",
+      model: null,
+      effort: null,
       turn: 1,
       reason: "failed",
       error: "overloaded",

@@ -44,6 +44,40 @@ describe("resolveEndpoint", () => {
     expect(resolveEndpoint("http://localhost:9443").useTls).toBe(false);
     expect(resolveEndpoint("https://localhost:443").useTls).toBe(true);
   });
+  it("no port → the API's own 9443, never gRPC's default 443 (the website: a 404)", () => {
+    expect(resolveEndpoint("https://boxd.example.com")).toEqual({
+      host: "boxd.example.com:9443",
+      useTls: true,
+    });
+    expect(resolveEndpoint("https://boxd.example.com/")).toEqual({
+      host: "boxd.example.com:9443",
+      useTls: true,
+    });
+    expect(resolveEndpoint("http://boxd.example.com").host).toBe("boxd.example.com:9443");
+    expect(resolveEndpoint("boxd.example.com")).toEqual({
+      host: "boxd.example.com:9443",
+      useTls: true,
+    });
+    expect(resolveEndpoint("http://localhost")).toEqual({
+      host: "localhost:9443",
+      useTls: false,
+    });
+    expect(resolveEndpoint("https://192.0.2.10").host).toBe("192.0.2.10:9443");
+    expect(resolveEndpoint("https://[2001:db8::1]").host).toBe("[2001:db8::1]:9443");
+  });
+  it("a port given is kept, 443 too", () => {
+    expect(resolveEndpoint("https://grpc.example.com:443").host).toBe("grpc.example.com:443");
+    expect(resolveEndpoint("https://[2001:db8::1]:8443").host).toBe("[2001:db8::1]:8443");
+    expect(resolveEndpoint("http://boxd.example.com:9443/").host).toBe("boxd.example.com:9443");
+  });
+  it("with or without the port, the same cluster and console", () => {
+    expect(resolveEndpoint("https://boxd.example.com")).toEqual(
+      resolveEndpoint("https://boxd.example.com:9443"),
+    );
+    expect(deriveExchangeUrl("https://boxd.example.com")).toBe(
+      deriveExchangeUrl("https://boxd.example.com:9443"),
+    );
+  });
 });
 
 describe("deriveExchangeUrl", () => {

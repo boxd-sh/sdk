@@ -2067,7 +2067,7 @@ message FsRealpathResponse {
 
 // A coding agent a machine can run.
 message Harness {
-  // `claude-code`, `codex` or `opencode`.
+  // `claude-code` or `codex`.
   string id = 1;
   // The version installed on the machine; empty when it isn't installed.
   string version = 2;
@@ -2077,6 +2077,10 @@ message Harness {
   // Models the agent accepts in `StartAgentSessionRequest.model`; empty when
   // the agent doesn't list them.
   repeated string models = 4;
+  // Reasoning efforts the agent accepts in `StartAgentSessionRequest.effort`,
+  // least to most: Claude Code `low` to `max`, Codex `minimal` to `xhigh`
+  // (a model may support fewer).
+  repeated string efforts = 5;
 }
 
 message ListHarnessesRequest {
@@ -2089,7 +2093,7 @@ message ListHarnessesResponse {
 
 message StartAgentSessionRequest {
   string vm_id   = 1;  // machine name or id
-  // `claude-code`, `codex` or `opencode` (ListHarnesses).
+  // `claude-code` or `codex` (ListHarnesses).
   string harness = 2;
   // Empty: the agent's own default.
   string model   = 3;
@@ -2107,6 +2111,9 @@ message StartAgentSessionRequest {
   // of starting another. Use a new one for every session you mean to start.
   // The SDKs and CLIs make one up for each call they retry.
   string request_id = 7;
+  // How hard the agent thinks: one of the harness's `efforts`. Empty: the
+  // agent's own default.
+  string effort = 8;
 }
 
 enum AgentSessionState {
@@ -2136,6 +2143,8 @@ message AgentSession {
   int64  created_at_ms = 11;
   // For a failed session: what went wrong and what to do about it.
   string error   = 12;
+  // The reasoning effort it was started with; empty: the agent's default.
+  string effort  = 13;
 }
 
 enum AgentSendWhen {
@@ -2260,6 +2269,8 @@ message AgentRun {
   // Model calls (Claude Code) or tool calls (Codex) in the turn.
   uint32 steps      = 13;
   AgentUsage usage  = 14;
+  // The session's reasoning effort; empty: the agent's default.
+  string effort     = 15;
 }
 
 message ListAgentRunsResponse {

@@ -658,6 +658,7 @@ def harness(msg) -> Harness:
         version=_text(msg.version),
         mid_turn_input=msg.mid_turn_input,
         models=list(msg.models),
+        efforts=list(msg.efforts),
     )
 
 
@@ -668,6 +669,7 @@ def agent_session(msg) -> AgentSession:
         harness=msg.harness,
         harness_version=msg.harness_version,
         model=_text(msg.model),
+        effort=_text(msg.effort),
         cwd=msg.cwd,
         state=_AGENT_SESSION_STATES.get(msg.state, "unknown"),
         turn=msg.turn,
@@ -695,7 +697,9 @@ def agent_run(msg) -> AgentRun:
         session_id=msg.session_id,
         harness=msg.harness,
         harness_version=msg.harness_version,
-        model=msg.model,
+        # "" on the wire: the agent's own default, None as a session's.
+        model=_text(msg.model),
+        effort=_text(msg.effort),
         turn=msg.turn,
         started_by=_AGENT_RUN_STARTED_BY.get(msg.started_by, "unknown"),
         reason=_AGENT_FINISH_REASONS.get(msg.reason, "unknown"),

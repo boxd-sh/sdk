@@ -62,6 +62,9 @@ new Boxd({ baseURL: "https://boxd.example.com" }); // any other cluster
 | `https://host:port` | TLS |
 | bare `host:port` | TLS, except `localhost` / `127.*` |
 
+Without a port, the API's own `9443`: `https://boxd.example.com` is
+`https://boxd.example.com:9443`.
+
 Failed connections are retried up to `maxRetries` times with exponential
 backoff. Timeouts are never retried — the request may already have been
 applied — and authentication failures are never retried either.
@@ -1086,7 +1089,13 @@ anything twice: each carries a `requestId`, and a repeat with the same one
 gets the first answer. The SDK makes up a new one for each call; pass
 `requestId` yourself to retry from another process, such as an automation
 running a step again.
-`harnesses()` lists the agents a machine can run.
+
+`harnesses()` lists the agents a machine can run, with the `models` and
+reasoning `efforts` each one takes. `start(machine, { model, effort })` picks
+them: Claude Code's efforts are `"low"`, `"medium"`, `"high"`, `"xhigh"` and
+`"max"`, Codex's `"minimal"`, `"low"`, `"medium"`, `"high"` and `"xhigh"` (a
+model may support fewer). Without them the session runs the agent's own
+defaults, and its `model` and `effort` are `null`.
 
 `AgentEvent` is a union narrowed on `type`: `turn.started`, `user.message`,
 `message.delta`, `message`, `thinking.delta`, `tool.started`, `tool.output`,
@@ -1110,8 +1119,10 @@ if (result.reason !== "done") console.error(`[${result.reason}] ${result.error ?
 ```
 
 `result.reply` is the agent's last reply in the turn, `result.reason` how the
-turn ended (a turn that doesn't end `"done"` resolves rather than throws), and
-`result.usage` its tokens. `keep: true` leaves the session open, `session` sends
+turn ended (a turn that doesn't end `"done"` resolves rather than throws),
+`result.usage` its tokens, and `result.harness`, `result.model` and
+`result.effort` the session's agent, model and effort (`null`: the agent's own
+default). `keep: true` leaves the session open, `session` sends
 the task to an open session instead, `onEvent` sees each event as it happens,
 and aborting `signal` interrupts the turn.
 
@@ -1125,9 +1136,9 @@ for (const r of page.runs) console.log(r.sessionId, r.turn, r.reason, r.error ??
 // runsIter() reads every page for you.
 ```
 
-Each `AgentRun` has the machine, the session, the turn, the agent and its
-version, how the turn started and ended (`reason`, `error`), when, its steps and
-its tokens, but no prompts or output. Filter by `machine`, `session` and `since`;
+Each `AgentRun` has the machine, the session, the turn, the agent, its version,
+its model and its effort (`null`: the agent's own default), how the turn started and ended
+(`reason`, `error`), when, its steps and its tokens, but no prompts or output. Filter by `machine`, `session` and `since`;
 `limit` is 50 by default, at most 500. Reading the history never wakes a
 machine, and it keeps 30 days of runs, also after a machine is deleted. A
 cluster that doesn't keep run history (some self-hosted ones) answers with a

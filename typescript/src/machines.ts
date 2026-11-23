@@ -682,8 +682,8 @@ export class Machines {
   readonly proxies: MachineProxies;
   readonly checkpoints: MachineCheckpoints;
   readonly backups: MachineBackups;
-  /** Coding agents (Claude Code, Codex, OpenCode) running in a machine:
-   *  sessions, messages and their events. */
+  /** Coding agents (Claude Code, Codex) running in a machine: sessions,
+   *  messages and their events. */
   readonly agents: MachineAgents;
   /** A Windows machine's RDP password: `machines.rdp.resetPassword(id)`. */
   readonly rdp: MachineRdpNamespace;

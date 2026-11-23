@@ -1,5 +1,5 @@
 /**
- * Coding agents (Claude Code, Codex, OpenCode) running inside a machine:
+ * Coding agents (Claude Code, Codex) running inside a machine:
  * `boxd.machines.agents`.
  *
  * A session is one conversation with one agent in one machine. Messages sent
@@ -54,7 +54,7 @@ import {
 
 /** An agent a machine can run, and what it can do. */
 export interface Harness {
-  /** `claude-code`, `codex` or `opencode`. */
+  /** `claude-code` or `codex`. */
   id: string;
   /** The version installed on the machine; `null` when it isn't installed. */
   version: string | null;
@@ -64,6 +64,11 @@ export interface Harness {
   /** Models the agent accepts in `start({ model })`; empty when the agent
    *  doesn't list them. */
   models: string[];
+  /** Reasoning efforts the agent accepts in `start({ effort })`, least to
+   *  most: Claude Code `low`, `medium`, `high`, `xhigh`, `max`; Codex
+   *  `minimal`, `low`, `medium`, `high`, `xhigh`. A model may support
+   *  fewer. */
+  efforts: string[];
 }
 
 /** `idle`: waiting for a message. `running`: a turn is running. `closed`:
@@ -80,6 +85,9 @@ export interface AgentSession {
   harnessVersion: string;
   /** `null`: the agent's own default. */
   model: string | null;
+  /** The reasoning effort it was started with; `null`: the agent's own
+   *  default. */
+  effort: string | null;
   cwd: string;
   state: AgentSessionState;
   /** The turn running now, or the last one; 0 before the first. */
@@ -206,6 +214,10 @@ export interface AgentStartParams extends RegionOption {
   harness: string;
   /** Default: the agent's own. */
   model?: string;
+  /** How hard the agent thinks: one of the harness's `efforts` (Claude Code
+   *  `low`, `medium`, `high`, `xhigh` or `max`; Codex `minimal`, `low`,
+   *  `medium`, `high` or `xhigh`). Default: the agent's own. */
+  effort?: string;
   /** The directory the agent works in. Default: the home directory of the
    *  machine's user. */
   cwd?: string;
@@ -259,6 +271,9 @@ export interface AgentRunParams extends RegionOption {
   text: string;
   /** For a new session: the model. Default: the agent's own. */
   model?: string;
+  /** For a new session: how hard the agent thinks, one of the harness's
+   *  `efforts`. Default: the agent's own. */
+  effort?: string;
   /** For a new session: the directory the agent works in. Default: the home
    *  directory of the machine's user. */
   cwd?: string;
@@ -274,8 +289,8 @@ export interface AgentRunParams extends RegionOption {
    *  Claude Code, tool calls for Codex. */
   maxSteps?: number;
   /** Send the task to this open session instead of starting one. It stays
-   *  open. Not with `model`, `cwd`, `instructions` or `env`, which are for a
-   *  new session. */
+   *  open. Not with `model`, `effort`, `cwd`, `instructions` or `env`,
+   *  which are for a new session. */
   session?: string;
   /** Leave the session this starts open afterwards, to `send()` it more. */
   keep?: boolean;
@@ -293,6 +308,12 @@ export interface AgentRunResult {
   sessionId: string;
   /** The machine's id. */
   machineId: string;
+  /** The session's agent: `claude-code` or `codex`. */
+  harness: string;
+  /** The session's model; `null`: the agent's own default. */
+  model: string | null;
+  /** The session's reasoning effort; `null`: the agent's own default. */
+  effort: string | null;
   turn: number;
   /** How the turn ended: anything but `done` means it didn't finish the
    *  task, with `error` for `failed`. */
@@ -332,13 +353,15 @@ export interface AgentRun {
   /** The machine's name. */
   machineName: string;
   sessionId: string;
-  /** `claude-code`, `codex` or `opencode`. */
+  /** `claude-code` or `codex`. */
   harness: string;
   /** The agent version the session ran. */
   harnessVersion: string;
-  /** The model the session asked for; `""` when it used the agent's own
-   *  default. */
-  model: string;
+  /** The model the session asked for; `null` when it used the agent's own
+   *  default, as a session's `model`. */
+  model: string | null;
+  /** The session's reasoning effort; `null`: the agent's own default. */
+  effort: string | null;
   turn: number;
   startedBy: AgentRunStartedBy;
   reason: AgentFinishReason;
@@ -572,6 +595,7 @@ export function toHarness(h: PbHarness): Harness {
     version: emptyToNull(h.version),
     midTurnInput: h.midTurnInput,
     models: h.models ?? [],
+    efforts: h.efforts ?? [],
   };
 }
 
@@ -654,6 +678,8 @@ export function toAgentSession(s: PbAgentSession): AgentSession {
     harness: s.harness,
     harnessVersion: s.harnessVersion,
     model: emptyToNull(s.model),
+    // A server from before this field doesn't send it.
+    effort: emptyToNull(s.effort ?? ""),
     cwd: s.cwd,
     state: toSessionState(s.state),
     turn: s.turn,
@@ -675,7 +701,9 @@ export function toAgentRun(r: PbAgentRun): AgentRun {
     sessionId: r.sessionId,
     harness: r.harness,
     harnessVersion: r.harnessVersion,
-    model: r.model,
+    // "" on the wire: the agent's own default, `null` as a session's.
+    model: emptyToNull(r.model),
+    effort: emptyToNull(r.effort ?? ""),
     turn: r.turn,
     startedBy: toStartedBy(r.startedBy),
     reason: toFinishReason(r.reason),
@@ -958,6 +986,7 @@ export class MachineAgents {
         vmId: machine,
         harness: params.harness,
         model: params.model ?? "",
+        effort: params.effort ?? "",
         cwd: params.cwd ?? "",
         instructions: params.instructions ?? "",
         env: params.env ?? {},
@@ -1107,12 +1136,13 @@ export class MachineAgents {
     if (
       params.session !== undefined &&
       (params.model !== undefined ||
+        params.effort !== undefined ||
         params.cwd !== undefined ||
         params.instructions !== undefined ||
         params.env !== undefined)
     ) {
       throw new BoxdError(
-        "model, cwd, instructions and env are for a new session: leave them out with session",
+        "model, effort, cwd, instructions and env are for a new session: leave them out with session",
       );
     }
     signal?.throwIfAborted();
@@ -1121,6 +1151,7 @@ export class MachineAgents {
       session = await this.start(machine, {
         harness,
         model: params.model,
+        effort: params.effort,
         cwd: params.cwd,
         instructions: params.instructions,
         env: params.env,
@@ -1169,6 +1200,9 @@ export class MachineAgents {
     const result: AgentRunResult = {
       sessionId: session.id,
       machineId: session.machineId,
+      harness: session.harness,
+      model: session.model,
+      effort: session.effort,
       turn,
       reason: outcome.reason ?? "unknown",
       reply: outcome.reply,

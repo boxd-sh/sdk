@@ -133,12 +133,34 @@ def test_default_base_url_derives_the_production_exchange():
         # ...except on the loopback.
         ("localhost:9443", "localhost:9443", False),
         ("127.0.0.1:9443", "127.0.0.1:9443", False),
+        # No port: the API's own, never gRPC's default 443 (the cluster's
+        # website, which answers a gRPC call with a 404).
+        ("https://boxd.example.com", "boxd.example.com:9443", True),
+        ("https://boxd.example.com/", "boxd.example.com:9443", True),
+        ("http://boxd.example.com", "boxd.example.com:9443", False),
+        ("boxd.example.com", "boxd.example.com:9443", True),
+        ("http://localhost", "localhost:9443", False),
+        ("https://192.0.2.10", "192.0.2.10:9443", True),
+        ("https://[2001:db8::1]", "[2001:db8::1]:9443", True),
+        # A port given is kept, 443 too.
+        ("https://grpc.example.com:443", "grpc.example.com:443", True),
+        ("https://[2001:db8::1]:8443", "[2001:db8::1]:8443", True),
     ],
 )
 def test_resolve_endpoint(url, target, tls):
     endpoint = resolve_endpoint(url)
     assert endpoint.target == target
     assert endpoint.use_tls is tls
+
+
+def test_a_base_url_without_a_port_is_the_same_cluster_as_with_it():
+    # The channel dials the same place, and the console is the same.
+    assert resolve_endpoint("https://boxd.example.com") == resolve_endpoint(
+        "https://boxd.example.com:9443"
+    )
+    assert exchange_url_for("https://boxd.example.com") == exchange_url_for(
+        "https://boxd.example.com:9443"
+    )
 
 
 # --- region_base_url ---

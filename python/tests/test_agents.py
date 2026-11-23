@@ -91,17 +91,32 @@ def with_unknown_kind(seq=1):
 
 def test_harness_without_a_version_is_not_installed():
     h = m.harness(
-        api_pb2.Harness(id="codex", version="", mid_turn_input=True, models=["o3", "gpt-5"])
+        api_pb2.Harness(
+            id="codex",
+            version="",
+            mid_turn_input=True,
+            models=["o3", "gpt-5"],
+            efforts=["minimal", "low", "medium", "high", "xhigh"],
+        )
     )
-    assert h == Harness(id="codex", version=None, mid_turn_input=True, models=["o3", "gpt-5"])
+    assert h == Harness(
+        id="codex",
+        version=None,
+        mid_turn_input=True,
+        models=["o3", "gpt-5"],
+        efforts=["minimal", "low", "medium", "high", "xhigh"],
+    )
     assert m.harness(api_pb2.Harness(id="claude-code", version="2.1.0")).version == "2.1.0"
     assert m.harness(api_pb2.Harness(id="opencode")).models == []
+    # From a server that doesn't list them.
+    assert m.harness(api_pb2.Harness(id="codex")).efforts == []
 
 
 def test_session_maps_every_field():
     s = m.agent_session(
         a_session(
             model="opus",
+            effort="high",
             state=api_pb2.AGENT_SESSION_STATE_FAILED,
             turn=3,
             queued=2,
@@ -115,6 +130,7 @@ def test_session_maps_every_field():
         harness="claude-code",
         harness_version="2.1.0",
         model="opus",
+        effort="high",
         cwd="/home/boxd",
         state="failed",
         turn=3,
@@ -128,6 +144,7 @@ def test_session_maps_every_field():
 def test_session_empty_strings_are_none():
     s = m.agent_session(a_session())
     assert s.model is None
+    assert s.effort is None  # the agent's own default
     assert s.error is None
     # Always set by the server, so kept as they are.
     assert s.cwd == "/home/boxd"
@@ -376,6 +393,7 @@ def test_run_maps_every_field():
     run = m.agent_run(
         a_run(
             model="opus",
+            effort="max",
             turn=4,
             started_by="by_agent",
             reason=api_pb2.AGENT_FINISH_REASON_FAILED,
@@ -389,6 +407,7 @@ def test_run_maps_every_field():
         harness="claude-code",
         harness_version="2.1.0",
         model="opus",
+        effort="max",
         turn=4,
         started_by="by_agent",
         reason="failed",
@@ -405,7 +424,10 @@ def test_run_maps_every_field():
 def test_run_without_an_error_usage_or_known_values():
     run = m.agent_run(a_run(usage=None, started_by="schedule", reason=99))
     assert run.error is None
-    assert run.model == ""  # the agent's own default: kept as the server sent it
+    # The agent's own default: None, as a session's model and effort.
+    assert run.model is None
+    assert run.effort is None
+    assert m.agent_session(a_session(model="")).model is None
     assert run.started_by == "unknown"  # a newer server's
     assert run.reason == "unknown"
     assert run.usage == AgentRunUsage(
@@ -457,6 +479,7 @@ def test_start_sends_every_option_once():
         "box",
         "codex",
         model="o3",
+        effort="xhigh",
         cwd="/srv/app",
         instructions="Keep replies short.",
         env={"FOO": "bar"},
@@ -468,6 +491,7 @@ def test_start_sends_every_option_once():
         vm_id="box",
         harness="codex",
         model="o3",
+        effort="xhigh",
         cwd="/srv/app",
         instructions="Keep replies short.",
         env={"FOO": "bar"},
@@ -608,7 +632,7 @@ async def test_async_twin_sends_the_same():
     )
     a = AsyncMachines(t).agents
     assert [h.id for h in await a.harnesses("box")] == ["opencode"]
-    assert (await a.start("box", "opencode", env={"A": "1"})).id == "s-1"
+    assert (await a.start("box", "opencode", effort="low", env={"A": "1"})).id == "s-1"
     assert (await a.send("box", "s-1", "go", when="now")).delivery == "queued"
     events = [e async for e in a.events("box", "s-1", after_seq=5)]
     assert [(e.seq, e.type) for e in events] == [(1, "plan"), (3, "turn.finished")]
@@ -630,6 +654,7 @@ async def test_async_twin_sends_the_same():
     ]
     requests = [c[1] for c in t.calls]
     assert requests[1].env == {"A": "1"}
+    assert requests[1].effort == "low"
     assert requests[2].when == api_pb2.AGENT_SEND_WHEN_NOW
     assert requests[3] == api_pb2.AgentEventsRequest(vm_id="box", session_id="s-1", after_seq=5)
     assert requests[4].clear_queue is True
@@ -1259,7 +1284,7 @@ CLOSED = api_pb2.CloseAgentSessionResponse()
 
 def test_run_starts_a_session_follows_its_turn_and_closes_it():
     a, t = agents(
-        a_session(),
+        a_session(harness="codex", model="gpt-5", effort="high"),
         sent(1),
         [
             an_event(1, turn_started=api_pb2.AgentTurnStarted()),
@@ -1283,6 +1308,7 @@ def test_run_starts_a_session_follows_its_turn_and_closes_it():
         "codex",
         "fix it",
         model="gpt-5",
+        effort="high",
         cwd="/srv",
         instructions="be brief",
         env={"A": "1"},
@@ -1294,6 +1320,9 @@ def test_run_starts_a_session_follows_its_turn_and_closes_it():
     assert result == AgentRunResult(
         session_id="s-1",
         machine_id="vm-1",
+        harness="codex",
+        model="gpt-5",
+        effort="high",
         turn=1,
         reason="done",
         error=None,
@@ -1324,6 +1353,7 @@ def test_run_starts_a_session_follows_its_turn_and_closes_it():
         vm_id="box",
         harness="codex",
         model="gpt-5",
+        effort="high",
         cwd="/srv",
         instructions="be brief",
         env={"A": "1"},
@@ -1378,6 +1408,8 @@ def test_run_in_an_open_session_ignores_other_turns_and_leaves_it_open():
         None,
     )
     assert (result.reply, result.kept) == ("ours", True)
+    # The session's agent and model; None: the agent's own default.
+    assert (result.harness, result.model) == ("codex", None)
     assert seen == [43, 44]
     assert [c[0] for c in t.calls] == ["GetAgentSession", "SendToAgent", "AgentEvents"]
     assert t.calls[0][1] == api_pb2.GetAgentSessionRequest(vm_id="box", session_id="s-7")
@@ -1402,6 +1434,10 @@ def test_run_refuses_another_agents_session_a_closed_or_failed_one():
         a.run("box", "codex", "x", session="s-1")
     with pytest.raises(ValueError, match="are for a new session: leave them out with session="):
         a.run("box", "codex", "x", session="s-1", env={"A": "1"})
+    with pytest.raises(
+        ValueError, match="model, effort, cwd, instructions and env are for a new session"
+    ):
+        a.run("box", "codex", "x", session="s-1", effort="high")
     assert [c[0] for c in t.calls] == ["GetAgentSession"] * 3
 
 
@@ -1546,7 +1582,7 @@ async def test_async_run_is_the_same():
     )
     seen = []
     result = await AsyncMachines(t).agents.run(
-        "box", "codex", "x", cwd="/srv", on_event=lambda e: seen.append(e.seq)
+        "box", "codex", "x", cwd="/srv", effort="medium", on_event=lambda e: seen.append(e.seq)
     )
     assert (result.reply, result.reason, result.kept) == ("done", "done", False)
     assert seen == [1, 2, 3, 4]
@@ -1557,6 +1593,7 @@ async def test_async_run_is_the_same():
         "CloseAgentSession",
     ]
     assert t.calls[0][1].cwd == "/srv"
+    assert t.calls[0][1].effort == "medium"
 
 
 class QuietAsyncTransport(FakeAsyncTransport):

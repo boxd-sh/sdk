@@ -17,6 +17,11 @@ from typing import NamedTuple
 # any cluster.
 DEFAULT_BASE_URL = "https://boxd.sh:9443"
 
+# The port every cluster serves its gRPC API on. A base_url without a port
+# means it, as the `boxd` CLI does: the default port of https (443) is the
+# cluster's website and console, which answer a gRPC call with a 404.
+API_PORT = 9443
+
 EXCHANGE_PATH = "/api/v1/auth/token"
 
 
@@ -41,12 +46,12 @@ def resolve_base_url(explicit: str | None) -> str | None:
 def console_base_url(base_url: str) -> str:
     """Map a gRPC base URL to the web-console origin that fronts `/api/v1/...`.
 
-    Same mapping as the `boxd` CLI uses, with one
-    deliberate difference: the port is dropped. The CLI's input is a bare
-    `https://boxd.sh`, but the SDK's default carries the gRPC port
-    (`:9443`) — preserving it would aim the exchange at the gRPC listener. A
-    deployed console is always TLS on 443 at `app.<zone>`, hence the forced
-    `https://`.
+    Same mapping as the `boxd` CLI uses: the port is dropped. A base URL may
+    name the gRPC port (`https://boxd.sh:9443`, the default) or leave it out
+    (`https://boxd.sh`, which dials the same port: :func:`resolve_endpoint`);
+    either way the console is not on it, and keeping it would aim the
+    exchange at the gRPC listener. A deployed console is always TLS on 443
+    at `app.<zone>`, hence the forced `https://`.
 
     Left exactly as given: `localhost` (the combined `just dev` binary serves
     both surfaces from one host), a raw IP, and an already-`app.` host.
@@ -85,13 +90,30 @@ def resolve_endpoint(base_url: str) -> Endpoint:
     - ``http://…``  → plaintext, scheme stripped
     - ``https://…`` → TLS, scheme stripped
     - bare ``host:port`` → TLS, except ``localhost``/``127.*`` which stay plaintext
+
+    A host without a port gets :data:`API_PORT` (``https://boxd.sh`` dials
+    ``boxd.sh:9443``): gRPC's own default, 443, is the cluster's website.
     """
     if base_url.startswith("http://"):
-        return Endpoint(target=base_url[len("http://") :].rstrip("/"), use_tls=False)
-    if base_url.startswith("https://"):
-        return Endpoint(target=base_url[len("https://") :].rstrip("/"), use_tls=True)
-    is_local = base_url.startswith("localhost") or base_url.startswith("127.")
-    return Endpoint(target=base_url.rstrip("/"), use_tls=not is_local)
+        target, use_tls = base_url[len("http://") :], False
+    elif base_url.startswith("https://"):
+        target, use_tls = base_url[len("https://") :], True
+    else:
+        is_local = base_url.startswith("localhost") or base_url.startswith("127.")
+        target, use_tls = base_url, not is_local
+    return Endpoint(target=_with_port(target.rstrip("/")), use_tls=use_tls)
+
+
+def _with_port(authority: str) -> str:
+    """``host`` as ``host:9443``; ``host:port`` (and anything with a path) as
+    it is. An IPv6 literal keeps its brackets: ``[::1]`` → ``[::1]:9443``."""
+    if not authority or "/" in authority:
+        return authority
+    if authority.startswith("["):
+        has_port = "]:" in authority
+    else:
+        has_port = ":" in authority
+    return authority if has_port else f"{authority}:{API_PORT}"
 
 
 def is_loopback_target(target: str) -> bool:

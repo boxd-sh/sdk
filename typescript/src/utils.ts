@@ -63,23 +63,47 @@ export interface Endpoint {
 }
 
 /**
+ * The port every cluster serves its gRPC API on. A `baseURL` without a port
+ * means it, as the `boxd` CLI does: the default port of https (443) is the
+ * cluster's website and console, which answer a gRPC call with a 404.
+ */
+export const API_PORT = 9443;
+
+/**
  * Resolve a baseURL into a `(host, useTls)` pair.
  *
  * - `http://...`  → plaintext, scheme stripped
  * - `https://...` → TLS, scheme stripped
  * - bare `host:port` → TLS, except `localhost`/`127.*` which stay plaintext
  *
- * The proxy serves TLS and plain HTTP/2 on the same port, so an explicit
- * `http://` still reaches any cluster; the default is `https://`.
+ * A host without a port gets {@link API_PORT} (`https://boxd.sh` dials
+ * `boxd.sh:9443`). The proxy serves TLS and plain HTTP/2 on the same port, so
+ * an explicit `http://` still reaches any cluster; the default is `https://`.
  */
 export function resolveEndpoint(url: string): Endpoint {
+  let rest: string;
+  let useTls: boolean;
   if (url.startsWith("http://")) {
-    return { host: url.slice("http://".length), useTls: false };
+    rest = url.slice("http://".length);
+    useTls = false;
+  } else if (url.startsWith("https://")) {
+    rest = url.slice("https://".length);
+    useTls = true;
+  } else {
+    rest = url;
+    useTls = !isLocalUrl(url);
   }
-  if (url.startsWith("https://")) {
-    return { host: url.slice("https://".length), useTls: true };
-  }
-  return { host: url, useTls: !isLocalUrl(url) };
+  return { host: withPort(rest.replace(/\/+$/, "")), useTls };
+}
+
+/** `host` as `host:9443`; `host:port` (and anything with a path) as it is.
+ *  An IPv6 literal keeps its brackets: `[::1]` → `[::1]:9443`. */
+function withPort(authority: string): string {
+  if (authority === "" || authority.includes("/")) return authority;
+  const hasPort = authority.startsWith("[")
+    ? authority.includes("]:")
+    : authority.includes(":");
+  return hasPort ? authority : `${authority}:${API_PORT}`;
 }
 
 /** One DNS label: letters, digits and inner hyphens. */

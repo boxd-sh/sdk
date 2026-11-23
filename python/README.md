@@ -63,6 +63,9 @@ Every argument is keyword-only.
 | `https://host:port` | TLS |
 | bare `host:port` | TLS, except `localhost` / `127.*` |
 
+Without a port, the API's own `9443`: `https://boxd.example.com` is
+`https://boxd.example.com:9443`.
+
 `boxd.base_url` reports the cluster the client settled on.
 
 The client holds a connection, so keep one around rather than making a new one
@@ -1036,7 +1039,13 @@ turn the message starts after that many seconds or steps (model calls for
 Claude Code, tool calls for Codex). `interrupt()` stops the running turn
 (`clear_queue=True` also drops the waiting messages), `close()` ends the
 session, and `list(machine, all=True)` also shows closed and failed sessions.
-`harnesses()` lists the agents a machine can run.
+
+`harnesses()` lists the agents a machine can run, with the `models` and
+reasoning `efforts` each one takes. `start(..., model=..., effort=...)` picks
+them: Claude Code's efforts are `"low"`, `"medium"`, `"high"`, `"xhigh"` and
+`"max"`, Codex's `"minimal"`, `"low"`, `"medium"`, `"high"` and `"xhigh"` (a
+model may support fewer). Without them the session runs the agent's own
+defaults, and its `model` and `effort` are `None`.
 
 `start` and `send` are retried after a lost connection without running
 anything twice: each carries a `request_id`, and a repeat with the same one
@@ -1064,8 +1073,10 @@ if result.reason != "done":
 ```
 
 `result.reply` is the agent's last reply in the turn, `result.reason` how the
-turn ended (a turn that doesn't end `"done"` is returned, not raised), and
-`result.usage` its tokens. `keep=True` leaves the session open, `session=` sends
+turn ended (a turn that doesn't end `"done"` is returned, not raised),
+`result.usage` its tokens, and `result.harness`, `result.model` and
+`result.effort` the session's agent, model and effort (`None`: the agent's own
+default). `keep=True` leaves the session open, `session=` sends
 the task to an open session instead, `on_event=` sees each event as it happens,
 and Ctrl-C (or cancelling the task, with `AsyncBoxd`) interrupts the turn.
 
@@ -1082,9 +1093,9 @@ for run in page.runs:
 # iter_runs() reads every page for you.
 ```
 
-Each `AgentRun` has the machine, the session, the turn, the agent and its
-version, how the turn started and ended (`reason`, `error`), when, its steps and
-its tokens, but no prompts or output. Filter by `machine`, `session` and
+Each `AgentRun` has the machine, the session, the turn, the agent, its version,
+its model and its effort (`None`: the agent's own default), how the turn started and ended
+(`reason`, `error`), when, its steps and its tokens, but no prompts or output. Filter by `machine`, `session` and
 `since`; `limit` is 50 by default, at most 500. Reading the history never wakes
 a machine, and it keeps 30 days of runs, also after a machine is deleted. A
 cluster that doesn't keep run history (some self-hosted ones) answers with a
