@@ -203,6 +203,7 @@ const LOOKUP: ReadonlyMap<string, [Kind, string[]]> = new Map<string, [Kind, str
   ].map((m): [string, [Kind, string[]]] => [m, ["machine", MACHINE_FIELDS]]),
   ["GetSnapshot", ["snapshot", ["name"]]],
   ["DeleteSnapshot", ["snapshot", ["name"]]],
+  ["UnarchiveSnapshot", ["snapshot", ["name"]]],
   ["CreateVmFromSnapshot", ["snapshot", ["snapshot"]]],
   ["DestroyDisk", ["disk", ["diskId"]]],
 ]);

@@ -106,6 +106,36 @@ class Snapshots(Namespace):
             region=region,
         )
 
+    def unarchive(
+        self, name: str, *, org: str | None = None, region: str | None = None
+    ) -> Snapshot:
+        """Start restoring an archived snapshot (``storage == "archived"``)
+        from object storage to local disk, so machines can be created from it
+        again. Anyone who can create a machine from the snapshot can.
+
+        Returns at once with the snapshot as the call left it: ``storage`` is
+        ``"unarchiving"`` while the restore runs, then ``"local"``. Follow it
+        with :meth:`get`. If ``storage`` goes back to ``"archived"`` the
+        restore failed, and calling this again retries it.
+
+        A snapshot that is already being restored is left as it is. One that
+        is being archived stays local: the upload is cancelled. A local one is
+        returned unchanged. An org can have a few restores running at once;
+        past that this raises :class:`~boxd.ConflictError` until one is done.
+
+        Creating a machine from an archived snapshot starts the same restore
+        and raises :class:`~boxd.ConflictError`; create again once ``storage``
+        is ``"local"``.
+        """
+        resp = self._transport.call(
+            "UnarchiveSnapshot",
+            api_pb2.UnarchiveSnapshotRequest(name=name, org=org or ""),
+            region=region,
+        )
+        if not resp.HasField("snapshot"):
+            raise NotFoundError(f"snapshot not found: {name}")
+        return m.snapshot(resp.snapshot, normalize(region))
+
 
 class AsyncSnapshots(Namespace):
     """Async twin of :class:`Snapshots`."""
@@ -167,3 +197,17 @@ class AsyncSnapshots(Namespace):
             api_pb2.DeleteSnapshotRequest(name=name, org=org or ""),
             region=region,
         )
+
+    async def unarchive(
+        self, name: str, *, org: str | None = None, region: str | None = None
+    ) -> Snapshot:
+        """Start restoring an archived snapshot from object storage. Returns at
+        once; see :meth:`Snapshots.unarchive`."""
+        resp = await self._transport.call(
+            "UnarchiveSnapshot",
+            api_pb2.UnarchiveSnapshotRequest(name=name, org=org or ""),
+            region=region,
+        )
+        if not resp.HasField("snapshot"):
+            raise NotFoundError(f"snapshot not found: {name}")
+        return m.snapshot(resp.snapshot, normalize(region))

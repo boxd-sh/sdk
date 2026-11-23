@@ -259,6 +259,9 @@ service BoxdApi {
   rpc ListSnapshots(ListSnapshotsRequest)     returns (ListSnapshotsResponse);
   rpc GetSnapshot(GetSnapshotRequest)         returns (GetSnapshotResponse);
   rpc DeleteSnapshot(DeleteSnapshotRequest)   returns (DeleteSnapshotResponse);
+  // Bring an archived snapshot back to local disk, so machines can be created
+  // from it again. Returns at once; see UnarchiveSnapshotRequest.
+  rpc UnarchiveSnapshot(UnarchiveSnapshotRequest) returns (UnarchiveSnapshotResponse);
   rpc CreateVmFromSnapshot(CreateVmFromSnapshotRequest) returns (CreateVmResponse);
   // Checkpoints: per-VM, worker-local full captures (state+memory+disk) with
   // warm restore in place. Same artifacts as a snapshot, but never replicated
@@ -2548,6 +2551,30 @@ message DeleteSnapshotRequest {
 }
 message DeleteSnapshotResponse {}
 
+// Starts restoring an archived snapshot (SnapshotInfo.storage "archived") from
+// object storage to local disk, for anyone who can create a machine from it.
+// The call returns at once: the snapshot's storage is "unarchiving" until the
+// restore is done, then "local". Follow it with GetSnapshot or ListSnapshots.
+// If the storage goes back to "archived" the restore failed; calling this
+// again retries it.
+//
+// On a snapshot that is already "unarchiving" it changes nothing and reports
+// the restore that runs. On one that is "archiving" it cancels the upload and
+// the snapshot stays local. On a local one it does nothing. An org can have a
+// few restores running at once; past that the call is refused with
+// FAILED_PRECONDITION until one is done.
+message UnarchiveSnapshotRequest {
+  string name = 1;   // snapshot name or id
+  string org  = 2;   // org context (name or id); empty = active/anchor
+}
+message UnarchiveSnapshotResponse {
+  // The snapshot as this call left it: `storage` is "unarchiving" when a
+  // restore runs, "local" when there was nothing to restore.
+  SnapshotInfo snapshot = 1;
+  // What was done and how to follow it, as a sentence for a person.
+  string message = 2;
+}
+
 message CreateVmFromSnapshotRequest {
   string   snapshot = 1;   // snapshot name or id
   string   name     = 2;   // new VM name (optional; auto-generated if empty)
@@ -2600,8 +2627,13 @@ message SnapshotInfo {
   // Where the snapshot's bytes are. "local": on a worker's disk.
   // "archiving": being copied to object storage. "archived": in object
   // storage only. "unarchiving": being restored to a worker's disk. Machines
-  // can't be created from it, nor can it be saved again, unless it is local;
-  // `archived` is true for the other three.
+  // can't be created from it unless it is local; `archived` is true for the
+  // other three. UnarchiveSnapshot brings an archived one back, and so does
+  // creating a machine from it: that create fails with FAILED_PRECONDITION
+  // and starts the restore, to be tried again once the storage is "local".
+  // An archived snapshot can be saved over: the new version is saved to
+  // local disk and the snapshot is local once it is ready. While it is
+  // "archiving" or "unarchiving" a save is refused.
   bool   archived         = 15;
   string storage          = 16;
   // The region the snapshot lives in; "" when boxd runs in one place.

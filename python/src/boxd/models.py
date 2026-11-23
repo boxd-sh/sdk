@@ -1148,8 +1148,11 @@ class Snapshot(BaseModel):
     "unarchiving" (being restored to disk). A plain string, so a value added
     later doesn't break older clients."""
     archived: bool = False
-    """True unless ``storage`` is "local": machines can't be created from it,
-    nor can it be saved again, until an operator unarchives it."""
+    """True unless ``storage`` is "local": machines can't be created from it
+    until it is local. ``snapshots.unarchive()`` brings an archived one back,
+    and so does creating a machine from it (that create fails and starts the
+    restore). Saving over an archived snapshot works: the new version is saved
+    to local disk."""
     region: str | None = None
     """The region the snapshot lives in. None when boxd runs in one place."""
     os: MachineOs | str = "linux"

@@ -1367,7 +1367,8 @@ snap.id; snap.name; snap.version; snap.status;
 await boxd.snapshots.get("golden");                 // by name or id
 await boxd.snapshots.list();
 await boxd.snapshots.delete("golden");
-await boxd.snapshots.list({ org: "acme" });         // `org` works on get/list/delete too
+await boxd.snapshots.list({ org: "acme" });         // `org` works on get/list/delete/unarchive too
+await boxd.snapshots.unarchive("golden");           // restore an archived one; see below
 
 const disk = await boxd.disks.create("data", "10G");   // bytes or a human string
 disk.id; disk.name; disk.sizeBytes; disk.status;
@@ -1381,6 +1382,15 @@ await boxd.disks.delete(disk.id);
 The machine must be running to snapshot it, and `create` answers before the
 artifact lands — `status` is `"pending"` until it does. Snapshots stay inside
 one organization.
+
+A snapshot can be archived to object storage (`storage: "archived"`).
+`snapshots.unarchive(name)` starts restoring it and returns at once: `storage`
+is `"unarchiving"` until the restore is done, then `"local"`, so follow it with
+`snapshots.get(name)`. If `storage` goes back to `"archived"` the restore
+failed; call `unarchive` again to retry. Creating a machine from an archived
+snapshot starts the same restore and throws `ConflictError`: create again once
+`storage` is `"local"`. Saving over an archived snapshot's name needs no
+restore: the new version is saved to local disk and the snapshot is local again.
 
 A disk is always created writable; read-only is chosen per attachment. A disk
 can be attached to only one machine at a time.
@@ -1401,7 +1411,7 @@ interface Snapshot {
   memoryBytes: number;
   useCount: number;         // machines restored from it so far
   storage: string;          // "local" | "archiving" | "archived" | "unarchiving"
-  archived: boolean;        // true unless storage is "local": machines can't be created from it
+  archived: boolean;        // true unless storage is "local": machines can't be created from it until it is
   region: string | null;    // where it lives
   os: "linux" | "windows";  // a machine created from it has this OS
 }

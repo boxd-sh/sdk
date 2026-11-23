@@ -192,6 +192,7 @@ _LOOKUP: dict[str, tuple[str, tuple[str, ...]]] = {
     },
     "GetSnapshot": ("snapshot", ("name",)),
     "DeleteSnapshot": ("snapshot", ("name",)),
+    "UnarchiveSnapshot": ("snapshot", ("name",)),
     "CreateVmFromSnapshot": ("snapshot", ("snapshot",)),
     "DestroyDisk": ("disk", ("disk_id",)),
 }

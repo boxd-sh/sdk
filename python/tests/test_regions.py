@@ -565,6 +565,19 @@ def test_an_empty_snapshot_answer_is_looked_up_too():
     assert (request.kind, request.name, request.org) == ("snapshot", "base", "acme")
 
 
+def test_unarchive_snapshot_not_here_is_looked_up_elsewhere():
+    router, home, _ = make(
+        {
+            "UnarchiveSnapshot": NotFoundError("snapshot not found"),
+            "FindElsewhere": elsewhere(exact=[("nyc", "base")]),
+        }
+    )
+    with pytest.raises(NotFoundError, match='pass region="nyc"'):
+        Snapshots(router).unarchive("base", org="acme")
+    request = home.calls[-1][1]
+    assert (request.kind, request.name, request.org) == ("snapshot", "base", "acme")
+
+
 def test_a_failed_lookup_never_replaces_the_error():
     router, _, _ = make(
         {

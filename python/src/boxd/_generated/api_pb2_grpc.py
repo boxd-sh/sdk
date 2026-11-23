@@ -444,6 +444,11 @@ class BoxdApiStub(object):
                 request_serializer=api__pb2.DeleteSnapshotRequest.SerializeToString,
                 response_deserializer=api__pb2.DeleteSnapshotResponse.FromString,
                 _registered_method=True)
+        self.UnarchiveSnapshot = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/UnarchiveSnapshot',
+                request_serializer=api__pb2.UnarchiveSnapshotRequest.SerializeToString,
+                response_deserializer=api__pb2.UnarchiveSnapshotResponse.FromString,
+                _registered_method=True)
         self.CreateVmFromSnapshot = channel.unary_unary(
                 '/boxd.api.v1.BoxdApi/CreateVmFromSnapshot',
                 request_serializer=api__pb2.CreateVmFromSnapshotRequest.SerializeToString,
@@ -1471,6 +1476,14 @@ class BoxdApiServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def UnarchiveSnapshot(self, request, context):
+        """Bring an archived snapshot back to local disk, so machines can be created
+        from it again. Returns at once; see UnarchiveSnapshotRequest.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def CreateVmFromSnapshot(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -2424,6 +2437,11 @@ def add_BoxdApiServicer_to_server(servicer, server):
                     servicer.DeleteSnapshot,
                     request_deserializer=api__pb2.DeleteSnapshotRequest.FromString,
                     response_serializer=api__pb2.DeleteSnapshotResponse.SerializeToString,
+            ),
+            'UnarchiveSnapshot': grpc.unary_unary_rpc_method_handler(
+                    servicer.UnarchiveSnapshot,
+                    request_deserializer=api__pb2.UnarchiveSnapshotRequest.FromString,
+                    response_serializer=api__pb2.UnarchiveSnapshotResponse.SerializeToString,
             ),
             'CreateVmFromSnapshot': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateVmFromSnapshot,
@@ -4995,6 +5013,33 @@ class BoxdApi(object):
             '/boxd.api.v1.BoxdApi/DeleteSnapshot',
             api__pb2.DeleteSnapshotRequest.SerializeToString,
             api__pb2.DeleteSnapshotResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def UnarchiveSnapshot(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/UnarchiveSnapshot',
+            api__pb2.UnarchiveSnapshotRequest.SerializeToString,
+            api__pb2.UnarchiveSnapshotResponse.FromString,
             options,
             channel_credentials,
             insecure,

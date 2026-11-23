@@ -110,4 +110,32 @@ export class Snapshots {
       { region: params.region },
     );
   }
+
+  /**
+   * Start restoring an archived snapshot (`storage: "archived"`) from object
+   * storage to local disk, so machines can be created from it again. Anyone
+   * who can create a machine from the snapshot can.
+   *
+   * Returns at once with the snapshot as the call left it: `storage` is
+   * `"unarchiving"` while the restore runs, then `"local"`. Follow it with
+   * `get()`. If `storage` goes back to `"archived"` the restore failed, and
+   * calling this again retries it.
+   *
+   * A snapshot that is already being restored is left as it is. One that is
+   * being archived stays local: the upload is cancelled. A local one is
+   * returned unchanged. An org can have a few restores running at once; past
+   * that this throws a `ConflictError` until one is done.
+   *
+   * Creating a machine from an archived snapshot starts the same restore and
+   * throws a `ConflictError`; create again once `storage` is `"local"`.
+   */
+  async unarchive(name: string, params: { org?: string } & RegionOption = {}): Promise<Snapshot> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.unarchiveSnapshot,
+      { name, org: params.org ?? "" },
+      { region: params.region },
+    );
+    if (!resp.snapshot) throw new NotFoundError(`snapshot not found: ${name}`);
+    return toSnapshot(resp.snapshot, normalizeRegion(params.region));
+  }
 }

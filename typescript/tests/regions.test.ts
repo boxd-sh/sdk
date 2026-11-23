@@ -605,6 +605,39 @@ describe("not found elsewhere", () => {
     expect(err.close[0].name).toBe("fooo");
   });
 
+  it("unarchive returns the snapshot as the call left it", async () => {
+    const { router, home } = make({
+      [HOME]: {
+        UnarchiveSnapshot: {
+          snapshot: { snapshotId: "sn_1", name: "base", storage: "unarchiving", archived: true },
+          message: "restoring snapshot 'base' from object storage.",
+        },
+      },
+    });
+    const snapshot = await new Snapshots(router).unarchive("base", { org: "acme" });
+    expect([snapshot.id, snapshot.storage, snapshot.archived]).toEqual([
+      "sn_1",
+      "unarchiving",
+      true,
+    ]);
+    expect(home.calls[0]).toEqual({
+      method: "UnarchiveSnapshot",
+      req: { name: "base", org: "acme" },
+    });
+  });
+
+  it("an archived snapshot that is not here is looked up elsewhere", async () => {
+    const { router } = make({
+      [HOME]: {
+        UnarchiveSnapshot: new NotFoundError("snapshot not found", 5),
+        FindElsewhere: elsewhere([["nyc", "base"]]),
+      },
+    });
+    const err = await new Snapshots(router).unarchive("base").catch((e) => e);
+    expect(err).toBeInstanceOf(NotFoundError);
+    expect(err.message).toContain('pass { region: "nyc" }');
+  });
+
   it("looks up an empty snapshot answer too", async () => {
     const { router, home } = make({
       [HOME]: { GetSnapshot: {}, FindElsewhere: elsewhere([["nyc", "base"]]) },

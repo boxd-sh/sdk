@@ -1199,8 +1199,11 @@ export interface Snapshot {
    */
   storage: string;
   /**
-   * `true` unless `storage` is `"local"`: machines can't be created from it,
-   * nor can it be saved again, until an operator unarchives it.
+   * `true` unless `storage` is `"local"`: machines can't be created from it
+   * until it is local. `snapshots.unarchive()` brings an archived one back,
+   * and so does creating a machine from it (that create fails and starts the
+   * restore). Saving over an archived snapshot works: the new version is
+   * saved to local disk.
    */
   archived: boolean;
   /** The region the snapshot lives in. `null` when boxd runs in one place. */

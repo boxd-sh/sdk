@@ -1318,7 +1318,8 @@ snap.id, snap.name, snap.version, snap.status
 boxd.snapshots.get("golden")                         # by name or id
 boxd.snapshots.list()
 boxd.snapshots.delete("golden")
-boxd.snapshots.list(org="acme")      # `org` works on get/list/delete too
+boxd.snapshots.list(org="acme")      # `org` works on get/list/delete/unarchive too
+boxd.snapshots.unarchive("golden")   # restore an archived one; see below
 
 disk = boxd.disks.create("data", "10G")   # bytes or a human string
 disk.id, disk.name, disk.size_bytes, disk.status
@@ -1332,6 +1333,15 @@ boxd.disks.delete(disk.id)
 The machine must be running to snapshot it, and `create` answers before the
 artifact lands — `status` is `"pending"` until it does. Snapshots stay inside
 one organization.
+
+A snapshot can be archived to object storage (`storage == "archived"`).
+`snapshots.unarchive(name)` starts restoring it and returns at once: `storage`
+is `"unarchiving"` until the restore is done, then `"local"`, so follow it with
+`snapshots.get(name)`. If `storage` goes back to `"archived"` the restore
+failed; call `unarchive` again to retry. Creating a machine from an archived
+snapshot starts the same restore and raises `ConflictError`: create again once
+`storage` is `"local"`. Saving over an archived snapshot's name needs no
+restore: the new version is saved to local disk and the snapshot is local again.
 
 A disk is always created writable; read-only is chosen per attachment. A disk
 can be attached to only one machine at a time.
@@ -1351,7 +1361,7 @@ snapshot.vcpu           # the sizing the machine was captured at
 snapshot.memory_bytes
 snapshot.use_count      # machines restored from it so far
 snapshot.storage        # "local" | "archiving" | "archived" | "unarchiving"
-snapshot.archived       # True unless storage is "local": machines can't be created from it
+snapshot.archived       # True unless storage is "local": machines can't be created from it until it is
 snapshot.region         # str | None — where it lives
 snapshot.os             # "linux" | "windows" — a machine created from it has this OS
 

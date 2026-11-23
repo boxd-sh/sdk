@@ -3104,6 +3104,39 @@ export interface DeleteSnapshotRequest {
 export interface DeleteSnapshotResponse {
 }
 
+/**
+ * Starts restoring an archived snapshot (SnapshotInfo.storage "archived") from
+ * object storage to local disk, for anyone who can create a machine from it.
+ * The call returns at once: the snapshot's storage is "unarchiving" until the
+ * restore is done, then "local". Follow it with GetSnapshot or ListSnapshots.
+ * If the storage goes back to "archived" the restore failed; calling this
+ * again retries it.
+ *
+ * On a snapshot that is already "unarchiving" it changes nothing and reports
+ * the restore that runs. On one that is "archiving" it cancels the upload and
+ * the snapshot stays local. On a local one it does nothing. An org can have a
+ * few restores running at once; past that the call is refused with
+ * FAILED_PRECONDITION until one is done.
+ */
+export interface UnarchiveSnapshotRequest {
+  /** snapshot name or id */
+  name: string;
+  /** org context (name or id); empty = active/anchor */
+  org: string;
+}
+
+export interface UnarchiveSnapshotResponse {
+  /**
+   * The snapshot as this call left it: `storage` is "unarchiving" when a
+   * restore runs, "local" when there was nothing to restore.
+   */
+  snapshot?:
+    | SnapshotInfo
+    | undefined;
+  /** What was done and how to follow it, as a sentence for a person. */
+  message: string;
+}
+
 export interface CreateVmFromSnapshotRequest {
   /** snapshot name or id */
   snapshot: string;
@@ -3178,8 +3211,13 @@ export interface SnapshotInfo {
    * Where the snapshot's bytes are. "local": on a worker's disk.
    * "archiving": being copied to object storage. "archived": in object
    * storage only. "unarchiving": being restored to a worker's disk. Machines
-   * can't be created from it, nor can it be saved again, unless it is local;
-   * `archived` is true for the other three.
+   * can't be created from it unless it is local; `archived` is true for the
+   * other three. UnarchiveSnapshot brings an archived one back, and so does
+   * creating a machine from it: that create fails with FAILED_PRECONDITION
+   * and starts the restore, to be tried again once the storage is "local".
+   * An archived snapshot can be saved over: the new version is saved to
+   * local disk and the snapshot is local once it is ready. While it is
+   * "archiving" or "unarchiving" a save is refused.
    */
   archived: boolean;
   storage: string;
@@ -26668,6 +26706,160 @@ export const DeleteSnapshotResponse: MessageFns<DeleteSnapshotResponse> = {
   },
 };
 
+function createBaseUnarchiveSnapshotRequest(): UnarchiveSnapshotRequest {
+  return { name: "", org: "" };
+}
+
+export const UnarchiveSnapshotRequest: MessageFns<UnarchiveSnapshotRequest> = {
+  encode(message: UnarchiveSnapshotRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.name !== "") {
+      writer.uint32(10).string(message.name);
+    }
+    if (message.org !== "") {
+      writer.uint32(18).string(message.org);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): UnarchiveSnapshotRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseUnarchiveSnapshotRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.name = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.org = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): UnarchiveSnapshotRequest {
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      org: isSet(object.org) ? globalThis.String(object.org) : "",
+    };
+  },
+
+  toJSON(message: UnarchiveSnapshotRequest): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.org !== "") {
+      obj.org = message.org;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<UnarchiveSnapshotRequest>): UnarchiveSnapshotRequest {
+    return UnarchiveSnapshotRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<UnarchiveSnapshotRequest>): UnarchiveSnapshotRequest {
+    const message = createBaseUnarchiveSnapshotRequest();
+    message.name = object.name ?? "";
+    message.org = object.org ?? "";
+    return message;
+  },
+};
+
+function createBaseUnarchiveSnapshotResponse(): UnarchiveSnapshotResponse {
+  return { snapshot: undefined, message: "" };
+}
+
+export const UnarchiveSnapshotResponse: MessageFns<UnarchiveSnapshotResponse> = {
+  encode(message: UnarchiveSnapshotResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.snapshot !== undefined) {
+      SnapshotInfo.encode(message.snapshot, writer.uint32(10).fork()).join();
+    }
+    if (message.message !== "") {
+      writer.uint32(18).string(message.message);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): UnarchiveSnapshotResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseUnarchiveSnapshotResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.snapshot = SnapshotInfo.decode(reader, reader.uint32());
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.message = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): UnarchiveSnapshotResponse {
+    return {
+      snapshot: isSet(object.snapshot) ? SnapshotInfo.fromJSON(object.snapshot) : undefined,
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+    };
+  },
+
+  toJSON(message: UnarchiveSnapshotResponse): unknown {
+    const obj: any = {};
+    if (message.snapshot !== undefined) {
+      obj.snapshot = SnapshotInfo.toJSON(message.snapshot);
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<UnarchiveSnapshotResponse>): UnarchiveSnapshotResponse {
+    return UnarchiveSnapshotResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<UnarchiveSnapshotResponse>): UnarchiveSnapshotResponse {
+    const message = createBaseUnarchiveSnapshotResponse();
+    message.snapshot = (object.snapshot !== undefined && object.snapshot !== null)
+      ? SnapshotInfo.fromPartial(object.snapshot)
+      : undefined;
+    message.message = object.message ?? "";
+    return message;
+  },
+};
+
 function createBaseCreateVmFromSnapshotRequest(): CreateVmFromSnapshotRequest {
   return {
     snapshot: "",
@@ -41551,6 +41743,21 @@ export const BoxdApiService = {
       Buffer.from(DeleteSnapshotResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer): DeleteSnapshotResponse => DeleteSnapshotResponse.decode(value),
   },
+  /**
+   * Bring an archived snapshot back to local disk, so machines can be created
+   * from it again. Returns at once; see UnarchiveSnapshotRequest.
+   */
+  unarchiveSnapshot: {
+    path: "/boxd.api.v1.BoxdApi/UnarchiveSnapshot" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: UnarchiveSnapshotRequest): Buffer =>
+      Buffer.from(UnarchiveSnapshotRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): UnarchiveSnapshotRequest => UnarchiveSnapshotRequest.decode(value),
+    responseSerialize: (value: UnarchiveSnapshotResponse): Buffer =>
+      Buffer.from(UnarchiveSnapshotResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): UnarchiveSnapshotResponse => UnarchiveSnapshotResponse.decode(value),
+  },
   createVmFromSnapshot: {
     path: "/boxd.api.v1.BoxdApi/CreateVmFromSnapshot" as const,
     requestStream: false as const,
@@ -42765,6 +42972,11 @@ export interface BoxdApiServer extends UntypedServiceImplementation {
   listSnapshots: handleUnaryCall<ListSnapshotsRequest, ListSnapshotsResponse>;
   getSnapshot: handleUnaryCall<GetSnapshotRequest, GetSnapshotResponse>;
   deleteSnapshot: handleUnaryCall<DeleteSnapshotRequest, DeleteSnapshotResponse>;
+  /**
+   * Bring an archived snapshot back to local disk, so machines can be created
+   * from it again. Returns at once; see UnarchiveSnapshotRequest.
+   */
+  unarchiveSnapshot: handleUnaryCall<UnarchiveSnapshotRequest, UnarchiveSnapshotResponse>;
   createVmFromSnapshot: handleUnaryCall<CreateVmFromSnapshotRequest, CreateVmResponse>;
   /**
    * Checkpoints: per-VM, worker-local full captures (state+memory+disk) with
@@ -44400,6 +44612,25 @@ export interface BoxdApiClient extends Client {
     metadata: Metadata,
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: DeleteSnapshotResponse) => void,
+  ): ClientUnaryCall;
+  /**
+   * Bring an archived snapshot back to local disk, so machines can be created
+   * from it again. Returns at once; see UnarchiveSnapshotRequest.
+   */
+  unarchiveSnapshot(
+    request: UnarchiveSnapshotRequest,
+    callback: (error: ServiceError | null, response: UnarchiveSnapshotResponse) => void,
+  ): ClientUnaryCall;
+  unarchiveSnapshot(
+    request: UnarchiveSnapshotRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: UnarchiveSnapshotResponse) => void,
+  ): ClientUnaryCall;
+  unarchiveSnapshot(
+    request: UnarchiveSnapshotRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: UnarchiveSnapshotResponse) => void,
   ): ClientUnaryCall;
   createVmFromSnapshot(
     request: CreateVmFromSnapshotRequest,

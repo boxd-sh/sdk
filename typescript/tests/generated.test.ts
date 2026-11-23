@@ -87,6 +87,7 @@ describe("generated stubs are current", () => {
       "getSnapshot",
       "listSnapshots",
       "deleteSnapshot",
+      "unarchiveSnapshot",
       "createDisk",
       "listDisks",
       "attachDisk",

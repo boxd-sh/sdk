@@ -2135,6 +2135,63 @@ def test_snapshots_create_list_and_delete():
     assert transport.calls[1][1].org == "acme"
 
 
+def test_snapshots_unarchive_returns_the_snapshot_as_the_call_left_it():
+    from boxd.resources.snapshots import Snapshots
+
+    transport = FakeTransport(
+        [
+            api_pb2.UnarchiveSnapshotResponse(
+                snapshot=api_pb2.SnapshotInfo(
+                    snapshot_id="s1", name="base", archived=True, storage="unarchiving"
+                ),
+                message="restoring snapshot 'base' from object storage.",
+            ),
+            api_pb2.UnarchiveSnapshotResponse(),
+        ]
+    )
+    snapshots = Snapshots(transport)
+    snapshot = snapshots.unarchive("base", org="acme", region="fra")
+    assert (snapshot.id, snapshot.storage, snapshot.archived, snapshot.region) == (
+        "s1",
+        "unarchiving",
+        True,
+        "fra",
+    )
+    method, request = transport.calls[0][:2]
+    assert (method, request.name, request.org) == ("UnarchiveSnapshot", "base", "acme")
+    # An answer without the snapshot is not a snapshot.
+    with pytest.raises(NotFoundError):
+        snapshots.unarchive("base")
+
+
+async def test_async_snapshots_unarchive_matches_sync():
+    from boxd.resources.snapshots import AsyncSnapshots
+
+    transport = FakeAsyncTransport(
+        [
+            api_pb2.UnarchiveSnapshotResponse(
+                snapshot=api_pb2.SnapshotInfo(
+                    snapshot_id="s1", name="base", archived=True, storage="unarchiving"
+                ),
+                message="restoring snapshot 'base' from object storage.",
+            ),
+            api_pb2.UnarchiveSnapshotResponse(),
+        ]
+    )
+    snapshots = AsyncSnapshots(transport)
+    snapshot = await snapshots.unarchive("base", org="acme", region="fra")
+    assert (snapshot.id, snapshot.storage, snapshot.archived, snapshot.region) == (
+        "s1",
+        "unarchiving",
+        True,
+        "fra",
+    )
+    method, request = transport.calls[0][:2]
+    assert (method, request.name, request.org) == ("UnarchiveSnapshot", "base", "acme")
+    with pytest.raises(NotFoundError):
+        await snapshots.unarchive("base")
+
+
 def test_disks_list_reports_attachments():
     from boxd.resources.disks import Disks
 
