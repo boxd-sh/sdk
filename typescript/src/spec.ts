@@ -59,7 +59,7 @@ export type MachineSpecBase = { team: string } | { snapshot: string };
 export type MachineSpecConnection = "personal" | `shared:${string}`;
 
 /** An agent login a machine needs. */
-export type MachineSpecAgent = "claude" | "codex" | (string & {});
+export type MachineSpecAgent = "claude" | "codex" | "antigravity" | (string & {});
 
 /**
  * A machine spec, in the form the server stores and returns: empty fields are
@@ -399,6 +399,8 @@ export const asana = (opts?: ConnectionPieceOptions): MachineSpecPiece => connec
 export const claude = (): MachineSpecPiece => ({ agents: ["claude"] });
 /** The machine needs a Codex login. */
 export const codex = (): MachineSpecPiece => ({ agents: ["codex"] });
+/** The machine needs an Antigravity login. */
+export const antigravity = (): MachineSpecPiece => ({ agents: ["antigravity"] });
 /**
  * The machine gets these secrets, by name: your own or the org's, usually
  * `unattached` ones (`boxd.secrets.set(name, value, { scope: "unattached" })`).

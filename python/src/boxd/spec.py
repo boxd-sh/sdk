@@ -95,7 +95,7 @@ class MachineSpec(TypedDict, total=False):
     connections: dict[str, str]
     """Integration name → ``"personal"`` or ``"shared:<tag>"``. Recorded on the machine."""
     agents: list[str]
-    """Agent logins the machine needs (``"claude"``, ``"codex"``). Recorded on the machine."""
+    """Agent logins the machine needs (``"claude"``, ``"codex"``, ``"antigravity"``). Recorded on the machine."""
     packages: list[str]
     """Shell commands run once, in order, as root, after the machine's first
     boot (``DEBIAN_FRONTEND=noninteractive``, 30 minutes each, output in
@@ -376,6 +376,11 @@ def claude() -> MachineSpecPiece:
 def codex() -> MachineSpecPiece:
     """The machine needs a Codex login."""
     return {"agents": ["codex"]}
+
+
+def antigravity() -> MachineSpecPiece:
+    """The machine needs an Antigravity login."""
+    return {"agents": ["antigravity"]}
 
 
 def secrets(*names: str) -> MachineSpecPiece:

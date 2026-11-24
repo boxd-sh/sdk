@@ -14,6 +14,7 @@ import {
   Machine,
   MachineSpecBuilder,
   Machines,
+  antigravity,
   asana,
   claude,
   codex,
@@ -117,7 +118,9 @@ describe("Machine.spec()", () => {
       .label("team", "eng")
       .env("NODE_ENV", "development")
       .with(github({ shared: "eng-bot" }), claude());
-    const mike = engineering.size("2x8").with(slack(), jira({ shared: "jira" }), asana(), codex());
+    const mike = engineering
+      .size("2x8")
+      .with(slack(), jira({ shared: "jira" }), asana(), codex(), antigravity());
     expect(mike.resolve()).toEqual({
       version: 1,
       base: { team: "eng" },
@@ -131,7 +134,7 @@ describe("Machine.spec()", () => {
         jira: "shared:jira",
         asana: "personal",
       },
-      agents: ["claude", "codex"],
+      agents: ["claude", "codex", "antigravity"],
     });
     // Builders are immutable: the shared base is untouched.
     expect(engineering.resolve().size).toBeUndefined();

@@ -2,10 +2,11 @@
  * `boxd.integrations` — what your machines are signed in to.
  *
  * Today: the coding agents' sign-ins, `"claude"` (Claude Code;
- * `"claude-code"` works too) and `"codex"`. A sign-in is yours, kept in one
- * organization: every private machine of yours there uses it, and the
- * platform keeps it fresh. It is the same sign-in as Integrations in the
- * console and `boxd manage integrations connect` on the command line.
+ * `"claude-code"` works too), `"codex"`, and `"antigravity"` (`"agy"` works
+ * too). A sign-in is yours, kept in one organization: every private machine of
+ * yours there uses it, and the platform keeps it fresh. It is the same sign-in
+ * as Integrations in the console and `boxd manage integrations connect` on the
+ * command line.
  *
  * ```ts
  * const start = await boxd.integrations.connect("codex");
@@ -15,6 +16,10 @@
  * const claude = await boxd.integrations.connect("claude");
  * console.log(`Open ${claude.url}, approve, and paste the code it shows you`);
  * await boxd.integrations.complete("claude", { code });
+ *
+ * const agy = await boxd.integrations.connect("antigravity");
+ * console.log(`Open ${agy.url}, approve, and paste the code it shows you`);
+ * await boxd.integrations.complete("antigravity", { code });
  * ```
  *
  * `org` (a name or id) picks the organization. Without it: your default
@@ -43,15 +48,15 @@ export interface IntegrationOrgOption {
   org?: string;
 }
 
-/** Your sign-ins to the coding agents: `"claude"` and `"codex"`. */
+/** Your sign-ins to the coding agents: `"claude"`, `"codex"`, and `"antigravity"`. */
 export class Integrations {
   constructor(private readonly transport: Transport) {}
 
   /**
-   * Start signing `name` in (`"claude"` or `"codex"`): where to go. Claude
-   * Code (`paste_code`): open `url`, approve, and pass the code the page then
-   * shows you to `complete()`. Codex (`device_code`): open `url`, enter
-   * `userCode`, and `wait()`.
+   * Start signing `name` in (`"claude"`, `"codex"`, or `"antigravity"`): where
+   * to go. Claude Code and Antigravity (`paste_code`): open `url`, approve,
+   * and pass the code the page then shows you to `complete()`. Codex
+   * (`device_code`): open `url`, enter `userCode`, and `wait()`.
    */
   async connect(name: string, opts: IntegrationOrgOption = {}): Promise<AgentLoginStart> {
     const resp = await this.transport.unary(BoxdApiDefinition.methods.startAgentLogin, {
@@ -63,10 +68,10 @@ export class Integrations {
   }
 
   /**
-   * Finish a sign-in `connect()` began, in one call. Claude Code: `code` is
-   * the code the page showed you after you approved, and you're signed in.
-   * Codex: `handle` is the start's, and the result is `pending` until you've
-   * approved; `wait()` asks again for you.
+   * Finish a sign-in `connect()` began, in one call. Claude Code / Antigravity:
+   * `code` is the code the page showed you after you approved, and you're
+   * signed in. Codex: `handle` is the start's, and the result is `pending`
+   * until you've approved; `wait()` asks again for you.
    */
   async complete(
     name: string,
@@ -123,8 +128,8 @@ export class Integrations {
   }
 
   /** Forget your sign-in to `name`: your private machines in the
-   *  organization stop getting it. It isn't revoked at Anthropic or OpenAI;
-   *  do that from your account there. */
+   *  organization stop getting it. It isn't revoked at Anthropic, OpenAI or
+   *  Google; do that from your account there. */
   async disconnect(name: string, opts: IntegrationOrgOption = {}): Promise<void> {
     await this.transport.unary(BoxdApiDefinition.methods.deleteAgentLogin, {
       vmId: "",

@@ -1,10 +1,10 @@
 """`boxd.integrations` — what your machines are signed in to.
 
 Today: the coding agents' sign-ins, ``"claude"`` (Claude Code; ``"claude-code"``
-works too) and ``"codex"``. A sign-in is yours, kept in one organization:
-every private machine of yours there uses it, and the platform keeps it
-fresh. It is the same sign-in as Integrations in the console and
-``boxd manage integrations connect`` on the command line::
+works too), ``"codex"``, and ``"antigravity"`` (``"agy"`` works too). A sign-in
+is yours, kept in one organization: every private machine of yours there uses
+it, and the platform keeps it fresh. It is the same sign-in as Integrations in
+the console and ``boxd manage integrations connect`` on the command line::
 
     start = boxd.integrations.connect("codex")
     print(f"Open {start.url} and enter {start.user_code}")
@@ -13,6 +13,10 @@ fresh. It is the same sign-in as Integrations in the console and
     start = boxd.integrations.connect("claude")
     print(f"Open {start.url}, approve, and paste the code it shows you")
     login = boxd.integrations.complete("claude", code=input("Code: "))
+
+    start = boxd.integrations.connect("antigravity")
+    print(f"Open {start.url}, approve, and paste the code it shows you")
+    login = boxd.integrations.complete("antigravity", code=input("Code: "))
 
 `org` (a name or id) picks the organization. Without it: your default
 organization, or the one your API key is for. A sign-in belongs to a person,
@@ -56,13 +60,13 @@ def _wait(name: str, start: AgentLoginStart, timeout: float | None) -> _LoginWai
 
 
 class Integrations(Namespace):
-    """Your sign-ins to the coding agents: ``"claude"`` and ``"codex"``."""
+    """Your sign-ins to the coding agents: ``"claude"``, ``"codex"``, and ``"antigravity"``."""
 
     def connect(self, name: str, *, org: str | None = None) -> AgentLoginStart:
-        """Start signing `name` in (``"claude"`` or ``"codex"``): where to go.
+        """Start signing `name` in (``"claude"``, ``"codex"``, or ``"antigravity"``): where to go.
 
-        Claude Code (``"paste_code"``): open ``url``, approve, and pass the
-        code the page then shows you to :meth:`complete`. Codex
+        Claude Code and Antigravity (``"paste_code"``): open ``url``, approve,
+        and pass the code the page then shows you to :meth:`complete`. Codex
         (``"device_code"``): open ``url``, enter ``user_code``, and
         :meth:`wait`.
         """
@@ -76,9 +80,9 @@ class Integrations(Namespace):
         handle: str | None = None,
         org: str | None = None,
     ) -> AgentLoginResult:
-        """Finish a sign-in :meth:`connect` began, in one call. Claude Code:
-        `code` is the code the page showed you after you approved, and you're
-        signed in. Codex: `handle` is the start's, and the result is
+        """Finish a sign-in :meth:`connect` began, in one call. Claude Code /
+        Antigravity: `code` is the code the page showed you after you approved,
+        and you're signed in. Codex: `handle` is the start's, and the result is
         ``pending`` until you've approved; :meth:`wait` asks again for you."""
         return m.agent_login_result(
             self._transport.call(
@@ -121,8 +125,8 @@ class Integrations(Namespace):
 
     def disconnect(self, name: str, *, org: str | None = None) -> None:
         """Forget your sign-in to `name`: your private machines in the
-        organization stop getting it. It isn't revoked at Anthropic or
-        OpenAI; do that from your account there."""
+        organization stop getting it. It isn't revoked at Anthropic, OpenAI, or
+        Google; do that from your account there."""
         self._transport.call(
             "DeleteAgentLogin", api_pb2.DeleteAgentLoginRequest(harness=name, org=org or "")
         )

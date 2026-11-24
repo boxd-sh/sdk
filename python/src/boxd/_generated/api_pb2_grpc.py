@@ -1071,15 +1071,15 @@ class BoxdApiServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def StartAgentLogin(self, request, context):
-        """Sign a coding agent in (Claude Code or Codex): the platform's own
-        sign-in, the same as Integrations in the console. A sign-in is yours,
+        """Sign a coding agent in (Claude Code, Codex, or Antigravity): the platform's
+        own sign-in, the same as Integrations in the console. A sign-in is yours,
         kept in one organization (`org`, else your default one), refreshed by
         the platform, and given to every private machine of yours there; your
         agent sessions use it. A shared or isolated machine never gets it (give
         it an API key as a secret instead). Start returns where to go; Complete
-        takes the code Claude shows you, or says whether you've approved Codex's
-        device code yet. An organization API key can't sign in: a sign-in
-        belongs to a person.
+        takes the code Claude or Antigravity shows you, or says whether you've
+        approved Codex's device code yet. An organization API key can't sign in: a
+        sign-in belongs to a person.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -1099,8 +1099,8 @@ class BoxdApiServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def DeleteAgentLogin(self, request, context):
-        """Forget a sign-in. It isn't revoked at Anthropic or OpenAI; do that from
-        your account there.
+        """Forget a sign-in. It isn't revoked at Anthropic, OpenAI or Google; do that
+        from your account there.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

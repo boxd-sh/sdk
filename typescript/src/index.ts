@@ -51,6 +51,7 @@ export {
   MACHINE_SPEC_VERSION,
   Machine,
   MachineSpecBuilder,
+  antigravity,
   asana,
   claude,
   codex,

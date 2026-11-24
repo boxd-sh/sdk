@@ -15,6 +15,7 @@ from boxd import (
     Machine,
     MachineSpecBuilder,
     MachineSpecError,
+    antigravity,
     asana,
     claude,
     codex,
@@ -62,7 +63,9 @@ def test_builds_the_plans_example():
         .env("NODE_ENV", "development")
         .with_(github(shared="eng-bot"), claude())
     )
-    mike = engineering.size("2x8").with_(slack(), jira(shared="jira"), asana(), codex())
+    mike = engineering.size("2x8").with_(
+        slack(), jira(shared="jira"), asana(), codex(), antigravity()
+    )
     assert mike.resolve() == {
         "version": 1,
         "base": {"team": "eng"},
@@ -76,7 +79,7 @@ def test_builds_the_plans_example():
             "jira": "shared:jira",
             "asana": "personal",
         },
-        "agents": ["claude", "codex"],
+        "agents": ["claude", "codex", "antigravity"],
     }
     # Builders are immutable: the shared base is untouched.
     assert "size" not in engineering.resolve()
