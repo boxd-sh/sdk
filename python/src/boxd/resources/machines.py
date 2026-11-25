@@ -394,21 +394,53 @@ def _exec_init(
             cols=cols,
             rows=rows,
         )
-    line = req.join_command(command)
-    if env:
-        # There is no env field on ExecChunk — the command runs through a
-        # shell, so prefix assignments do the job.
-        prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
-        line = f"{prefix} {line}"
-    if cwd:
-        # Same reasoning as `env`: no cwd field on ExecChunk, so `cd` ahead of
-        # the command through the same shell. `&&` means a `cwd` that doesn't
-        # exist fails fast with `cd`'s own error instead of silently running
-        # in the default directory.
-        line = f"cd {shlex.quote(cwd)} && {line}"
     return req.exec_chunk(
-        machine_id=machine_id, command=line, tty=tty, cols=cols, rows=rows
+        machine_id=machine_id,
+        command=_posix_line(command, env=env, cwd=cwd),
+        tty=tty,
+        cols=cols,
+        rows=rows,
     )
+
+
+def _shell_env_name(name: str) -> str:
+    """`name` as it is, if a POSIX shell can ``export`` it. Anything else is
+    refused here rather than sent: the name goes into the command line
+    unquoted, so it must not be able to change it."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        raise ValueError(
+            f"exec: the env variable name {name!r} can't be set on a Linux "
+            "machine: a shell variable name is letters, digits and '_', and "
+            "doesn't start with a digit"
+        )
+    return name
+
+
+def _posix_line(
+    command: str | Sequence[str],
+    *,
+    env: Mapping[str, str] | None,
+    cwd: str | None,
+) -> str:
+    """The exec command line for a Linux machine, which runs it with
+    ``/bin/sh -c``. ExecChunk has no env or cwd field, so both go ahead of
+    the line, and they cover all of it:
+
+    - `cwd` is ``cd DIR || exit``, so a directory that doesn't exist stops the
+      whole line with ``cd``'s error and status. ``cd DIR && line`` stopped
+      only the line's first command: anything after a ``;`` still ran, in the
+      default directory.
+    - `env` is ``export K=V``. A ``K=V line`` prefix set the variable for the
+      first simple command only, and after the shell had already expanded a
+      ``$K`` in the line, so ``&&``, ``;``, pipes and ``$K`` never saw it."""
+    line = req.join_command(command)
+    prefix = []
+    if cwd:
+        prefix.append(f"cd {shlex.quote(cwd)} || exit")
+    if env:
+        assignments = (f"{_shell_env_name(k)}={shlex.quote(v)}" for k, v in env.items())
+        prefix.append("export " + " ".join(assignments))
+    return "; ".join([*prefix, line]) if prefix else line
 
 
 @contextmanager
@@ -1397,6 +1429,11 @@ class Machines(Namespace):
         `cwd` runs the command in that directory; a `cwd` that doesn't exist
         fails fast (the remote `cd` errors and the command never runs)
         instead of silently running in the default directory.
+
+        `env` is set for the whole command line: every command in it sees the
+        variables, and so does a ``$VAR`` in the line itself. On Linux a name
+        must be a shell variable name (letters, digits and ``_``, not
+        starting with a digit); any other is refused with `ValueError`.
 
         A Windows machine runs the command line as one PowerShell command: a
         list is quoted for PowerShell, `cwd` becomes ``Set-Location`` and
@@ -2642,6 +2679,11 @@ class AsyncMachines(Namespace):
         `cwd` runs the command in that directory; a `cwd` that doesn't exist
         fails fast (the remote `cd` errors and the command never runs)
         instead of silently running in the default directory.
+
+        `env` is set for the whole command line: every command in it sees the
+        variables, and so does a ``$VAR`` in the line itself. On Linux a name
+        must be a shell variable name (letters, digits and ``_``, not
+        starting with a digit); any other is refused with `ValueError`.
 
         A Windows machine runs the command line as one PowerShell command: a
         list is quoted for PowerShell, `cwd` becomes ``Set-Location`` and

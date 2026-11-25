@@ -6,6 +6,8 @@ go on the wire without needing a cluster.
 
 from __future__ import annotations
 
+import os
+import subprocess
 from datetime import datetime, timezone
 
 import grpc
@@ -15,7 +17,7 @@ from boxd import AsyncBoxd, Boxd
 from boxd._generated import api_pb2
 from boxd.errors import BoxdError, NotFoundError
 from boxd.models import Machine, ProxyEntry, Secret
-from boxd.resources.machines import AsyncMachines, Machines
+from boxd.resources.machines import AsyncMachines, Machines, _posix_line
 from boxd.resources.snapshots import Snapshots
 from boxd.resources.vars import AsyncEnv, AsyncSecrets, Env, Secrets
 from fakes import FakeAsyncTransport, FakeRpcError, FakeTransport
@@ -691,16 +693,62 @@ def test_exec_buffer_encoding_is_byte_exact():
     assert isinstance(result.stdout, bytes)
 
 
-def test_exec_prefixes_env_assignments():
+def test_exec_exports_env_ahead_of_the_line():
     transport = FakeTransport([a_vm(), [api_pb2.ExecChunk(exit_code=0)]])
-    Machines(transport).exec("alpha", "env", env={"MODE": "a b"})
-    assert transport.sent[0].command == "MODE='a b' env"
+    Machines(transport).exec("alpha", "env", env={"MODE": "a b", "N": "1"})
+    assert transport.sent[0].command == "export MODE='a b' N=1; env"
 
 
-def test_exec_cwd_prepends_a_cd():
+def test_exec_cwd_prepends_a_cd_that_exits_on_failure():
     transport = FakeTransport([a_vm(), [api_pb2.ExecChunk(exit_code=0)]])
     Machines(transport).exec("alpha", "pwd", cwd="/opt/my app")
-    assert transport.sent[0].command == "cd '/opt/my app' && pwd"
+    assert transport.sent[0].command == "cd '/opt/my app' || exit; pwd"
+
+
+@pytest.mark.parametrize("name", ["", "1X", "A-B", "A;touch /tmp/x;B", "A B", "A=B"])
+def test_exec_refuses_an_env_name_a_shell_cant_export(name):
+    transport = FakeTransport([a_vm()])
+    with pytest.raises(ValueError, match="shell variable name"):
+        Machines(transport).exec("alpha", "true", env={name: "v"})
+    assert [c[0] for c in transport.calls] == ["GetVm"]
+
+
+@pytest.mark.skipif(not os.path.exists("/bin/sh"), reason="needs a POSIX /bin/sh")
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ('echo "$X"', "v a'b"),
+        ('true && echo "$X"', "v a'b"),
+        ('true; sh -c \'echo "$X"\'', "v a'b"),
+        ('echo | sh -c \'echo "$X"\'', "v a'b"),
+        (["sh", "-c", 'echo "$X"'], "v a'b"),
+    ],
+)
+def test_exec_env_reaches_every_command_in_the_line(command, expected):
+    """Run the line the way the machine does (``/bin/sh -c``)."""
+    line = _posix_line(command, env={"X": "v a'b"}, cwd=None)
+    out = subprocess.run(["/bin/sh", "-c", line], capture_output=True, text=True)
+    assert out.stdout.strip() == expected
+
+
+@pytest.mark.skipif(not os.path.exists("/bin/sh"), reason="needs a POSIX /bin/sh")
+def test_exec_missing_cwd_stops_the_whole_line(tmp_path):
+    line = _posix_line(
+        f"touch {tmp_path}/first; touch {tmp_path}/second",
+        env={"X": "v"},
+        cwd=str(tmp_path / "missing"),
+    )
+    out = subprocess.run(["/bin/sh", "-c", line], capture_output=True, text=True)
+    assert out.returncode != 0
+    assert "missing" in out.stderr
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.skipif(not os.path.exists("/bin/sh"), reason="needs a POSIX /bin/sh")
+def test_exec_cwd_holds_for_the_whole_line(tmp_path):
+    line = _posix_line("cd . && pwd; pwd", env=None, cwd=str(tmp_path))
+    out = subprocess.run(["/bin/sh", "-c", line], capture_output=True, text=True)
+    assert out.stdout.split() == [str(tmp_path), str(tmp_path)]
 
 
 # --- exec on a Windows machine: one PowerShell command ---
@@ -729,7 +777,7 @@ def test_exec_on_linux_stays_posix_byte_for_byte():
     machines.exec("alpha", ["echo", "a b", "it's"])
     assert transport.sent[0].command == "echo 'a b' 'it'\"'\"'s'"
     machines.exec("alpha", "env", env={"MODE": "a b"}, cwd="/opt/my app")
-    assert transport.sent[0].command == "cd '/opt/my app' && MODE='a b' env"
+    assert transport.sent[0].command == "cd '/opt/my app' || exit; export MODE='a b'; env"
     machines.exec("alpha", ["true"])
     assert transport.sent[0].command == "true"
     assert [c[0] for c in transport.calls] == ["GetVm", "Exec", "Exec", "Exec"]

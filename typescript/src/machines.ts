@@ -352,8 +352,11 @@ export interface ExecParams extends RegionOption {
    */
   command: string | string[];
   /**
-   * Prefixed onto the command line as `K=V` assignments (`$env:K='V';` on a
-   * Windows machine).
+   * Set for the whole command line: every command in it sees the variables,
+   * and so does a `$VAR` in the line itself (`export K=V;` ahead of it, or
+   * `$env:K='V';` on a Windows machine). On Linux a name must be a shell
+   * variable name (letters, digits and `_`, not starting with a digit); any
+   * other is refused.
    */
   env?: Record<string, string>;
   /**
@@ -461,19 +464,45 @@ function shellQuote(arg: string): string {
   return "'" + arg.replace(/'/g, `'"'"'`) + "'";
 }
 
-function commandLine(command: string | string[], env?: Record<string, string>, cwd?: string): string {
-  const cmd = typeof command === "string" ? command : command.map(shellQuote).join(" ");
-  let line = cmd;
-  if (env && Object.keys(env).length > 0) {
-    const prefix = Object.entries(env)
-      .map(([k, v]) => `${k}=${shellQuote(v)}`)
-      .join(" ");
-    line = `${prefix} ${line}`;
+/**
+ * `name` as it is, if a POSIX shell can `export` it. Anything else is refused
+ * here rather than sent: the name goes into the command line unquoted, so it
+ * must not be able to change it.
+ */
+function shellEnvName(name: string): string {
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return name;
+  throw new BoxdError(
+    `exec: the env variable name ${JSON.stringify(name)} can't be set on a Linux machine: ` +
+      "a shell variable name is letters, digits and `_`, and doesn't start with a digit",
+  );
+}
+
+/**
+ * The exec command line for a Linux machine, which runs it with `/bin/sh -c`.
+ * ExecChunk has no env or cwd field, so both go ahead of the line, and they
+ * cover all of it:
+ *
+ * - `cwd` is `cd DIR || exit`, so a directory that doesn't exist stops the
+ *   whole line with `cd`'s error and status. `cd DIR && line` stopped only the
+ *   line's first command: anything after a `;` still ran, in the default
+ *   directory.
+ * - `env` is `export K=V`. A `K=V line` prefix set the variable for the first
+ *   simple command only, and after the shell had already expanded a `$K` in
+ *   the line, so `&&`, `;`, pipes and `$K` never saw it.
+ */
+function commandLine(
+  command: string | string[],
+  env?: Record<string, string>,
+  cwd?: string,
+): string {
+  const line = typeof command === "string" ? command : command.map(shellQuote).join(" ");
+  const prefix: string[] = [];
+  if (cwd) prefix.push(`cd ${shellQuote(cwd)} || exit`);
+  const vars = Object.entries(env ?? {});
+  if (vars.length > 0) {
+    prefix.push(`export ${vars.map(([k, v]) => `${shellEnvName(k)}=${shellQuote(v)}`).join(" ")}`);
   }
-  // No cwd field on the wire, so `cd` ahead of the command through the same
-  // shell — same trick as the env prefix above.
-  if (cwd) line = `cd ${shellQuote(cwd)} && ${line}`;
-  return line;
+  return prefix.length > 0 ? `${prefix.join("; ")}; ${line}` : line;
 }
 
 /**

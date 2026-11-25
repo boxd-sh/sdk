@@ -9,7 +9,15 @@
  * SDK.
  */
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -858,13 +866,13 @@ describe("machines.exec", () => {
     expect(init.vmId).toBe("alpha");
   });
 
-  it("prefixes env assignments onto the command line", async () => {
+  it("exports env ahead of the command line", async () => {
     const t = new FakeTransport([], { chunks: [chunk({ exitCode: 0 })] });
     await new Machines(asTransport(t)).exec("alpha", {
       command: "env",
-      env: { MODE: "a b" },
+      env: { MODE: "a b", N: "1" },
     });
-    expect(t.streams[0]!.written[0]!.command).toBe("MODE='a b' env");
+    expect(t.streams[0]!.written[0]!.command).toBe("export MODE='a b' N=1; env");
   });
 
   it("default encoding corrupts invalid UTF-8", async () => {
@@ -886,13 +894,13 @@ describe("machines.exec", () => {
     expect(result.stdout).toEqual(raw);
   });
 
-  it("prepends a cd onto the command line for cwd", async () => {
+  it("prepends a cd that exits when it fails for cwd", async () => {
     const t = new FakeTransport([], { chunks: [chunk({ exitCode: 0 })] });
     await new Machines(asTransport(t)).exec("alpha", {
       command: "pwd",
       cwd: "/opt/my app",
     });
-    expect(t.streams[0]!.written[0]!.command).toBe("cd '/opt/my app' && pwd");
+    expect(t.streams[0]!.written[0]!.command).toBe("cd '/opt/my app' || exit; pwd");
   });
 
   it("reports a non-zero exit as unsuccessful", async () => {
@@ -1858,11 +1866,75 @@ describe("machines.exec builds the command line for the machine's OS", () => {
     await machines.exec("alpha", { command: ["echo", "a b", "it's"] });
     await machines.exec("alpha", { command: "pwd", cwd: "/opt/my app" });
     await machines.exec("alpha", { command: "env", env: { MODE: "a b" } });
+    await machines.exec("alpha", { command: "env", env: { MODE: "a b" }, cwd: "/opt/my app" });
     expect(sent(t)).toEqual([
       `echo 'a b' 'it'"'"'s'`,
-      "cd '/opt/my app' && pwd",
-      "MODE='a b' env",
+      "cd '/opt/my app' || exit; pwd",
+      "export MODE='a b'; env",
+      "cd '/opt/my app' || exit; export MODE='a b'; env",
     ]);
+  });
+
+  for (const name of ["", "1X", "A-B", "A;touch /tmp/x;B", "A B", "A=B"]) {
+    it(`Linux: refuses the env name ${JSON.stringify(name)} before calling Exec`, async () => {
+      const t = new FakeTransport([aVm()]);
+      const err = await new Machines(asTransport(t))
+        .exec("alpha", { command: "true", env: { [name]: "v" } })
+        .catch((e) => e);
+      expect(err).toBeInstanceOf(BoxdError);
+      expect(String(err)).toContain("shell variable name");
+      expect(t.calls.map((c) => c.method)).toEqual(["GetVm"]);
+    });
+  }
+
+  // The machine runs the line with `/bin/sh -c`: run the line that was sent
+  // the same way, so `env` and `cwd` are checked against a real shell.
+  const hasSh = existsSync("/bin/sh");
+  const sh = (line: string) => spawnSync("/bin/sh", ["-c", line], { encoding: "utf-8" });
+  const sentLine = async (params: { command: string | string[]; env?: Record<string, string>; cwd?: string }) => {
+    const t = new FakeTransport([aVm()]);
+    await new Machines(asTransport(t)).exec("alpha", params);
+    return sent(t)[0]!;
+  };
+
+  for (const command of [
+    'echo "$X"',
+    'true && echo "$X"',
+    "true; sh -c 'echo \"$X\"'",
+    "echo | sh -c 'echo \"$X\"'",
+    ["sh", "-c", 'echo "$X"'],
+  ]) {
+    it.skipIf(!hasSh)(`Linux: env reaches every command in ${JSON.stringify(command)}`, async () => {
+      const line = await sentLine({ command, env: { X: "v a'b" } });
+      expect(sh(line).stdout.trim()).toBe("v a'b");
+    });
+  }
+
+  it.skipIf(!hasSh)("Linux: a cwd that doesn't exist stops the whole line", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "boxd-exec-"));
+    try {
+      const line = await sentLine({
+        command: `touch ${dir}/first; touch ${dir}/second`,
+        env: { X: "v" },
+        cwd: join(dir, "missing"),
+      });
+      const r = sh(line);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain("missing");
+      expect(readdirSync(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!hasSh)("Linux: cwd holds for the whole line", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "boxd-exec-")));
+    try {
+      const line = await sentLine({ command: "cd . && pwd; pwd", cwd: dir });
+      expect(sh(line).stdout.split("\n").filter(Boolean)).toEqual([dir, dir]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("Windows: cwd becomes Set-Location and env $env: assignments, ahead of the command", async () => {
