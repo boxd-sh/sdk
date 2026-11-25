@@ -2592,7 +2592,7 @@ export interface FsRealpathResponse {
 
 /** A coding agent a machine can run. */
 export interface Harness {
-  /** `claude-code` or `codex`. */
+  /** `claude-code`, `codex` or `antigravity`. */
   id: string;
   /** The version installed on the machine; empty when it isn't installed. */
   version: string;
@@ -2608,8 +2608,8 @@ export interface Harness {
   models: string[];
   /**
    * Reasoning efforts the agent accepts in `StartAgentSessionRequest.effort`,
-   * least to most: Claude Code `low` to `max`, Codex `minimal` to `xhigh`
-   * (a model may support fewer).
+   * least to most: Claude Code `low` to `max`, Codex `minimal` to `xhigh`,
+   * Antigravity `low` to `max` (a model may support fewer).
    */
   efforts: string[];
 }
@@ -2626,7 +2626,7 @@ export interface ListHarnessesResponse {
 export interface StartAgentSessionRequest {
   /** machine name or id */
   vmId: string;
-  /** `claude-code` or `codex` (ListHarnesses). */
+  /** `claude-code`, `codex` or `antigravity` (ListHarnesses). */
   harness: string;
   /** Empty: the agent's own default. */
   model: string;
@@ -2697,8 +2697,8 @@ export interface SendToAgentRequest {
   /**
    * For a turn this message starts: interrupt it after this many seconds,
    * or after this many agent steps: calls to the model for Claude Code,
-   * tool calls for Codex (which reports no model calls). 0: no limit. They
-   * don't apply to a running turn the message joins.
+   * tool calls for Codex and Antigravity (which report no model calls). 0:
+   * no limit. They don't apply to a running turn the message joins.
    */
   timeoutSecs: number;
   maxSteps: number;
@@ -2832,7 +2832,7 @@ export interface AgentRun {
   error: string;
   startedAtMs: number;
   endedAtMs: number;
-  /** Model calls (Claude Code) or tool calls (Codex) in the turn. */
+  /** Model calls (Claude Code) or tool calls (Codex, Antigravity) in the turn. */
   steps: number;
   usage?:
     | AgentUsage
@@ -41000,7 +41000,7 @@ export const BoxdApiService = {
     responseDeserialize: (value: Buffer): ComputerActionResponse => ComputerActionResponse.decode(value),
   },
   /**
-   * Coding agents: drive Claude Code, Codex or OpenCode inside a machine the
+   * Coding agents: drive Claude Code, Codex or Antigravity inside a machine the
    * same way, through sessions, turns and one typed event stream. The agent
    * runs in the machine and keeps working when the caller disconnects; the
    * caller catches up with AgentEvents from the last `seq` it saw.
@@ -42740,7 +42740,7 @@ export interface BoxdApiServer extends UntypedServiceImplementation {
    */
   computerAction: handleUnaryCall<ComputerActionRequest, ComputerActionResponse>;
   /**
-   * Coding agents: drive Claude Code, Codex or OpenCode inside a machine the
+   * Coding agents: drive Claude Code, Codex or Antigravity inside a machine the
    * same way, through sessions, turns and one typed event stream. The agent
    * runs in the machine and keeps working when the caller disconnects; the
    * caller catches up with AgentEvents from the last `seq` it saw.
@@ -43586,7 +43586,7 @@ export interface BoxdApiClient extends Client {
     callback: (error: ServiceError | null, response: ComputerActionResponse) => void,
   ): ClientUnaryCall;
   /**
-   * Coding agents: drive Claude Code, Codex or OpenCode inside a machine the
+   * Coding agents: drive Claude Code, Codex or Antigravity inside a machine the
    * same way, through sessions, turns and one typed event stream. The agent
    * runs in the machine and keeps working when the caller disconnects; the
    * caller catches up with AgentEvents from the last `seq` it saw.

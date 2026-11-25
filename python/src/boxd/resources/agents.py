@@ -1,5 +1,5 @@
-"""`boxd.machines.agents` — drive Claude Code or Codex inside a machine the
-same way, through sessions, turns and one typed event stream.
+"""`boxd.machines.agents` — drive Claude Code, Codex or Antigravity inside a
+machine the same way, through sessions, turns and one typed event stream.
 
 A session is one conversation with one agent. A message sent to it starts a
 turn, joins the running turn, or waits for it to end (``send(when=...)``). A
@@ -32,8 +32,9 @@ platform's run history instead: it never wakes a machine::
     for run in page.runs:
         print(run.session_id, run.turn, run.reason, run.error or "")
 
-Signing Claude Code or Codex in is ``boxd.integrations``: a sign-in is yours
-in an organization, and every private machine of yours there uses it::
+Signing Claude Code, Codex or Antigravity in is ``boxd.integrations``: a
+sign-in is yours in an organization, and every private machine of yours there
+uses it::
 
     start = boxd.integrations.connect("codex")
     print(f"Open {start.url} and enter {start.user_code}")
@@ -434,14 +435,15 @@ class Agents(Namespace):
         request_id: str | None = None,
         region: str | None = None,
     ) -> AgentSession:
-        """Start a session with `harness` (``"claude-code"`` or ``"codex"``;
-        :meth:`harnesses` lists what the machine has). Nothing runs until the
-        first :meth:`send`.
+        """Start a session with `harness` (``"claude-code"``, ``"codex"`` or
+        ``"antigravity"``; :meth:`harnesses` lists what the machine has).
+        Nothing runs until the first :meth:`send`.
 
         `model`: None is the agent's own default. `effort`: how hard the
-        agent thinks, one of the harness's ``efforts`` (Claude Code
-        ``"low"``, ``"medium"``, ``"high"``, ``"xhigh"`` or ``"max"``; Codex
-        ``"minimal"``, ``"low"``, ``"medium"``, ``"high"`` or ``"xhigh"``);
+        agent thinks, one of the harness's ``efforts`` (Claude Code and
+        Antigravity ``"low"``, ``"medium"``, ``"high"``, ``"xhigh"`` or
+        ``"max"``; Codex ``"minimal"``, ``"low"``, ``"medium"``, ``"high"``
+        or ``"xhigh"``);
         None is the agent's own default. `cwd`: the directory the
         agent works in; None is the home directory of the machine's user.
         `instructions` are added to the agent's own system prompt, never
@@ -492,8 +494,8 @@ class Agents(Namespace):
 
         For a turn this message starts: interrupt it after `timeout_secs`
         seconds, or after `max_steps` agent steps (calls to the model for
-        Claude Code, tool calls for Codex). None: no limit. They don't apply
-        to a running turn the message joins.
+        Claude Code, tool calls for Codex and Antigravity). None: no limit.
+        They don't apply to a running turn the message joins.
 
         `request_id` makes a retry safe: a second message with the same id
         in this session isn't sent again, and gets the first one's answer.

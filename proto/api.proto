@@ -74,7 +74,7 @@ service BoxdApi {
   // `ComputerScreenshotOptions.max_width`/`max_height` is smaller than the
   // screen, and the caller scales the coordinates it gets back up.
   rpc ComputerAction(ComputerActionRequest) returns (ComputerActionResponse);
-  // Coding agents: drive Claude Code, Codex or OpenCode inside a machine the
+  // Coding agents: drive Claude Code, Codex or Antigravity inside a machine the
   // same way, through sessions, turns and one typed event stream. The agent
   // runs in the machine and keeps working when the caller disconnects; the
   // caller catches up with AgentEvents from the last `seq` it saw.
@@ -2070,7 +2070,7 @@ message FsRealpathResponse {
 
 // A coding agent a machine can run.
 message Harness {
-  // `claude-code` or `codex`.
+  // `claude-code`, `codex` or `antigravity`.
   string id = 1;
   // The version installed on the machine; empty when it isn't installed.
   string version = 2;
@@ -2081,8 +2081,8 @@ message Harness {
   // the agent doesn't list them.
   repeated string models = 4;
   // Reasoning efforts the agent accepts in `StartAgentSessionRequest.effort`,
-  // least to most: Claude Code `low` to `max`, Codex `minimal` to `xhigh`
-  // (a model may support fewer).
+  // least to most: Claude Code `low` to `max`, Codex `minimal` to `xhigh`,
+  // Antigravity `low` to `max` (a model may support fewer).
   repeated string efforts = 5;
 }
 
@@ -2096,7 +2096,7 @@ message ListHarnessesResponse {
 
 message StartAgentSessionRequest {
   string vm_id   = 1;  // machine name or id
-  // `claude-code` or `codex` (ListHarnesses).
+  // `claude-code`, `codex` or `antigravity` (ListHarnesses).
   string harness = 2;
   // Empty: the agent's own default.
   string model   = 3;
@@ -2169,8 +2169,8 @@ message SendToAgentRequest {
   AgentSendWhen when = 4;
   // For a turn this message starts: interrupt it after this many seconds,
   // or after this many agent steps: calls to the model for Claude Code,
-  // tool calls for Codex (which reports no model calls). 0: no limit. They
-  // don't apply to a running turn the message joins.
+  // tool calls for Codex and Antigravity (which report no model calls). 0:
+  // no limit. They don't apply to a running turn the message joins.
   uint32 timeout_secs = 5;
   uint32 max_steps    = 6;
   // Optional: an id of your choosing that makes retrying safe. A second
@@ -2288,7 +2288,7 @@ message AgentRun {
   string error      = 10;
   int64  started_at_ms = 11;
   int64  ended_at_ms   = 12;
-  // Model calls (Claude Code) or tool calls (Codex) in the turn.
+  // Model calls (Claude Code) or tool calls (Codex, Antigravity) in the turn.
   uint32 steps      = 13;
   AgentUsage usage  = 14;
   // The session's reasoning effort; empty: the agent's default.

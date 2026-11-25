@@ -724,7 +724,7 @@ class Harness(BaseModel):
     """A coding agent a machine can run (``machines.agents.harnesses``)."""
 
     id: str
-    """``"claude-code"`` or ``"codex"``."""
+    """``"claude-code"``, ``"codex"`` or ``"antigravity"``."""
     version: str | None
     """The version installed on the machine; None when it isn't installed."""
     mid_turn_input: bool
@@ -735,9 +735,9 @@ class Harness(BaseModel):
     doesn't list them."""
     efforts: list[str] = []
     """Reasoning efforts the agent accepts in ``start(effort=...)``, least to
-    most: Claude Code ``"low"``, ``"medium"``, ``"high"``, ``"xhigh"``,
-    ``"max"``; Codex ``"minimal"``, ``"low"``, ``"medium"``, ``"high"``,
-    ``"xhigh"``. A model may support fewer."""
+    most: Claude Code and Antigravity ``"low"``, ``"medium"``, ``"high"``,
+    ``"xhigh"``, ``"max"``; Codex ``"minimal"``, ``"low"``, ``"medium"``,
+    ``"high"``, ``"xhigh"``. A model may support fewer."""
 
 
 AgentSessionState = Literal["idle", "running", "closed", "failed", "unknown"]
@@ -989,7 +989,7 @@ class AgentRun(BaseModel):
     machine_name: str
     session_id: str
     harness: str
-    """``"claude-code"`` or ``"codex"``."""
+    """``"claude-code"``, ``"codex"`` or ``"antigravity"``."""
     harness_version: str
     """The agent version the session ran."""
     model: str | None
@@ -1006,7 +1006,8 @@ class AgentRun(BaseModel):
     started_at: datetime
     ended_at: datetime
     steps: int
-    """Calls to the model (Claude Code) or tool calls (Codex) in the turn."""
+    """Calls to the model (Claude Code) or tool calls (Codex, Antigravity) in
+    the turn."""
     usage: AgentRunUsage
 
 
@@ -1028,7 +1029,8 @@ class AgentRunResult(BaseModel):
     machine_id: str
     """The machine's id."""
     harness: str
-    """The session's agent: ``"claude-code"`` or ``"codex"``."""
+    """The session's agent: ``"claude-code"``, ``"codex"`` or
+    ``"antigravity"``."""
     model: str | None
     """The session's model; None: the agent's own default."""
     effort: str | None = None

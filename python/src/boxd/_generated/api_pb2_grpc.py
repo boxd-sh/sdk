@@ -997,7 +997,7 @@ class BoxdApiServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def ListHarnesses(self, request, context):
-        """Coding agents: drive Claude Code, Codex or OpenCode inside a machine the
+        """Coding agents: drive Claude Code, Codex or Antigravity inside a machine the
         same way, through sessions, turns and one typed event stream. The agent
         runs in the machine and keeps working when the caller disconnects; the
         caller catches up with AgentEvents from the last `seq` it saw.

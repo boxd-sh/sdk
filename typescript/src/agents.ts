@@ -1,5 +1,5 @@
 /**
- * Coding agents (Claude Code, Codex) running inside a machine:
+ * Coding agents (Claude Code, Codex, Antigravity) running inside a machine:
  * `boxd.machines.agents`.
  *
  * A session is one conversation with one agent in one machine. Messages sent
@@ -23,7 +23,7 @@
  * `runs()` reads how finished turns went, across your machines, from the
  * platform's run history instead: it never wakes a machine.
  *
- * Signing Claude Code or Codex in is `boxd.integrations`: a sign-in is yours
+ * Signing Claude Code, Codex or Antigravity in is `boxd.integrations`: a sign-in is yours
  * in an organization, and every private machine of yours there uses it. The
  * machine-based `startLogin()` and the other login methods here still work
  * and are deprecated.
@@ -54,7 +54,7 @@ import {
 
 /** An agent a machine can run, and what it can do. */
 export interface Harness {
-  /** `claude-code` or `codex`. */
+  /** `claude-code`, `codex` or `antigravity`. */
   id: string;
   /** The version installed on the machine; `null` when it isn't installed. */
   version: string | null;
@@ -65,9 +65,9 @@ export interface Harness {
    *  doesn't list them. */
   models: string[];
   /** Reasoning efforts the agent accepts in `start({ effort })`, least to
-   *  most: Claude Code `low`, `medium`, `high`, `xhigh`, `max`; Codex
-   *  `minimal`, `low`, `medium`, `high`, `xhigh`. A model may support
-   *  fewer. */
+   *  most: Claude Code and Antigravity `low`, `medium`, `high`, `xhigh`,
+   *  `max`; Codex `minimal`, `low`, `medium`, `high`, `xhigh`. A model may
+   *  support fewer. */
   efforts: string[];
 }
 
@@ -222,13 +222,15 @@ export type AgentEvent = AgentEventBase &
 export type AgentEventType = AgentEvent["type"];
 
 export interface AgentStartParams extends RegionOption {
-  /** `claude-code` or `codex`: `harnesses()` lists what the machine has. */
+  /** `claude-code`, `codex` or `antigravity`: `harnesses()` lists what the
+   *  machine has. */
   harness: string;
   /** Default: the agent's own. */
   model?: string;
   /** How hard the agent thinks: one of the harness's `efforts` (Claude Code
-   *  `low`, `medium`, `high`, `xhigh` or `max`; Codex `minimal`, `low`,
-   *  `medium`, `high` or `xhigh`). Default: the agent's own. */
+   *  and Antigravity `low`, `medium`, `high`, `xhigh` or `max`; Codex
+   *  `minimal`, `low`, `medium`, `high` or `xhigh`). Default: the agent's
+   *  own. */
   effort?: string;
   /** The directory the agent works in. Default: the home directory of the
    *  machine's user. */
@@ -253,7 +255,8 @@ export interface AgentSendParams extends RegionOption {
    *  Doesn't apply to a running turn the message joins. */
   timeoutSecs?: number;
   /** For a turn this message starts: interrupt it after this many agent
-   *  steps: calls to the model for Claude Code, tool calls for Codex. */
+   *  steps: calls to the model for Claude Code, tool calls for Codex and
+   *  Antigravity. */
   maxSteps?: number;
   /** Makes a retry safe: a second message with the same id in this session
    *  isn't sent again, and gets the first one's answer. Default: a new id
@@ -276,8 +279,8 @@ export interface AgentEventsParams extends RegionOption {
 /** `run()`'s task: one message to one session, start to reply. (Not
  *  {@link AgentRunsParams}, which filters the run history.) */
 export interface AgentRunParams extends RegionOption {
-  /** `claude-code` or `codex`: `harnesses()` lists what the machine has.
-   *  With `session`, the agent that session runs. */
+  /** `claude-code`, `codex` or `antigravity`: `harnesses()` lists what the
+   *  machine has. With `session`, the agent that session runs. */
   harness: string;
   /** The task. */
   text: string;
@@ -298,7 +301,7 @@ export interface AgentRunParams extends RegionOption {
   /** Interrupt the turn after this many seconds. */
   timeoutSecs?: number;
   /** Interrupt the turn after this many agent steps: calls to the model for
-   *  Claude Code, tool calls for Codex. */
+   *  Claude Code, tool calls for Codex and Antigravity. */
   maxSteps?: number;
   /** Send the task to this open session instead of starting one. It stays
    *  open. Not with `model`, `effort`, `cwd`, `instructions` or `env`,
@@ -320,7 +323,7 @@ export interface AgentRunResult {
   sessionId: string;
   /** The machine's id. */
   machineId: string;
-  /** The session's agent: `claude-code` or `codex`. */
+  /** The session's agent: `claude-code`, `codex` or `antigravity`. */
   harness: string;
   /** The session's model; `null`: the agent's own default. */
   model: string | null;
@@ -373,7 +376,7 @@ export interface AgentRun {
   /** The machine's name. */
   machineName: string;
   sessionId: string;
-  /** `claude-code` or `codex`. */
+  /** `claude-code`, `codex` or `antigravity`. */
   harness: string;
   /** The agent version the session ran. */
   harnessVersion: string;
@@ -390,7 +393,8 @@ export interface AgentRun {
   error?: string;
   startedAt: Date;
   endedAt: Date;
-  /** Calls to the model (Claude Code) or tool calls (Codex) in the turn. */
+  /** Calls to the model (Claude Code) or tool calls (Codex, Antigravity) in
+   *  the turn. */
   steps: number;
   usage: AgentRunUsage;
 }

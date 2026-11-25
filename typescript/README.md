@@ -1051,7 +1051,8 @@ accepts them.
 
 ### Coding agents
 
-`machines.agents` runs Claude Code or Codex inside a machine through one API.
+`machines.agents` runs Claude Code, Codex or Antigravity inside a machine
+through one API.
 A session is one conversation with one agent; each message you send runs as a
 turn, one at a time, and everything the turn does comes back as typed events,
 numbered by `seq`. The agent keeps working if you disconnect: pass the last
@@ -1079,7 +1080,7 @@ says how (`"started"`, `"queued"`, `"joined"`, `"queued_fallback"`). A message
 sent while a turn runs waits as a turn of its own; `{ when: "now" }` adds it to
 the running turn instead. `timeoutSecs` and `maxSteps` interrupt a turn the
 message starts after that many seconds or steps (model calls for Claude Code,
-tool calls for Codex). `interrupt()` stops the running turn
+tool calls for Codex and Antigravity). `interrupt()` stops the running turn
 (`{ clearQueue: true }` also drops the waiting messages), `close()` ends the
 session, and `list(machine, { all: true })` also shows closed and failed
 sessions. `interrupt(machine, id, { turn })` interrupts only that turn: it is
@@ -1096,9 +1097,9 @@ running a step again.
 
 `harnesses()` lists the agents a machine can run, with the `models` and
 reasoning `efforts` each one takes. `start(machine, { model, effort })` picks
-them: Claude Code's efforts are `"low"`, `"medium"`, `"high"`, `"xhigh"` and
-`"max"`, Codex's `"minimal"`, `"low"`, `"medium"`, `"high"` and `"xhigh"` (a
-model may support fewer). Without them the session runs the agent's own
+them: Claude Code's and Antigravity's efforts are `"low"`, `"medium"`,
+`"high"`, `"xhigh"` and `"max"`, Codex's `"minimal"`, `"low"`, `"medium"`,
+`"high"` and `"xhigh"` (a model may support fewer). Without them the session runs the agent's own
 defaults, and its `model` and `effort` are `null`.
 
 `AgentEvent` is a union narrowed on `type`: `turn.started`, `user.message`,
@@ -1152,12 +1153,12 @@ cluster that doesn't keep run history (some self-hosted ones) answers with a
 
 The agent runs as the machine's user without asking before it acts, with the
 machine's env vars and secrets (`env` adds more). Give it a key as a secret
-(`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, bound to its provider's host so the
-machine only holds a placeholder), or sign Claude Code or Codex in once and
-boxd serves the login to your private machines. The machine stays awake while
+(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `GEMINI_API_KEY`, bound to its
+provider's host so the machine only holds a placeholder), or sign Claude Code,
+Codex or Antigravity in once and boxd serves the login to your private machines. The machine stays awake while
 a turn runs. `start` and `send` are sent again after a lost connection with
 the same request id, so a repeat never starts a second session or delivers a
-message twice; `interrupt` is sent once. More: [Coding agent sessions](https://docs.boxd.sh/guides/coding-agents).
+message twice; `interrupt` is sent once. More: [Agents inside](https://docs.boxd.sh/guides/agents).
 
 Signing Claude Code or Codex in is `boxd.integrations`, as Integrations in the
 console and `boxd manage integrations connect` on the command line: a sign-in
