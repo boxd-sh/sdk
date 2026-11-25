@@ -1158,7 +1158,7 @@ provider's host so the machine only holds a placeholder), or sign Claude Code,
 Codex or Antigravity in once and boxd serves the login to your private machines. The machine stays awake while
 a turn runs. `start` and `send` are sent again after a lost connection with
 the same request id, so a repeat never starts a second session or delivers a
-message twice; `interrupt` is sent once. More: [Agents inside](https://docs.boxd.sh/guides/agents).
+message twice; `interrupt` is sent once. More: [Agents API](https://docs.boxd.sh/guides/agents).
 
 Signing Claude Code or Codex in is `boxd.integrations`, as Integrations in the
 console and `boxd manage integrations connect` on the command line: a sign-in

@@ -1119,7 +1119,7 @@ Codex or Antigravity in once and boxd serves the login to your private machines.
 a turn runs. `start` and `send` are sent again after a lost connection with
 the same request id, so a repeat never starts a second session or delivers a
 message twice; `interrupt` is sent once. `AsyncBoxd` has the same methods, awaited, and `events()` there is an
-async iterator. More: [Agents inside](https://docs.boxd.sh/guides/agents).
+async iterator. More: [Agents API](https://docs.boxd.sh/guides/agents).
 
 Signing Claude Code or Codex in is `boxd.integrations`, as Integrations in the
 console and `boxd manage integrations connect` on the command line: a sign-in
