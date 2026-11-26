@@ -2084,6 +2084,12 @@ message Harness {
   // least to most: Claude Code `low` to `max`, Codex `minimal` to `xhigh`,
   // Antigravity `low` to `max` (a model may support fewer).
   repeated string efforts = 5;
+  // The API key variable in the machine's env that this agent's sessions
+  // there sign in with: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or
+  // `GEMINI_API_KEY`. Empty when the machine has none: its sessions then use
+  // your sign-in (GetAgentLogin). With a key they use the key, also on a
+  // machine that gets your sign-in. Only the variable's name, never the key.
+  string api_key_env = 6;
 }
 
 message ListHarnessesRequest {

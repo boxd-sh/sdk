@@ -738,6 +738,12 @@ class Harness(BaseModel):
     most: Claude Code and Antigravity ``"low"``, ``"medium"``, ``"high"``,
     ``"xhigh"``, ``"max"``; Codex ``"minimal"``, ``"low"``, ``"medium"``,
     ``"high"``, ``"xhigh"``. A model may support fewer."""
+    api_key_env: str | None = None
+    """The API key variable in the machine's env that this agent's sessions
+    there sign in with: ``"ANTHROPIC_API_KEY"``, ``"OPENAI_API_KEY"`` or
+    ``"GEMINI_API_KEY"``. None when the machine has none: its sessions then
+    use your sign-in (``boxd.integrations``). With a key they use the key,
+    also on a machine that gets your sign-in."""
 
 
 AgentSessionState = Literal["idle", "running", "closed", "failed", "unknown"]

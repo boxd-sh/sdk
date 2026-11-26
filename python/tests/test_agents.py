@@ -104,6 +104,7 @@ def test_harness_without_a_version_is_not_installed():
             mid_turn_input=True,
             models=["o3", "gpt-5"],
             efforts=["minimal", "low", "medium", "high", "xhigh"],
+            api_key_env="OPENAI_API_KEY",
         )
     )
     assert h == Harness(
@@ -112,7 +113,10 @@ def test_harness_without_a_version_is_not_installed():
         mid_turn_input=True,
         models=["o3", "gpt-5"],
         efforts=["minimal", "low", "medium", "high", "xhigh"],
+        api_key_env="OPENAI_API_KEY",
     )
+    # No key in the machine's env, or a server from before the field.
+    assert m.harness(api_pb2.Harness(id="codex")).api_key_env is None
     assert m.harness(api_pb2.Harness(id="claude-code", version="2.1.0")).version == "2.1.0"
     assert m.harness(api_pb2.Harness(id="opencode")).models == []
     # From a server that doesn't list them.

@@ -199,8 +199,9 @@ describe("machines.agents", () => {
             midTurnInput: true,
             models: [],
             efforts: ["low", "medium", "high", "xhigh", "max"],
+            apiKeyEnv: "ANTHROPIC_API_KEY",
           },
-          // From a server that doesn't list efforts.
+          // From a server that lists no efforts and names no key.
           { id: "codex", version: "", midTurnInput: false, models: ["gpt-5"] },
         ],
       },
@@ -214,8 +215,16 @@ describe("machines.agents", () => {
         midTurnInput: true,
         models: [],
         efforts: ["low", "medium", "high", "xhigh", "max"],
+        apiKeyEnv: "ANTHROPIC_API_KEY",
       },
-      { id: "codex", version: null, midTurnInput: false, models: ["gpt-5"], efforts: [] },
+      {
+        id: "codex",
+        version: null,
+        midTurnInput: false,
+        models: ["gpt-5"],
+        efforts: [],
+        apiKeyEnv: null,
+      },
     ]);
   });
 

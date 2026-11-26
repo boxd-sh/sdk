@@ -660,6 +660,7 @@ def harness(msg) -> Harness:
         mid_turn_input=msg.mid_turn_input,
         models=list(msg.models),
         efforts=list(msg.efforts),
+        api_key_env=_text(msg.api_key_env),
     )
 
 

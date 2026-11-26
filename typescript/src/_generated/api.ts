@@ -2612,6 +2612,14 @@ export interface Harness {
    * Antigravity `low` to `max` (a model may support fewer).
    */
   efforts: string[];
+  /**
+   * The API key variable in the machine's env that this agent's sessions
+   * there sign in with: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or
+   * `GEMINI_API_KEY`. Empty when the machine has none: its sessions then use
+   * your sign-in (GetAgentLogin). With a key they use the key, also on a
+   * machine that gets your sign-in. Only the variable's name, never the key.
+   */
+  apiKeyEnv: string;
 }
 
 export interface ListHarnessesRequest {
@@ -21656,7 +21664,7 @@ export const FsRealpathResponse: MessageFns<FsRealpathResponse> = {
 };
 
 function createBaseHarness(): Harness {
-  return { id: "", version: "", midTurnInput: false, models: [], efforts: [] };
+  return { id: "", version: "", midTurnInput: false, models: [], efforts: [], apiKeyEnv: "" };
 }
 
 export const Harness: MessageFns<Harness> = {
@@ -21675,6 +21683,9 @@ export const Harness: MessageFns<Harness> = {
     }
     for (const v of message.efforts) {
       writer.uint32(42).string(v!);
+    }
+    if (message.apiKeyEnv !== "") {
+      writer.uint32(50).string(message.apiKeyEnv);
     }
     return writer;
   },
@@ -21726,6 +21737,14 @@ export const Harness: MessageFns<Harness> = {
           message.efforts.push(reader.string());
           continue;
         }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.apiKeyEnv = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -21746,6 +21765,11 @@ export const Harness: MessageFns<Harness> = {
         : false,
       models: globalThis.Array.isArray(object?.models) ? object.models.map((e: any) => globalThis.String(e)) : [],
       efforts: globalThis.Array.isArray(object?.efforts) ? object.efforts.map((e: any) => globalThis.String(e)) : [],
+      apiKeyEnv: isSet(object.apiKeyEnv)
+        ? globalThis.String(object.apiKeyEnv)
+        : isSet(object.api_key_env)
+        ? globalThis.String(object.api_key_env)
+        : "",
     };
   },
 
@@ -21766,6 +21790,9 @@ export const Harness: MessageFns<Harness> = {
     if (message.efforts?.length) {
       obj.efforts = message.efforts;
     }
+    if (message.apiKeyEnv !== "") {
+      obj.apiKeyEnv = message.apiKeyEnv;
+    }
     return obj;
   },
 
@@ -21779,6 +21806,7 @@ export const Harness: MessageFns<Harness> = {
     message.midTurnInput = object.midTurnInput ?? false;
     message.models = object.models?.map((e) => e) || [];
     message.efforts = object.efforts?.map((e) => e) || [];
+    message.apiKeyEnv = object.apiKeyEnv ?? "";
     return message;
   },
 };
