@@ -3102,6 +3102,93 @@ export interface GetSnapshotResponse {
   snapshot?: SnapshotInfo | undefined;
 }
 
+export interface ListSnapshotVersionsRequest {
+  /** snapshot name or id */
+  name: string;
+  /** org context (name or id); empty = active/anchor */
+  org: string;
+}
+
+export interface ListSnapshotVersionsResponse {
+  snapshotId: string;
+  name: string;
+  /**
+   * Newest first. A version you may not use is left out: one saved from a
+   * private machine stays its creator's, even after a later save made the
+   * snapshot shared.
+   */
+  versions: SnapshotVersionInfo[];
+}
+
+/** One version of a snapshot. */
+export interface SnapshotVersionInfo {
+  version: number;
+  /**
+   * The version a create that names none uses. The newest ordinary save,
+   * unless SetSnapshotCurrentVersion chose another.
+   */
+  current: boolean;
+  /** "ready", or "saving" for a save still in flight. */
+  status: string;
+  /**
+   * Where its bytes are, as SnapshotInfo.storage: a machine can be created
+   * from it only while "local".
+   */
+  storage: string;
+  sizeBytes: number;
+  /** when it was saved; epoch MILLISECONDS */
+  createdAt: number;
+  /** The size of a machine created from it. */
+  vcpu: number;
+  memoryBytes: number;
+  /** The guest OS of the machine it was saved from: "linux" or "windows". */
+  os: string;
+  /**
+   * Ready, and above the current version: saved staged
+   * (CreateStagedSnapshot), or set aside when an older version was made
+   * current. A machine is created from it only by naming it;
+   * SetSnapshotCurrentVersion makes it current.
+   */
+  staged: boolean;
+}
+
+/**
+ * Makes one of a snapshot's versions its current version: the one a machine
+ * created from the snapshot gets when no version is named, and the one the
+ * snapshot's size, saver and visibility are read from (so who can use the
+ * snapshot follows the version that is current). Forward to a staged version,
+ * or back to an older one: the ready versions above the new current one are
+ * then staged (ListSnapshotVersions), and can be made current again. Nothing
+ * is copied or deleted by the call.
+ *
+ * For anyone who may save over the snapshot and may use that version.
+ * The version must be "ready" with storage "local", and the snapshot's own
+ * storage "local": FAILED_PRECONDITION otherwise. NOT_FOUND for a version the
+ * snapshot does not keep or the caller may not use. Naming the version that
+ * is current already succeeds with `changed` false.
+ */
+export interface SetSnapshotCurrentVersionRequest {
+  /** Snapshot name or id, or `name@4` to name the version too. */
+  snapshot: string;
+  /** org context (name or id); empty = active/anchor */
+  org: string;
+  /**
+   * The version to make current, when `snapshot` names none. Naming two
+   * different ones is INVALID_ARGUMENT, and so is naming none.
+   */
+  version?: number | undefined;
+}
+
+export interface SetSnapshotCurrentVersionResponse {
+  snapshotId: string;
+  name: string;
+  /** the current version now */
+  version: number;
+  previousVersion: number;
+  /** false when it was the current version already */
+  changed: boolean;
+}
+
 export interface DeleteSnapshotRequest {
   /** snapshot name or id */
   name: string;
@@ -3146,7 +3233,7 @@ export interface UnarchiveSnapshotResponse {
 }
 
 export interface CreateVmFromSnapshotRequest {
-  /** snapshot name or id */
+  /** snapshot name or id, or "<name>@<version>" (see `version`) */
   snapshot: string;
   /** new VM name (optional; auto-generated if empty) */
   name: string;
@@ -3182,7 +3269,18 @@ export interface CreateVmFromSnapshotRequest {
    * timer, so unset means none. See CreateVmRequest.delete_after_secs.
    */
   deleteAfterSecs?: number | undefined;
-  deleteAfterCron?: string | undefined;
+  deleteAfterCron?:
+    | string
+    | undefined;
+  /**
+   * The version to create from; unset = the snapshot's current one. One of
+   * the versions ListSnapshotVersions shows as "ready" and "local": NOT_FOUND
+   * for a version the snapshot does not keep, FAILED_PRECONDITION for one
+   * still being saved or not on local disk. `snapshot` may name it instead,
+   * as "<name>@<version>" ("base@4"): the whole string is tried as a name
+   * first, so a snapshot whose own name ends that way still resolves.
+   */
+  version?: number | undefined;
 }
 
 export interface CreateVmFromSnapshotRequest_LabelsEntry {
@@ -4062,6 +4160,58 @@ export interface GetOrgMachineDefaultsResponse {
 export interface GrantedMachineSize {
   vcpu: number;
   memoryBytes: number;
+}
+
+export interface SetOrgSnapshotVersionsKeepRequest {
+  /** name or id; "" = your default org (the one a list with no org shows; an API key's own org) */
+  orgId: string;
+  /**
+   * How many versions of each snapshot to keep, the current one included:
+   * 1 to `max_keep` (GetOrgSnapshotVersionsKeep). Absent clears the org's
+   * setting: its snapshots follow the platform's again.
+   */
+  keep?:
+    | number
+    | undefined;
+  /**
+   * Check the request and count what it would delete, and change nothing.
+   * Ask this before lowering the count or clearing it: the versions beyond
+   * the new count are deleted for good.
+   */
+  dryRun: boolean;
+}
+
+export interface SetOrgSnapshotVersionsKeepResponse {
+  /** The org's setting after this call (with `dry_run`: as it would be). */
+  set: boolean;
+  /** how many versions of its snapshots are kept */
+  keep: number;
+  /** the platform's count, which an org without a setting follows */
+  platformKeep: number;
+  /** the most an org may set */
+  maxKeep: number;
+  /**
+   * How many versions of the org's snapshots are deleted because of this
+   * change (older ones, and staged ones beyond the count), on the platform's
+   * next cleanup pass (within a minute). With `dry_run`, how many would be.
+   */
+  versionsDeleted: number;
+}
+
+export interface GetOrgSnapshotVersionsKeepRequest {
+  /** name or id; "" = your default org (the one a list with no org shows; an API key's own org) */
+  orgId: string;
+}
+
+export interface GetOrgSnapshotVersionsKeepResponse {
+  /** the org has its own setting */
+  set: boolean;
+  /** how many versions of its snapshots are kept now */
+  keep: number;
+  /** the platform's count, which an org without a setting follows */
+  platformKeep: number;
+  /** the most an org may set */
+  maxKeep: number;
 }
 
 export interface SetOrgIdleIgnoreOutboundDefaultRequest {
@@ -26615,6 +26765,631 @@ export const GetSnapshotResponse: MessageFns<GetSnapshotResponse> = {
   },
 };
 
+function createBaseListSnapshotVersionsRequest(): ListSnapshotVersionsRequest {
+  return { name: "", org: "" };
+}
+
+export const ListSnapshotVersionsRequest: MessageFns<ListSnapshotVersionsRequest> = {
+  encode(message: ListSnapshotVersionsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.name !== "") {
+      writer.uint32(10).string(message.name);
+    }
+    if (message.org !== "") {
+      writer.uint32(18).string(message.org);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ListSnapshotVersionsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseListSnapshotVersionsRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.name = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.org = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ListSnapshotVersionsRequest {
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      org: isSet(object.org) ? globalThis.String(object.org) : "",
+    };
+  },
+
+  toJSON(message: ListSnapshotVersionsRequest): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.org !== "") {
+      obj.org = message.org;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ListSnapshotVersionsRequest>): ListSnapshotVersionsRequest {
+    return ListSnapshotVersionsRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ListSnapshotVersionsRequest>): ListSnapshotVersionsRequest {
+    const message = createBaseListSnapshotVersionsRequest();
+    message.name = object.name ?? "";
+    message.org = object.org ?? "";
+    return message;
+  },
+};
+
+function createBaseListSnapshotVersionsResponse(): ListSnapshotVersionsResponse {
+  return { snapshotId: "", name: "", versions: [] };
+}
+
+export const ListSnapshotVersionsResponse: MessageFns<ListSnapshotVersionsResponse> = {
+  encode(message: ListSnapshotVersionsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.snapshotId !== "") {
+      writer.uint32(10).string(message.snapshotId);
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    for (const v of message.versions) {
+      SnapshotVersionInfo.encode(v!, writer.uint32(26).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ListSnapshotVersionsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseListSnapshotVersionsResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.snapshotId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.name = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.versions.push(SnapshotVersionInfo.decode(reader, reader.uint32()));
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ListSnapshotVersionsResponse {
+    return {
+      snapshotId: isSet(object.snapshotId)
+        ? globalThis.String(object.snapshotId)
+        : isSet(object.snapshot_id)
+        ? globalThis.String(object.snapshot_id)
+        : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      versions: globalThis.Array.isArray(object?.versions)
+        ? object.versions.map((e: any) => SnapshotVersionInfo.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ListSnapshotVersionsResponse): unknown {
+    const obj: any = {};
+    if (message.snapshotId !== "") {
+      obj.snapshotId = message.snapshotId;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.versions?.length) {
+      obj.versions = message.versions.map((e) => SnapshotVersionInfo.toJSON(e));
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ListSnapshotVersionsResponse>): ListSnapshotVersionsResponse {
+    return ListSnapshotVersionsResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ListSnapshotVersionsResponse>): ListSnapshotVersionsResponse {
+    const message = createBaseListSnapshotVersionsResponse();
+    message.snapshotId = object.snapshotId ?? "";
+    message.name = object.name ?? "";
+    message.versions = object.versions?.map((e) => SnapshotVersionInfo.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseSnapshotVersionInfo(): SnapshotVersionInfo {
+  return {
+    version: 0,
+    current: false,
+    status: "",
+    storage: "",
+    sizeBytes: 0,
+    createdAt: 0,
+    vcpu: 0,
+    memoryBytes: 0,
+    os: "",
+    staged: false,
+  };
+}
+
+export const SnapshotVersionInfo: MessageFns<SnapshotVersionInfo> = {
+  encode(message: SnapshotVersionInfo, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.version !== 0) {
+      writer.uint32(8).uint64(message.version);
+    }
+    if (message.current !== false) {
+      writer.uint32(16).bool(message.current);
+    }
+    if (message.status !== "") {
+      writer.uint32(26).string(message.status);
+    }
+    if (message.storage !== "") {
+      writer.uint32(34).string(message.storage);
+    }
+    if (message.sizeBytes !== 0) {
+      writer.uint32(40).uint64(message.sizeBytes);
+    }
+    if (message.createdAt !== 0) {
+      writer.uint32(48).int64(message.createdAt);
+    }
+    if (message.vcpu !== 0) {
+      writer.uint32(56).uint32(message.vcpu);
+    }
+    if (message.memoryBytes !== 0) {
+      writer.uint32(64).uint64(message.memoryBytes);
+    }
+    if (message.os !== "") {
+      writer.uint32(74).string(message.os);
+    }
+    if (message.staged !== false) {
+      writer.uint32(80).bool(message.staged);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SnapshotVersionInfo {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSnapshotVersionInfo();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.version = longToNumber(reader.uint64());
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.current = reader.bool();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.status = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.storage = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.sizeBytes = longToNumber(reader.uint64());
+          continue;
+        }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.createdAt = longToNumber(reader.int64());
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.vcpu = reader.uint32();
+          continue;
+        }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.memoryBytes = longToNumber(reader.uint64());
+          continue;
+        }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.os = reader.string();
+          continue;
+        }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.staged = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SnapshotVersionInfo {
+    return {
+      version: isSet(object.version) ? globalThis.Number(object.version) : 0,
+      current: isSet(object.current) ? globalThis.Boolean(object.current) : false,
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      storage: isSet(object.storage) ? globalThis.String(object.storage) : "",
+      sizeBytes: isSet(object.sizeBytes)
+        ? globalThis.Number(object.sizeBytes)
+        : isSet(object.size_bytes)
+        ? globalThis.Number(object.size_bytes)
+        : 0,
+      createdAt: isSet(object.createdAt)
+        ? globalThis.Number(object.createdAt)
+        : isSet(object.created_at)
+        ? globalThis.Number(object.created_at)
+        : 0,
+      vcpu: isSet(object.vcpu) ? globalThis.Number(object.vcpu) : 0,
+      memoryBytes: isSet(object.memoryBytes)
+        ? globalThis.Number(object.memoryBytes)
+        : isSet(object.memory_bytes)
+        ? globalThis.Number(object.memory_bytes)
+        : 0,
+      os: isSet(object.os) ? globalThis.String(object.os) : "",
+      staged: isSet(object.staged) ? globalThis.Boolean(object.staged) : false,
+    };
+  },
+
+  toJSON(message: SnapshotVersionInfo): unknown {
+    const obj: any = {};
+    if (message.version !== 0) {
+      obj.version = Math.round(message.version);
+    }
+    if (message.current !== false) {
+      obj.current = message.current;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.storage !== "") {
+      obj.storage = message.storage;
+    }
+    if (message.sizeBytes !== 0) {
+      obj.sizeBytes = Math.round(message.sizeBytes);
+    }
+    if (message.createdAt !== 0) {
+      obj.createdAt = Math.round(message.createdAt);
+    }
+    if (message.vcpu !== 0) {
+      obj.vcpu = Math.round(message.vcpu);
+    }
+    if (message.memoryBytes !== 0) {
+      obj.memoryBytes = Math.round(message.memoryBytes);
+    }
+    if (message.os !== "") {
+      obj.os = message.os;
+    }
+    if (message.staged !== false) {
+      obj.staged = message.staged;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<SnapshotVersionInfo>): SnapshotVersionInfo {
+    return SnapshotVersionInfo.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<SnapshotVersionInfo>): SnapshotVersionInfo {
+    const message = createBaseSnapshotVersionInfo();
+    message.version = object.version ?? 0;
+    message.current = object.current ?? false;
+    message.status = object.status ?? "";
+    message.storage = object.storage ?? "";
+    message.sizeBytes = object.sizeBytes ?? 0;
+    message.createdAt = object.createdAt ?? 0;
+    message.vcpu = object.vcpu ?? 0;
+    message.memoryBytes = object.memoryBytes ?? 0;
+    message.os = object.os ?? "";
+    message.staged = object.staged ?? false;
+    return message;
+  },
+};
+
+function createBaseSetSnapshotCurrentVersionRequest(): SetSnapshotCurrentVersionRequest {
+  return { snapshot: "", org: "", version: undefined };
+}
+
+export const SetSnapshotCurrentVersionRequest: MessageFns<SetSnapshotCurrentVersionRequest> = {
+  encode(message: SetSnapshotCurrentVersionRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.snapshot !== "") {
+      writer.uint32(10).string(message.snapshot);
+    }
+    if (message.org !== "") {
+      writer.uint32(18).string(message.org);
+    }
+    if (message.version !== undefined) {
+      writer.uint32(24).uint64(message.version);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetSnapshotCurrentVersionRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSetSnapshotCurrentVersionRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.snapshot = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.org = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.version = longToNumber(reader.uint64());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SetSnapshotCurrentVersionRequest {
+    return {
+      snapshot: isSet(object.snapshot) ? globalThis.String(object.snapshot) : "",
+      org: isSet(object.org) ? globalThis.String(object.org) : "",
+      version: isSet(object.version) ? globalThis.Number(object.version) : undefined,
+    };
+  },
+
+  toJSON(message: SetSnapshotCurrentVersionRequest): unknown {
+    const obj: any = {};
+    if (message.snapshot !== "") {
+      obj.snapshot = message.snapshot;
+    }
+    if (message.org !== "") {
+      obj.org = message.org;
+    }
+    if (message.version !== undefined) {
+      obj.version = Math.round(message.version);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<SetSnapshotCurrentVersionRequest>): SetSnapshotCurrentVersionRequest {
+    return SetSnapshotCurrentVersionRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<SetSnapshotCurrentVersionRequest>): SetSnapshotCurrentVersionRequest {
+    const message = createBaseSetSnapshotCurrentVersionRequest();
+    message.snapshot = object.snapshot ?? "";
+    message.org = object.org ?? "";
+    message.version = object.version ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSetSnapshotCurrentVersionResponse(): SetSnapshotCurrentVersionResponse {
+  return { snapshotId: "", name: "", version: 0, previousVersion: 0, changed: false };
+}
+
+export const SetSnapshotCurrentVersionResponse: MessageFns<SetSnapshotCurrentVersionResponse> = {
+  encode(message: SetSnapshotCurrentVersionResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.snapshotId !== "") {
+      writer.uint32(10).string(message.snapshotId);
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    if (message.version !== 0) {
+      writer.uint32(24).uint64(message.version);
+    }
+    if (message.previousVersion !== 0) {
+      writer.uint32(32).uint64(message.previousVersion);
+    }
+    if (message.changed !== false) {
+      writer.uint32(40).bool(message.changed);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetSnapshotCurrentVersionResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSetSnapshotCurrentVersionResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.snapshotId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.name = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.version = longToNumber(reader.uint64());
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.previousVersion = longToNumber(reader.uint64());
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.changed = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SetSnapshotCurrentVersionResponse {
+    return {
+      snapshotId: isSet(object.snapshotId)
+        ? globalThis.String(object.snapshotId)
+        : isSet(object.snapshot_id)
+        ? globalThis.String(object.snapshot_id)
+        : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      version: isSet(object.version) ? globalThis.Number(object.version) : 0,
+      previousVersion: isSet(object.previousVersion)
+        ? globalThis.Number(object.previousVersion)
+        : isSet(object.previous_version)
+        ? globalThis.Number(object.previous_version)
+        : 0,
+      changed: isSet(object.changed) ? globalThis.Boolean(object.changed) : false,
+    };
+  },
+
+  toJSON(message: SetSnapshotCurrentVersionResponse): unknown {
+    const obj: any = {};
+    if (message.snapshotId !== "") {
+      obj.snapshotId = message.snapshotId;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.version !== 0) {
+      obj.version = Math.round(message.version);
+    }
+    if (message.previousVersion !== 0) {
+      obj.previousVersion = Math.round(message.previousVersion);
+    }
+    if (message.changed !== false) {
+      obj.changed = message.changed;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<SetSnapshotCurrentVersionResponse>): SetSnapshotCurrentVersionResponse {
+    return SetSnapshotCurrentVersionResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<SetSnapshotCurrentVersionResponse>): SetSnapshotCurrentVersionResponse {
+    const message = createBaseSetSnapshotCurrentVersionResponse();
+    message.snapshotId = object.snapshotId ?? "";
+    message.name = object.name ?? "";
+    message.version = object.version ?? 0;
+    message.previousVersion = object.previousVersion ?? 0;
+    message.changed = object.changed ?? false;
+    return message;
+  },
+};
+
 function createBaseDeleteSnapshotRequest(): DeleteSnapshotRequest {
   return { name: "", org: "" };
 }
@@ -26899,6 +27674,7 @@ function createBaseCreateVmFromSnapshotRequest(): CreateVmFromSnapshotRequest {
     spec: undefined,
     deleteAfterSecs: undefined,
     deleteAfterCron: undefined,
+    version: undefined,
   };
 }
 
@@ -26930,6 +27706,9 @@ export const CreateVmFromSnapshotRequest: MessageFns<CreateVmFromSnapshotRequest
     }
     if (message.deleteAfterCron !== undefined) {
       writer.uint32(74).string(message.deleteAfterCron);
+    }
+    if (message.version !== undefined) {
+      writer.uint32(80).uint64(message.version);
     }
     return writer;
   },
@@ -27016,6 +27795,14 @@ export const CreateVmFromSnapshotRequest: MessageFns<CreateVmFromSnapshotRequest
           message.deleteAfterCron = reader.string();
           continue;
         }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.version = longToNumber(reader.uint64());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -27052,6 +27839,7 @@ export const CreateVmFromSnapshotRequest: MessageFns<CreateVmFromSnapshotRequest
         : isSet(object.delete_after_cron)
         ? globalThis.String(object.delete_after_cron)
         : undefined,
+      version: isSet(object.version) ? globalThis.Number(object.version) : undefined,
     };
   },
 
@@ -27090,6 +27878,9 @@ export const CreateVmFromSnapshotRequest: MessageFns<CreateVmFromSnapshotRequest
     if (message.deleteAfterCron !== undefined) {
       obj.deleteAfterCron = message.deleteAfterCron;
     }
+    if (message.version !== undefined) {
+      obj.version = Math.round(message.version);
+    }
     return obj;
   },
 
@@ -27119,6 +27910,7 @@ export const CreateVmFromSnapshotRequest: MessageFns<CreateVmFromSnapshotRequest
       : undefined;
     message.deleteAfterSecs = object.deleteAfterSecs ?? undefined;
     message.deleteAfterCron = object.deleteAfterCron ?? undefined;
+    message.version = object.version ?? undefined;
     return message;
   },
 };
@@ -35648,6 +36440,422 @@ export const GrantedMachineSize: MessageFns<GrantedMachineSize> = {
   },
 };
 
+function createBaseSetOrgSnapshotVersionsKeepRequest(): SetOrgSnapshotVersionsKeepRequest {
+  return { orgId: "", keep: undefined, dryRun: false };
+}
+
+export const SetOrgSnapshotVersionsKeepRequest: MessageFns<SetOrgSnapshotVersionsKeepRequest> = {
+  encode(message: SetOrgSnapshotVersionsKeepRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.orgId !== "") {
+      writer.uint32(10).string(message.orgId);
+    }
+    if (message.keep !== undefined) {
+      writer.uint32(16).uint32(message.keep);
+    }
+    if (message.dryRun !== false) {
+      writer.uint32(24).bool(message.dryRun);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetOrgSnapshotVersionsKeepRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSetOrgSnapshotVersionsKeepRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.orgId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.keep = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.dryRun = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SetOrgSnapshotVersionsKeepRequest {
+    return {
+      orgId: isSet(object.orgId)
+        ? globalThis.String(object.orgId)
+        : isSet(object.org_id)
+        ? globalThis.String(object.org_id)
+        : "",
+      keep: isSet(object.keep) ? globalThis.Number(object.keep) : undefined,
+      dryRun: isSet(object.dryRun)
+        ? globalThis.Boolean(object.dryRun)
+        : isSet(object.dry_run)
+        ? globalThis.Boolean(object.dry_run)
+        : false,
+    };
+  },
+
+  toJSON(message: SetOrgSnapshotVersionsKeepRequest): unknown {
+    const obj: any = {};
+    if (message.orgId !== "") {
+      obj.orgId = message.orgId;
+    }
+    if (message.keep !== undefined) {
+      obj.keep = Math.round(message.keep);
+    }
+    if (message.dryRun !== false) {
+      obj.dryRun = message.dryRun;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<SetOrgSnapshotVersionsKeepRequest>): SetOrgSnapshotVersionsKeepRequest {
+    return SetOrgSnapshotVersionsKeepRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<SetOrgSnapshotVersionsKeepRequest>): SetOrgSnapshotVersionsKeepRequest {
+    const message = createBaseSetOrgSnapshotVersionsKeepRequest();
+    message.orgId = object.orgId ?? "";
+    message.keep = object.keep ?? undefined;
+    message.dryRun = object.dryRun ?? false;
+    return message;
+  },
+};
+
+function createBaseSetOrgSnapshotVersionsKeepResponse(): SetOrgSnapshotVersionsKeepResponse {
+  return { set: false, keep: 0, platformKeep: 0, maxKeep: 0, versionsDeleted: 0 };
+}
+
+export const SetOrgSnapshotVersionsKeepResponse: MessageFns<SetOrgSnapshotVersionsKeepResponse> = {
+  encode(message: SetOrgSnapshotVersionsKeepResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.set !== false) {
+      writer.uint32(8).bool(message.set);
+    }
+    if (message.keep !== 0) {
+      writer.uint32(16).uint32(message.keep);
+    }
+    if (message.platformKeep !== 0) {
+      writer.uint32(24).uint32(message.platformKeep);
+    }
+    if (message.maxKeep !== 0) {
+      writer.uint32(32).uint32(message.maxKeep);
+    }
+    if (message.versionsDeleted !== 0) {
+      writer.uint32(40).uint32(message.versionsDeleted);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetOrgSnapshotVersionsKeepResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSetOrgSnapshotVersionsKeepResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.set = reader.bool();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.keep = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.platformKeep = reader.uint32();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.maxKeep = reader.uint32();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.versionsDeleted = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SetOrgSnapshotVersionsKeepResponse {
+    return {
+      set: isSet(object.set) ? globalThis.Boolean(object.set) : false,
+      keep: isSet(object.keep) ? globalThis.Number(object.keep) : 0,
+      platformKeep: isSet(object.platformKeep)
+        ? globalThis.Number(object.platformKeep)
+        : isSet(object.platform_keep)
+        ? globalThis.Number(object.platform_keep)
+        : 0,
+      maxKeep: isSet(object.maxKeep)
+        ? globalThis.Number(object.maxKeep)
+        : isSet(object.max_keep)
+        ? globalThis.Number(object.max_keep)
+        : 0,
+      versionsDeleted: isSet(object.versionsDeleted)
+        ? globalThis.Number(object.versionsDeleted)
+        : isSet(object.versions_deleted)
+        ? globalThis.Number(object.versions_deleted)
+        : 0,
+    };
+  },
+
+  toJSON(message: SetOrgSnapshotVersionsKeepResponse): unknown {
+    const obj: any = {};
+    if (message.set !== false) {
+      obj.set = message.set;
+    }
+    if (message.keep !== 0) {
+      obj.keep = Math.round(message.keep);
+    }
+    if (message.platformKeep !== 0) {
+      obj.platformKeep = Math.round(message.platformKeep);
+    }
+    if (message.maxKeep !== 0) {
+      obj.maxKeep = Math.round(message.maxKeep);
+    }
+    if (message.versionsDeleted !== 0) {
+      obj.versionsDeleted = Math.round(message.versionsDeleted);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<SetOrgSnapshotVersionsKeepResponse>): SetOrgSnapshotVersionsKeepResponse {
+    return SetOrgSnapshotVersionsKeepResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<SetOrgSnapshotVersionsKeepResponse>): SetOrgSnapshotVersionsKeepResponse {
+    const message = createBaseSetOrgSnapshotVersionsKeepResponse();
+    message.set = object.set ?? false;
+    message.keep = object.keep ?? 0;
+    message.platformKeep = object.platformKeep ?? 0;
+    message.maxKeep = object.maxKeep ?? 0;
+    message.versionsDeleted = object.versionsDeleted ?? 0;
+    return message;
+  },
+};
+
+function createBaseGetOrgSnapshotVersionsKeepRequest(): GetOrgSnapshotVersionsKeepRequest {
+  return { orgId: "" };
+}
+
+export const GetOrgSnapshotVersionsKeepRequest: MessageFns<GetOrgSnapshotVersionsKeepRequest> = {
+  encode(message: GetOrgSnapshotVersionsKeepRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.orgId !== "") {
+      writer.uint32(10).string(message.orgId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GetOrgSnapshotVersionsKeepRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseGetOrgSnapshotVersionsKeepRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.orgId = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): GetOrgSnapshotVersionsKeepRequest {
+    return {
+      orgId: isSet(object.orgId)
+        ? globalThis.String(object.orgId)
+        : isSet(object.org_id)
+        ? globalThis.String(object.org_id)
+        : "",
+    };
+  },
+
+  toJSON(message: GetOrgSnapshotVersionsKeepRequest): unknown {
+    const obj: any = {};
+    if (message.orgId !== "") {
+      obj.orgId = message.orgId;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<GetOrgSnapshotVersionsKeepRequest>): GetOrgSnapshotVersionsKeepRequest {
+    return GetOrgSnapshotVersionsKeepRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<GetOrgSnapshotVersionsKeepRequest>): GetOrgSnapshotVersionsKeepRequest {
+    const message = createBaseGetOrgSnapshotVersionsKeepRequest();
+    message.orgId = object.orgId ?? "";
+    return message;
+  },
+};
+
+function createBaseGetOrgSnapshotVersionsKeepResponse(): GetOrgSnapshotVersionsKeepResponse {
+  return { set: false, keep: 0, platformKeep: 0, maxKeep: 0 };
+}
+
+export const GetOrgSnapshotVersionsKeepResponse: MessageFns<GetOrgSnapshotVersionsKeepResponse> = {
+  encode(message: GetOrgSnapshotVersionsKeepResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.set !== false) {
+      writer.uint32(8).bool(message.set);
+    }
+    if (message.keep !== 0) {
+      writer.uint32(16).uint32(message.keep);
+    }
+    if (message.platformKeep !== 0) {
+      writer.uint32(24).uint32(message.platformKeep);
+    }
+    if (message.maxKeep !== 0) {
+      writer.uint32(32).uint32(message.maxKeep);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GetOrgSnapshotVersionsKeepResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseGetOrgSnapshotVersionsKeepResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.set = reader.bool();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.keep = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.platformKeep = reader.uint32();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.maxKeep = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): GetOrgSnapshotVersionsKeepResponse {
+    return {
+      set: isSet(object.set) ? globalThis.Boolean(object.set) : false,
+      keep: isSet(object.keep) ? globalThis.Number(object.keep) : 0,
+      platformKeep: isSet(object.platformKeep)
+        ? globalThis.Number(object.platformKeep)
+        : isSet(object.platform_keep)
+        ? globalThis.Number(object.platform_keep)
+        : 0,
+      maxKeep: isSet(object.maxKeep)
+        ? globalThis.Number(object.maxKeep)
+        : isSet(object.max_keep)
+        ? globalThis.Number(object.max_keep)
+        : 0,
+    };
+  },
+
+  toJSON(message: GetOrgSnapshotVersionsKeepResponse): unknown {
+    const obj: any = {};
+    if (message.set !== false) {
+      obj.set = message.set;
+    }
+    if (message.keep !== 0) {
+      obj.keep = Math.round(message.keep);
+    }
+    if (message.platformKeep !== 0) {
+      obj.platformKeep = Math.round(message.platformKeep);
+    }
+    if (message.maxKeep !== 0) {
+      obj.maxKeep = Math.round(message.maxKeep);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<GetOrgSnapshotVersionsKeepResponse>): GetOrgSnapshotVersionsKeepResponse {
+    return GetOrgSnapshotVersionsKeepResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<GetOrgSnapshotVersionsKeepResponse>): GetOrgSnapshotVersionsKeepResponse {
+    const message = createBaseGetOrgSnapshotVersionsKeepResponse();
+    message.set = object.set ?? false;
+    message.keep = object.keep ?? 0;
+    message.platformKeep = object.platformKeep ?? 0;
+    message.maxKeep = object.maxKeep ?? 0;
+    return message;
+  },
+};
+
 function createBaseSetOrgIdleIgnoreOutboundDefaultRequest(): SetOrgIdleIgnoreOutboundDefaultRequest {
   return { orgId: "", enabled: undefined, applyExisting: false, newMachinesOnly: false };
 }
@@ -41741,6 +42949,31 @@ export const BoxdApiService = {
       Buffer.from(CreateSnapshotResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer): CreateSnapshotResponse => CreateSnapshotResponse.decode(value),
   },
+  /**
+   * A staged save: CreateSnapshot, but the version is saved without becoming
+   * the snapshot's current one. Machines created from the snapshot keep
+   * getting the current version; this one is created from by naming it
+   * (CreateVmFromSnapshot's `version`, or `name@7`), and
+   * SetSnapshotCurrentVersion makes it current. ListSnapshotVersions shows it
+   * "saving", then "ready" with `staged` set. The snapshot must already have
+   * a version: FAILED_PRECONDITION for the first save of a name. A snapshot
+   * keeps as many staged versions as the org keeps versions
+   * (GetOrgSnapshotVersionsKeep): one more replaces the oldest staged one.
+   * A call of its own, not a field of CreateSnapshot, so that a server from
+   * before staged saves refuses it (UNIMPLEMENTED) instead of saving a
+   * version that becomes current.
+   */
+  createStagedSnapshot: {
+    path: "/boxd.api.v1.BoxdApi/CreateStagedSnapshot" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: CreateSnapshotRequest): Buffer =>
+      Buffer.from(CreateSnapshotRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): CreateSnapshotRequest => CreateSnapshotRequest.decode(value),
+    responseSerialize: (value: CreateSnapshotResponse): Buffer =>
+      Buffer.from(CreateSnapshotResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): CreateSnapshotResponse => CreateSnapshotResponse.decode(value),
+  },
   listSnapshots: {
     path: "/boxd.api.v1.BoxdApi/ListSnapshots" as const,
     requestStream: false as const,
@@ -41759,6 +42992,40 @@ export const BoxdApiService = {
     requestDeserialize: (value: Buffer): GetSnapshotRequest => GetSnapshotRequest.decode(value),
     responseSerialize: (value: GetSnapshotResponse): Buffer => Buffer.from(GetSnapshotResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer): GetSnapshotResponse => GetSnapshotResponse.decode(value),
+  },
+  /**
+   * The versions a snapshot keeps, newest first. Saving over a snapshot's name
+   * makes a new version; how many are kept is the org's setting
+   * (SetOrgSnapshotVersionsKeep). A machine can be created from any of them
+   * that is ready and on local disk (CreateVmFromSnapshotRequest.version).
+   */
+  listSnapshotVersions: {
+    path: "/boxd.api.v1.BoxdApi/ListSnapshotVersions" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: ListSnapshotVersionsRequest): Buffer =>
+      Buffer.from(ListSnapshotVersionsRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): ListSnapshotVersionsRequest => ListSnapshotVersionsRequest.decode(value),
+    responseSerialize: (value: ListSnapshotVersionsResponse): Buffer =>
+      Buffer.from(ListSnapshotVersionsResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): ListSnapshotVersionsResponse => ListSnapshotVersionsResponse.decode(value),
+  },
+  /**
+   * Make one of a snapshot's versions its current one (a staged version, or
+   * an older one to roll back to).
+   */
+  setSnapshotCurrentVersion: {
+    path: "/boxd.api.v1.BoxdApi/SetSnapshotCurrentVersion" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: SetSnapshotCurrentVersionRequest): Buffer =>
+      Buffer.from(SetSnapshotCurrentVersionRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): SetSnapshotCurrentVersionRequest =>
+      SetSnapshotCurrentVersionRequest.decode(value),
+    responseSerialize: (value: SetSnapshotCurrentVersionResponse): Buffer =>
+      Buffer.from(SetSnapshotCurrentVersionResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SetSnapshotCurrentVersionResponse =>
+      SetSnapshotCurrentVersionResponse.decode(value),
   },
   deleteSnapshot: {
     path: "/boxd.api.v1.BoxdApi/DeleteSnapshot" as const,
@@ -42271,6 +43538,44 @@ export const BoxdApiService = {
     responseSerialize: (value: GetOrgMachineDefaultsResponse): Buffer =>
       Buffer.from(GetOrgMachineDefaultsResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer): GetOrgMachineDefaultsResponse => GetOrgMachineDefaultsResponse.decode(value),
+  },
+  /**
+   * How many versions of each of its snapshots the org keeps. Saving over a
+   * snapshot's name makes a new version; the org keeps the current one and
+   * the newest ones before it, up to this count, and older ones are deleted.
+   * An org without a setting follows the platform's, which keeps the current
+   * version alone unless the cluster's operator changed it. It applies to
+   * every snapshot of the org. Lowering it permanently deletes the versions
+   * beyond the new count within a minute: `dry_run` says how many first.
+   * Raising it keeps more from the next save on; a version already deleted
+   * does not come back.
+   * Set/Clear require org admin; Get is readable by any member.
+   */
+  setOrgSnapshotVersionsKeep: {
+    path: "/boxd.api.v1.BoxdApi/SetOrgSnapshotVersionsKeep" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: SetOrgSnapshotVersionsKeepRequest): Buffer =>
+      Buffer.from(SetOrgSnapshotVersionsKeepRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): SetOrgSnapshotVersionsKeepRequest =>
+      SetOrgSnapshotVersionsKeepRequest.decode(value),
+    responseSerialize: (value: SetOrgSnapshotVersionsKeepResponse): Buffer =>
+      Buffer.from(SetOrgSnapshotVersionsKeepResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SetOrgSnapshotVersionsKeepResponse =>
+      SetOrgSnapshotVersionsKeepResponse.decode(value),
+  },
+  getOrgSnapshotVersionsKeep: {
+    path: "/boxd.api.v1.BoxdApi/GetOrgSnapshotVersionsKeep" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: GetOrgSnapshotVersionsKeepRequest): Buffer =>
+      Buffer.from(GetOrgSnapshotVersionsKeepRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): GetOrgSnapshotVersionsKeepRequest =>
+      GetOrgSnapshotVersionsKeepRequest.decode(value),
+    responseSerialize: (value: GetOrgSnapshotVersionsKeepResponse): Buffer =>
+      Buffer.from(GetOrgSnapshotVersionsKeepResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): GetOrgSnapshotVersionsKeepResponse =>
+      GetOrgSnapshotVersionsKeepResponse.decode(value),
   },
   /**
    * The org's default for idle.ignore-outbound: whether a NEW
@@ -42997,8 +44302,35 @@ export interface BoxdApiServer extends UntypedServiceImplementation {
    * across a few workers and versioned (latest-only).
    */
   createSnapshot: handleUnaryCall<CreateSnapshotRequest, CreateSnapshotResponse>;
+  /**
+   * A staged save: CreateSnapshot, but the version is saved without becoming
+   * the snapshot's current one. Machines created from the snapshot keep
+   * getting the current version; this one is created from by naming it
+   * (CreateVmFromSnapshot's `version`, or `name@7`), and
+   * SetSnapshotCurrentVersion makes it current. ListSnapshotVersions shows it
+   * "saving", then "ready" with `staged` set. The snapshot must already have
+   * a version: FAILED_PRECONDITION for the first save of a name. A snapshot
+   * keeps as many staged versions as the org keeps versions
+   * (GetOrgSnapshotVersionsKeep): one more replaces the oldest staged one.
+   * A call of its own, not a field of CreateSnapshot, so that a server from
+   * before staged saves refuses it (UNIMPLEMENTED) instead of saving a
+   * version that becomes current.
+   */
+  createStagedSnapshot: handleUnaryCall<CreateSnapshotRequest, CreateSnapshotResponse>;
   listSnapshots: handleUnaryCall<ListSnapshotsRequest, ListSnapshotsResponse>;
   getSnapshot: handleUnaryCall<GetSnapshotRequest, GetSnapshotResponse>;
+  /**
+   * The versions a snapshot keeps, newest first. Saving over a snapshot's name
+   * makes a new version; how many are kept is the org's setting
+   * (SetOrgSnapshotVersionsKeep). A machine can be created from any of them
+   * that is ready and on local disk (CreateVmFromSnapshotRequest.version).
+   */
+  listSnapshotVersions: handleUnaryCall<ListSnapshotVersionsRequest, ListSnapshotVersionsResponse>;
+  /**
+   * Make one of a snapshot's versions its current one (a staged version, or
+   * an older one to roll back to).
+   */
+  setSnapshotCurrentVersion: handleUnaryCall<SetSnapshotCurrentVersionRequest, SetSnapshotCurrentVersionResponse>;
   deleteSnapshot: handleUnaryCall<DeleteSnapshotRequest, DeleteSnapshotResponse>;
   /**
    * Bring an archived snapshot back to local disk, so machines can be created
@@ -43105,6 +44437,20 @@ export interface BoxdApiServer extends UntypedServiceImplementation {
    */
   setOrgMachineDefaults: handleUnaryCall<SetOrgMachineDefaultsRequest, SetOrgMachineDefaultsResponse>;
   getOrgMachineDefaults: handleUnaryCall<GetOrgMachineDefaultsRequest, GetOrgMachineDefaultsResponse>;
+  /**
+   * How many versions of each of its snapshots the org keeps. Saving over a
+   * snapshot's name makes a new version; the org keeps the current one and
+   * the newest ones before it, up to this count, and older ones are deleted.
+   * An org without a setting follows the platform's, which keeps the current
+   * version alone unless the cluster's operator changed it. It applies to
+   * every snapshot of the org. Lowering it permanently deletes the versions
+   * beyond the new count within a minute: `dry_run` says how many first.
+   * Raising it keeps more from the next save on; a version already deleted
+   * does not come back.
+   * Set/Clear require org admin; Get is readable by any member.
+   */
+  setOrgSnapshotVersionsKeep: handleUnaryCall<SetOrgSnapshotVersionsKeepRequest, SetOrgSnapshotVersionsKeepResponse>;
+  getOrgSnapshotVersionsKeep: handleUnaryCall<GetOrgSnapshotVersionsKeepRequest, GetOrgSnapshotVersionsKeepResponse>;
   /**
    * The org's default for idle.ignore-outbound: whether a NEW
    * machine in the org starts with its idle clock ignoring outbound traffic
@@ -44596,6 +45942,35 @@ export interface BoxdApiClient extends Client {
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: CreateSnapshotResponse) => void,
   ): ClientUnaryCall;
+  /**
+   * A staged save: CreateSnapshot, but the version is saved without becoming
+   * the snapshot's current one. Machines created from the snapshot keep
+   * getting the current version; this one is created from by naming it
+   * (CreateVmFromSnapshot's `version`, or `name@7`), and
+   * SetSnapshotCurrentVersion makes it current. ListSnapshotVersions shows it
+   * "saving", then "ready" with `staged` set. The snapshot must already have
+   * a version: FAILED_PRECONDITION for the first save of a name. A snapshot
+   * keeps as many staged versions as the org keeps versions
+   * (GetOrgSnapshotVersionsKeep): one more replaces the oldest staged one.
+   * A call of its own, not a field of CreateSnapshot, so that a server from
+   * before staged saves refuses it (UNIMPLEMENTED) instead of saving a
+   * version that becomes current.
+   */
+  createStagedSnapshot(
+    request: CreateSnapshotRequest,
+    callback: (error: ServiceError | null, response: CreateSnapshotResponse) => void,
+  ): ClientUnaryCall;
+  createStagedSnapshot(
+    request: CreateSnapshotRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: CreateSnapshotResponse) => void,
+  ): ClientUnaryCall;
+  createStagedSnapshot(
+    request: CreateSnapshotRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: CreateSnapshotResponse) => void,
+  ): ClientUnaryCall;
   listSnapshots(
     request: ListSnapshotsRequest,
     callback: (error: ServiceError | null, response: ListSnapshotsResponse) => void,
@@ -44625,6 +46000,46 @@ export interface BoxdApiClient extends Client {
     metadata: Metadata,
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: GetSnapshotResponse) => void,
+  ): ClientUnaryCall;
+  /**
+   * The versions a snapshot keeps, newest first. Saving over a snapshot's name
+   * makes a new version; how many are kept is the org's setting
+   * (SetOrgSnapshotVersionsKeep). A machine can be created from any of them
+   * that is ready and on local disk (CreateVmFromSnapshotRequest.version).
+   */
+  listSnapshotVersions(
+    request: ListSnapshotVersionsRequest,
+    callback: (error: ServiceError | null, response: ListSnapshotVersionsResponse) => void,
+  ): ClientUnaryCall;
+  listSnapshotVersions(
+    request: ListSnapshotVersionsRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: ListSnapshotVersionsResponse) => void,
+  ): ClientUnaryCall;
+  listSnapshotVersions(
+    request: ListSnapshotVersionsRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: ListSnapshotVersionsResponse) => void,
+  ): ClientUnaryCall;
+  /**
+   * Make one of a snapshot's versions its current one (a staged version, or
+   * an older one to roll back to).
+   */
+  setSnapshotCurrentVersion(
+    request: SetSnapshotCurrentVersionRequest,
+    callback: (error: ServiceError | null, response: SetSnapshotCurrentVersionResponse) => void,
+  ): ClientUnaryCall;
+  setSnapshotCurrentVersion(
+    request: SetSnapshotCurrentVersionRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: SetSnapshotCurrentVersionResponse) => void,
+  ): ClientUnaryCall;
+  setSnapshotCurrentVersion(
+    request: SetSnapshotCurrentVersionRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: SetSnapshotCurrentVersionResponse) => void,
   ): ClientUnaryCall;
   deleteSnapshot(
     request: DeleteSnapshotRequest,
@@ -45347,6 +46762,48 @@ export interface BoxdApiClient extends Client {
     metadata: Metadata,
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: GetOrgMachineDefaultsResponse) => void,
+  ): ClientUnaryCall;
+  /**
+   * How many versions of each of its snapshots the org keeps. Saving over a
+   * snapshot's name makes a new version; the org keeps the current one and
+   * the newest ones before it, up to this count, and older ones are deleted.
+   * An org without a setting follows the platform's, which keeps the current
+   * version alone unless the cluster's operator changed it. It applies to
+   * every snapshot of the org. Lowering it permanently deletes the versions
+   * beyond the new count within a minute: `dry_run` says how many first.
+   * Raising it keeps more from the next save on; a version already deleted
+   * does not come back.
+   * Set/Clear require org admin; Get is readable by any member.
+   */
+  setOrgSnapshotVersionsKeep(
+    request: SetOrgSnapshotVersionsKeepRequest,
+    callback: (error: ServiceError | null, response: SetOrgSnapshotVersionsKeepResponse) => void,
+  ): ClientUnaryCall;
+  setOrgSnapshotVersionsKeep(
+    request: SetOrgSnapshotVersionsKeepRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: SetOrgSnapshotVersionsKeepResponse) => void,
+  ): ClientUnaryCall;
+  setOrgSnapshotVersionsKeep(
+    request: SetOrgSnapshotVersionsKeepRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: SetOrgSnapshotVersionsKeepResponse) => void,
+  ): ClientUnaryCall;
+  getOrgSnapshotVersionsKeep(
+    request: GetOrgSnapshotVersionsKeepRequest,
+    callback: (error: ServiceError | null, response: GetOrgSnapshotVersionsKeepResponse) => void,
+  ): ClientUnaryCall;
+  getOrgSnapshotVersionsKeep(
+    request: GetOrgSnapshotVersionsKeepRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: GetOrgSnapshotVersionsKeepResponse) => void,
+  ): ClientUnaryCall;
+  getOrgSnapshotVersionsKeep(
+    request: GetOrgSnapshotVersionsKeepRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: GetOrgSnapshotVersionsKeepResponse) => void,
   ): ClientUnaryCall;
   /**
    * The org's default for idle.ignore-outbound: whether a NEW

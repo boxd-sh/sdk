@@ -96,6 +96,178 @@ def test_create_from_snapshot_switches_rpc():
     assert request.name == "alpha"
 
 
+def test_create_from_a_snapshot_version():
+    transport = FakeTransport(
+        [
+            api_pb2.CreateVmResponse(vm_id="vm-1", name="alpha"),
+            a_vm(),
+            api_pb2.ListSnapshotVersionsResponse(snapshot_id="snap_1", name="base"),
+            api_pb2.CreateVmResponse(vm_id="vm-2", name="beta"),
+            a_vm(),
+            api_pb2.CreateVmResponse(vm_id="vm-3", name="gamma"),
+            a_vm(),
+        ]
+    )
+    machines = Machines(transport)
+    # No version: the field is left unset, which is the snapshot's current one.
+    machines.create("alpha", from_snapshot="base")
+    assert not transport.calls[0][1].HasField("version")
+    # A version asked for rides in its own field, after asking the server for
+    # the snapshot's versions (a server that doesn't know them refuses that).
+    machines.create("beta", from_snapshot="base", snapshot_version=4, org="acme")
+    method, request = transport.calls[2]
+    assert method == "ListSnapshotVersions"
+    assert (request.name, request.org) == ("base", "acme")
+    method, request = transport.calls[3]
+    assert method == "CreateVmFromSnapshot"
+    assert (request.snapshot, request.version) == ("base", 4)
+    # `name@4` is the server's to read: it is sent as written.
+    machines.create("gamma", from_snapshot="base@4")
+    request = transport.calls[5][1]
+    assert request.snapshot == "base@4"
+    assert not request.HasField("version")
+
+
+def test_create_from_a_snapshot_version_is_not_sent_to_a_server_without_versions():
+    from boxd.errors import APIStatusError
+
+    # An older server ignores the version and would restore the current one.
+    unimplemented = APIStatusError("unknown method", code="unimplemented", grpc_code=12)
+    transport = FakeTransport([unimplemented])
+    with pytest.raises(APIStatusError, match="snapshot's version") as raised:
+        Machines(transport).create("beta", from_snapshot="base", snapshot_version=4)
+    assert raised.value.code == "unimplemented"
+    assert [method for method, _ in transport.calls] == ["ListSnapshotVersions"]
+    # Any other answer to the question is the create's own to report.
+    transport = FakeTransport(
+        [
+            NotFoundError("snapshot not found", code="not_found"),
+            NotFoundError("snapshot 'base' has no version 4", code="not_found"),
+        ]
+    )
+    with pytest.raises(NotFoundError, match="has no version 4"):
+        Machines(transport).create("beta", from_snapshot="base", snapshot_version=4)
+    assert [method for method, _ in transport.calls] == [
+        "ListSnapshotVersions",
+        "CreateVmFromSnapshot",
+    ]
+
+
+def test_a_staged_save_is_its_own_call():
+    from boxd.errors import APIStatusError
+
+    saved = api_pb2.CreateSnapshotResponse(
+        snapshot_id="snap_1", name="base", version=5, status="pending"
+    )
+    transport = FakeTransport([saved, saved])
+    snapshots = Snapshots(transport)
+    plain = snapshots.create("web", "base")
+    assert transport.calls[0][0] == "CreateSnapshot"
+    assert (plain.version, plain.staged) == (5, False)
+    staged = snapshots.create("web", "base", staged=True)
+    method, request = transport.calls[1]
+    assert method == "CreateStagedSnapshot"
+    assert (request.vm, request.name) == ("web", "base")
+    assert (staged.version, staged.staged) == (5, True)
+    # A server from before staged saves refuses the call: nothing was saved.
+    transport = FakeTransport(
+        [APIStatusError("unknown method", code="unimplemented", grpc_code=12)]
+    )
+    with pytest.raises(APIStatusError, match="stage a save; nothing was saved"):
+        Snapshots(transport).create("web", "base", staged=True)
+
+
+def test_snapshots_set_current_version():
+    transport = FakeTransport(
+        [
+            api_pb2.SetSnapshotCurrentVersionResponse(
+                snapshot_id="snap_1",
+                name="base",
+                version=3,
+                previous_version=5,
+                changed=True,
+            )
+        ]
+    )
+    moved = Snapshots(transport).set_current_version("base", 3, org="acme")
+    method, request = transport.calls[0]
+    assert method == "SetSnapshotCurrentVersion"
+    assert (request.snapshot, request.org, request.version) == ("base", "acme", 3)
+    assert (moved.id, moved.name, moved.version, moved.previous_version) == (
+        "snap_1",
+        "base",
+        3,
+        5,
+    )
+    assert moved.changed is True
+
+
+def test_snapshot_version_needs_a_snapshot():
+    transport = FakeTransport([])
+    with pytest.raises(ValueError, match="from_snapshot"):
+        Machines(transport).create("alpha", snapshot_version=4)
+    assert transport.calls == []
+
+
+def test_snapshots_versions_lists_newest_first_as_sent():
+    from boxd.resources.snapshots import Snapshots
+
+    transport = FakeTransport(
+        [
+            api_pb2.ListSnapshotVersionsResponse(
+                snapshot_id="snap_1",
+                name="base",
+                versions=[
+                    api_pb2.SnapshotVersionInfo(
+                        version=6, status="ready", storage="local", staged=True
+                    ),
+                    api_pb2.SnapshotVersionInfo(
+                        version=5, status="saving", storage="local"
+                    ),
+                    api_pb2.SnapshotVersionInfo(
+                        version=4,
+                        current=True,
+                        status="ready",
+                        storage="local",
+                        size_bytes=2048,
+                        created_at=1_800_000_000_000,
+                        vcpu=2,
+                        memory_bytes=8 << 30,
+                        os="linux",
+                    ),
+                    api_pb2.SnapshotVersionInfo(
+                        version=3, status="ready", storage="archived", os="windows"
+                    ),
+                ],
+            )
+        ]
+    )
+    versions = Snapshots(transport).versions("base", org="acme")
+    method, request = transport.calls[0]
+    assert method == "ListSnapshotVersions"
+    assert (request.name, request.org) == ("base", "acme")
+    assert [(v.version, v.current, v.status, v.storage) for v in versions] == [
+        (6, False, "ready", "local"),
+        (5, False, "saving", "local"),
+        (4, True, "ready", "local"),
+        (3, False, "ready", "archived"),
+    ]
+    # Only the ready version above the current one is staged.
+    assert [v.staged for v in versions] == [True, False, False, False]
+    current = versions[2]
+    assert (current.size_bytes, current.vcpu, current.memory_bytes, current.os) == (
+        2048,
+        2,
+        8 << 30,
+        "linux",
+    )
+    assert current.created_at is not None and current.created_at.year == 2027
+    # Nothing saved yet reads as no time, and an unset OS as Linux.
+    assert versions[0].created_at is None
+    assert versions[0].os == "linux"
+    assert versions[3].os == "windows"
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
@@ -1507,6 +1679,94 @@ def test_orgs_set_rdp_default_without_enabled_points_at_clear():
     transport = FakeTransport([])
     with pytest.raises(ValueError, match="clear_rdp_default"):
         Orgs(transport).set_rdp_default("o1", enabled=None)
+    assert transport.calls == []
+
+
+def test_orgs_set_get_clear_snapshot_versions_keep():
+    from boxd.resources.orgs import Orgs
+
+    transport = FakeTransport(
+        [
+            api_pb2.SetOrgSnapshotVersionsKeepResponse(
+                set=True, keep=2, platform_keep=1, max_keep=10, versions_deleted=4
+            ),
+            api_pb2.SetOrgSnapshotVersionsKeepResponse(
+                set=True, keep=2, platform_keep=1, max_keep=10, versions_deleted=4
+            ),
+            api_pb2.GetOrgSnapshotVersionsKeepResponse(
+                set=True, keep=2, platform_keep=1, max_keep=10
+            ),
+            api_pb2.GetOrgSnapshotVersionsKeepResponse(
+                keep=1, platform_keep=1, max_keep=10
+            ),
+            api_pb2.SetOrgSnapshotVersionsKeepResponse(
+                keep=1, platform_keep=1, max_keep=10, versions_deleted=1
+            ),
+            api_pb2.SetOrgSnapshotVersionsKeepResponse(
+                keep=1, platform_keep=1, max_keep=10, versions_deleted=1
+            ),
+        ]
+    )
+    ns = Orgs(transport)
+
+    # A dry run asks the same call with `dry_run` set, and answers what the
+    # change would delete.
+    preview = ns.set_snapshot_versions_keep("o1", keep=2, dry_run=True)
+    method, request = transport.calls[0]
+    assert method == "SetOrgSnapshotVersionsKeep"
+    assert (request.org_id, request.keep, request.dry_run) == ("o1", 2, True)
+    assert preview.versions_deleted == 4
+
+    changed = ns.set_snapshot_versions_keep("o1", keep=2)
+    request = transport.calls[1][1]
+    assert request.HasField("keep")
+    assert (request.keep, request.dry_run) == (2, False)
+    assert (
+        changed.is_set,
+        changed.keep,
+        changed.platform_keep,
+        changed.max_keep,
+        changed.versions_deleted,
+    ) == (True, 2, 1, 10, 4)
+
+    # `set` on the wire is `is_set` here.
+    setting = ns.get_snapshot_versions_keep("o1")
+    assert transport.calls[2][0] == "GetOrgSnapshotVersionsKeep"
+    assert transport.calls[2][1].org_id == "o1"
+    assert (setting.is_set, setting.keep, setting.platform_keep, setting.max_keep) == (
+        True,
+        2,
+        1,
+        10,
+    )
+    # No org setting: `keep` is the platform's count.
+    unset = ns.get_snapshot_versions_keep()
+    assert transport.calls[3][1].org_id == ""
+    assert (unset.is_set, unset.keep) == (False, 1)
+
+    # Clearing is the same RPC with `keep` ABSENT, and takes a dry run too.
+    preview = ns.clear_snapshot_versions_keep("o1", dry_run=True)
+    method, request = transport.calls[4]
+    assert method == "SetOrgSnapshotVersionsKeep"
+    assert request.org_id == "o1"
+    assert not request.HasField("keep")
+    assert request.dry_run
+    assert preview.versions_deleted == 1
+
+    cleared = ns.clear_snapshot_versions_keep("o1")
+    request = transport.calls[5][1]
+    assert not request.HasField("keep")
+    assert not request.dry_run
+    assert (cleared.is_set, cleared.keep, cleared.versions_deleted) == (False, 1, 1)
+
+
+def test_orgs_set_snapshot_versions_keep_without_keep_points_at_clear():
+    # Sending it absent would silently clear the setting, so `set` refuses it.
+    from boxd.resources.orgs import Orgs
+
+    transport = FakeTransport([])
+    with pytest.raises(ValueError, match="clear_snapshot_versions_keep"):
+        Orgs(transport).set_snapshot_versions_keep("o1", keep=None)
     assert transport.calls == []
 
 

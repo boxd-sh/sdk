@@ -429,6 +429,11 @@ class BoxdApiStub(object):
                 request_serializer=api__pb2.CreateSnapshotRequest.SerializeToString,
                 response_deserializer=api__pb2.CreateSnapshotResponse.FromString,
                 _registered_method=True)
+        self.CreateStagedSnapshot = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/CreateStagedSnapshot',
+                request_serializer=api__pb2.CreateSnapshotRequest.SerializeToString,
+                response_deserializer=api__pb2.CreateSnapshotResponse.FromString,
+                _registered_method=True)
         self.ListSnapshots = channel.unary_unary(
                 '/boxd.api.v1.BoxdApi/ListSnapshots',
                 request_serializer=api__pb2.ListSnapshotsRequest.SerializeToString,
@@ -438,6 +443,16 @@ class BoxdApiStub(object):
                 '/boxd.api.v1.BoxdApi/GetSnapshot',
                 request_serializer=api__pb2.GetSnapshotRequest.SerializeToString,
                 response_deserializer=api__pb2.GetSnapshotResponse.FromString,
+                _registered_method=True)
+        self.ListSnapshotVersions = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/ListSnapshotVersions',
+                request_serializer=api__pb2.ListSnapshotVersionsRequest.SerializeToString,
+                response_deserializer=api__pb2.ListSnapshotVersionsResponse.FromString,
+                _registered_method=True)
+        self.SetSnapshotCurrentVersion = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/SetSnapshotCurrentVersion',
+                request_serializer=api__pb2.SetSnapshotCurrentVersionRequest.SerializeToString,
+                response_deserializer=api__pb2.SetSnapshotCurrentVersionResponse.FromString,
                 _registered_method=True)
         self.DeleteSnapshot = channel.unary_unary(
                 '/boxd.api.v1.BoxdApi/DeleteSnapshot',
@@ -658,6 +673,16 @@ class BoxdApiStub(object):
                 '/boxd.api.v1.BoxdApi/GetOrgMachineDefaults',
                 request_serializer=api__pb2.GetOrgMachineDefaultsRequest.SerializeToString,
                 response_deserializer=api__pb2.GetOrgMachineDefaultsResponse.FromString,
+                _registered_method=True)
+        self.SetOrgSnapshotVersionsKeep = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/SetOrgSnapshotVersionsKeep',
+                request_serializer=api__pb2.SetOrgSnapshotVersionsKeepRequest.SerializeToString,
+                response_deserializer=api__pb2.SetOrgSnapshotVersionsKeepResponse.FromString,
+                _registered_method=True)
+        self.GetOrgSnapshotVersionsKeep = channel.unary_unary(
+                '/boxd.api.v1.BoxdApi/GetOrgSnapshotVersionsKeep',
+                request_serializer=api__pb2.GetOrgSnapshotVersionsKeepRequest.SerializeToString,
+                response_deserializer=api__pb2.GetOrgSnapshotVersionsKeepResponse.FromString,
                 _registered_method=True)
         self.SetOrgIdleIgnoreOutboundDefault = channel.unary_unary(
                 '/boxd.api.v1.BoxdApi/SetOrgIdleIgnoreOutboundDefault',
@@ -1458,6 +1483,24 @@ class BoxdApiServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def CreateStagedSnapshot(self, request, context):
+        """A staged save: CreateSnapshot, but the version is saved without becoming
+        the snapshot's current one. Machines created from the snapshot keep
+        getting the current version; this one is created from by naming it
+        (CreateVmFromSnapshot's `version`, or `name@7`), and
+        SetSnapshotCurrentVersion makes it current. ListSnapshotVersions shows it
+        "saving", then "ready" with `staged` set. The snapshot must already have
+        a version: FAILED_PRECONDITION for the first save of a name. A snapshot
+        keeps as many staged versions as the org keeps versions
+        (GetOrgSnapshotVersionsKeep): one more replaces the oldest staged one.
+        A call of its own, not a field of CreateSnapshot, so that a server from
+        before staged saves refuses it (UNIMPLEMENTED) instead of saving a
+        version that becomes current.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ListSnapshots(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -1466,6 +1509,24 @@ class BoxdApiServicer(object):
 
     def GetSnapshot(self, request, context):
         """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListSnapshotVersions(self, request, context):
+        """The versions a snapshot keeps, newest first. Saving over a snapshot's name
+        makes a new version; how many are kept is the org's setting
+        (SetOrgSnapshotVersionsKeep). A machine can be created from any of them
+        that is ready and on local disk (CreateVmFromSnapshotRequest.version).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SetSnapshotCurrentVersion(self, request, context):
+        """Make one of a snapshot's versions its current one (a staged version, or
+        an older one to roll back to).
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -1776,6 +1837,28 @@ class BoxdApiServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def GetOrgMachineDefaults(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SetOrgSnapshotVersionsKeep(self, request, context):
+        """How many versions of each of its snapshots the org keeps. Saving over a
+        snapshot's name makes a new version; the org keeps the current one and
+        the newest ones before it, up to this count, and older ones are deleted.
+        An org without a setting follows the platform's, which keeps the current
+        version alone unless the cluster's operator changed it. It applies to
+        every snapshot of the org. Lowering it permanently deletes the versions
+        beyond the new count within a minute: `dry_run` says how many first.
+        Raising it keeps more from the next save on; a version already deleted
+        does not come back.
+        Set/Clear require org admin; Get is readable by any member.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetOrgSnapshotVersionsKeep(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -2423,6 +2506,11 @@ def add_BoxdApiServicer_to_server(servicer, server):
                     request_deserializer=api__pb2.CreateSnapshotRequest.FromString,
                     response_serializer=api__pb2.CreateSnapshotResponse.SerializeToString,
             ),
+            'CreateStagedSnapshot': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreateStagedSnapshot,
+                    request_deserializer=api__pb2.CreateSnapshotRequest.FromString,
+                    response_serializer=api__pb2.CreateSnapshotResponse.SerializeToString,
+            ),
             'ListSnapshots': grpc.unary_unary_rpc_method_handler(
                     servicer.ListSnapshots,
                     request_deserializer=api__pb2.ListSnapshotsRequest.FromString,
@@ -2432,6 +2520,16 @@ def add_BoxdApiServicer_to_server(servicer, server):
                     servicer.GetSnapshot,
                     request_deserializer=api__pb2.GetSnapshotRequest.FromString,
                     response_serializer=api__pb2.GetSnapshotResponse.SerializeToString,
+            ),
+            'ListSnapshotVersions': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListSnapshotVersions,
+                    request_deserializer=api__pb2.ListSnapshotVersionsRequest.FromString,
+                    response_serializer=api__pb2.ListSnapshotVersionsResponse.SerializeToString,
+            ),
+            'SetSnapshotCurrentVersion': grpc.unary_unary_rpc_method_handler(
+                    servicer.SetSnapshotCurrentVersion,
+                    request_deserializer=api__pb2.SetSnapshotCurrentVersionRequest.FromString,
+                    response_serializer=api__pb2.SetSnapshotCurrentVersionResponse.SerializeToString,
             ),
             'DeleteSnapshot': grpc.unary_unary_rpc_method_handler(
                     servicer.DeleteSnapshot,
@@ -2652,6 +2750,16 @@ def add_BoxdApiServicer_to_server(servicer, server):
                     servicer.GetOrgMachineDefaults,
                     request_deserializer=api__pb2.GetOrgMachineDefaultsRequest.FromString,
                     response_serializer=api__pb2.GetOrgMachineDefaultsResponse.SerializeToString,
+            ),
+            'SetOrgSnapshotVersionsKeep': grpc.unary_unary_rpc_method_handler(
+                    servicer.SetOrgSnapshotVersionsKeep,
+                    request_deserializer=api__pb2.SetOrgSnapshotVersionsKeepRequest.FromString,
+                    response_serializer=api__pb2.SetOrgSnapshotVersionsKeepResponse.SerializeToString,
+            ),
+            'GetOrgSnapshotVersionsKeep': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetOrgSnapshotVersionsKeep,
+                    request_deserializer=api__pb2.GetOrgSnapshotVersionsKeepRequest.FromString,
+                    response_serializer=api__pb2.GetOrgSnapshotVersionsKeepResponse.SerializeToString,
             ),
             'SetOrgIdleIgnoreOutboundDefault': grpc.unary_unary_rpc_method_handler(
                     servicer.SetOrgIdleIgnoreOutboundDefault,
@@ -4943,6 +5051,33 @@ class BoxdApi(object):
             _registered_method=True)
 
     @staticmethod
+    def CreateStagedSnapshot(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/CreateStagedSnapshot',
+            api__pb2.CreateSnapshotRequest.SerializeToString,
+            api__pb2.CreateSnapshotResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def ListSnapshots(request,
             target,
             options=(),
@@ -4986,6 +5121,60 @@ class BoxdApi(object):
             '/boxd.api.v1.BoxdApi/GetSnapshot',
             api__pb2.GetSnapshotRequest.SerializeToString,
             api__pb2.GetSnapshotResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListSnapshotVersions(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/ListSnapshotVersions',
+            api__pb2.ListSnapshotVersionsRequest.SerializeToString,
+            api__pb2.ListSnapshotVersionsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SetSnapshotCurrentVersion(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/SetSnapshotCurrentVersion',
+            api__pb2.SetSnapshotCurrentVersionRequest.SerializeToString,
+            api__pb2.SetSnapshotCurrentVersionResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -6174,6 +6363,60 @@ class BoxdApi(object):
             '/boxd.api.v1.BoxdApi/GetOrgMachineDefaults',
             api__pb2.GetOrgMachineDefaultsRequest.SerializeToString,
             api__pb2.GetOrgMachineDefaultsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SetOrgSnapshotVersionsKeep(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/SetOrgSnapshotVersionsKeep',
+            api__pb2.SetOrgSnapshotVersionsKeepRequest.SerializeToString,
+            api__pb2.SetOrgSnapshotVersionsKeepResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetOrgSnapshotVersionsKeep(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boxd.api.v1.BoxdApi/GetOrgSnapshotVersionsKeep',
+            api__pb2.GetOrgSnapshotVersionsKeepRequest.SerializeToString,
+            api__pb2.GetOrgSnapshotVersionsKeepResponse.FromString,
             options,
             channel_credentials,
             insecure,

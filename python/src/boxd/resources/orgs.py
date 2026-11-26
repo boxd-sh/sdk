@@ -26,6 +26,8 @@ from ..models import (
     OrgMembers,
     OrgRdpDefault,
     OrgRdpDefaultResult,
+    OrgSnapshotVersionsKeep,
+    OrgSnapshotVersionsKeepResult,
     OrgUsage,
     Region,
 )
@@ -209,6 +211,71 @@ class Orgs(Namespace):
         self._transport.call(
             "SetOrgMachineDefaults",
             req.set_org_machine_defaults(org=org, vcpu=None, memory=None),
+        )
+
+    def set_snapshot_versions_keep(
+        self,
+        org: str = "",
+        *,
+        keep: int,
+        dry_run: bool = False,
+    ) -> OrgSnapshotVersionsKeepResult:
+        """Set how many versions of each of its snapshots this org keeps.
+        Requires org admin.
+
+        Saving over a snapshot's name makes a new version. The org keeps the
+        current one and the newest ones before it, up to ``keep`` (from 1 to
+        the ``max_keep`` that :meth:`get_snapshot_versions_keep` reports), and
+        older ones are deleted. It applies to every snapshot of the org.
+
+        Lowering the count permanently deletes the versions beyond it, within
+        a minute. Pass ``dry_run=True`` first to learn how many
+        (``versions_deleted``) without changing anything. Raising it keeps
+        more from the next save on: a version already deleted does not come
+        back.
+        """
+        if keep is None:
+            raise ValueError(
+                "set_snapshot_versions_keep needs keep, a number of versions. "
+                "To drop the org's setting, call clear_snapshot_versions_keep"
+            )
+        return m.org_snapshot_versions_keep_result(
+            self._transport.call(
+                "SetOrgSnapshotVersionsKeep",
+                api_pb2.SetOrgSnapshotVersionsKeepRequest(
+                    org_id=org, keep=keep, dry_run=dry_run
+                ),
+            )
+        )
+
+    def get_snapshot_versions_keep(self, org: str = "") -> OrgSnapshotVersionsKeep:
+        """How many versions of each of its snapshots the org keeps.
+
+        Readable by any member. ``is_set`` false means the org stores no
+        setting and ``keep`` is the platform's count.
+        """
+        return m.org_snapshot_versions_keep(
+            self._transport.call(
+                "GetOrgSnapshotVersionsKeep",
+                api_pb2.GetOrgSnapshotVersionsKeepRequest(org_id=org),
+            )
+        )
+
+    def clear_snapshot_versions_keep(
+        self, org: str = "", *, dry_run: bool = False
+    ) -> OrgSnapshotVersionsKeepResult:
+        """Drop the org's setting, so its snapshots follow the platform's
+        count again. Requires org admin.
+
+        When the platform keeps fewer versions than the org did, the older
+        ones are permanently deleted within a minute: pass ``dry_run=True``
+        first to learn how many without changing anything.
+        """
+        return m.org_snapshot_versions_keep_result(
+            self._transport.call(
+                "SetOrgSnapshotVersionsKeep",
+                api_pb2.SetOrgSnapshotVersionsKeepRequest(org_id=org, dry_run=dry_run),
+            )
         )
 
     def set_idle_ignore_outbound_default(
@@ -726,6 +793,50 @@ class AsyncOrgs(Namespace):
         await self._transport.call(
             "SetOrgMachineDefaults",
             req.set_org_machine_defaults(org=org, vcpu=None, memory=None),
+        )
+
+    async def set_snapshot_versions_keep(
+        self,
+        org: str = "",
+        *,
+        keep: int,
+        dry_run: bool = False,
+    ) -> OrgSnapshotVersionsKeepResult:
+        """See :meth:`Orgs.set_snapshot_versions_keep`."""
+        if keep is None:
+            raise ValueError(
+                "set_snapshot_versions_keep needs keep, a number of versions. "
+                "To drop the org's setting, call clear_snapshot_versions_keep"
+            )
+        return m.org_snapshot_versions_keep_result(
+            await self._transport.call(
+                "SetOrgSnapshotVersionsKeep",
+                api_pb2.SetOrgSnapshotVersionsKeepRequest(
+                    org_id=org, keep=keep, dry_run=dry_run
+                ),
+            )
+        )
+
+    async def get_snapshot_versions_keep(
+        self, org: str = ""
+    ) -> OrgSnapshotVersionsKeep:
+        """See :meth:`Orgs.get_snapshot_versions_keep`."""
+        return m.org_snapshot_versions_keep(
+            await self._transport.call(
+                "GetOrgSnapshotVersionsKeep",
+                api_pb2.GetOrgSnapshotVersionsKeepRequest(org_id=org),
+            )
+        )
+
+    async def clear_snapshot_versions_keep(
+        self, org: str = "", *, dry_run: bool = False
+    ) -> OrgSnapshotVersionsKeepResult:
+        """See :meth:`Orgs.clear_snapshot_versions_keep`."""
+        return m.org_snapshot_versions_keep_result(
+            await self._transport.call(
+                "SetOrgSnapshotVersionsKeep",
+                api_pb2.SetOrgSnapshotVersionsKeepRequest(org_id=org, dry_run=dry_run),
+            )
         )
 
     async def set_idle_ignore_outbound_default(

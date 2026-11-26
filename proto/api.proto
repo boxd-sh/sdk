@@ -256,8 +256,29 @@ service BoxdApi {
   // Snapshots: user/org point-in-time VM captures (memory + disk), replicated
   // across a few workers and versioned (latest-only).
   rpc CreateSnapshot(CreateSnapshotRequest)   returns (CreateSnapshotResponse);
+  // A staged save: CreateSnapshot, but the version is saved without becoming
+  // the snapshot's current one. Machines created from the snapshot keep
+  // getting the current version; this one is created from by naming it
+  // (CreateVmFromSnapshot's `version`, or `name@7`), and
+  // SetSnapshotCurrentVersion makes it current. ListSnapshotVersions shows it
+  // "saving", then "ready" with `staged` set. The snapshot must already have
+  // a version: FAILED_PRECONDITION for the first save of a name. A snapshot
+  // keeps as many staged versions as the org keeps versions
+  // (GetOrgSnapshotVersionsKeep): one more replaces the oldest staged one.
+  // A call of its own, not a field of CreateSnapshot, so that a server from
+  // before staged saves refuses it (UNIMPLEMENTED) instead of saving a
+  // version that becomes current.
+  rpc CreateStagedSnapshot(CreateSnapshotRequest) returns (CreateSnapshotResponse);
   rpc ListSnapshots(ListSnapshotsRequest)     returns (ListSnapshotsResponse);
   rpc GetSnapshot(GetSnapshotRequest)         returns (GetSnapshotResponse);
+  // The versions a snapshot keeps, newest first. Saving over a snapshot's name
+  // makes a new version; how many are kept is the org's setting
+  // (SetOrgSnapshotVersionsKeep). A machine can be created from any of them
+  // that is ready and on local disk (CreateVmFromSnapshotRequest.version).
+  rpc ListSnapshotVersions(ListSnapshotVersionsRequest) returns (ListSnapshotVersionsResponse);
+  // Make one of a snapshot's versions its current one (a staged version, or
+  // an older one to roll back to).
+  rpc SetSnapshotCurrentVersion(SetSnapshotCurrentVersionRequest) returns (SetSnapshotCurrentVersionResponse);
   rpc DeleteSnapshot(DeleteSnapshotRequest)   returns (DeleteSnapshotResponse);
   // Bring an archived snapshot back to local disk, so machines can be created
   // from it again. Returns at once; see UnarchiveSnapshotRequest.
@@ -356,6 +377,19 @@ service BoxdApi {
   // Set/Clear require org admin; Get is readable by any member.
   rpc SetOrgMachineDefaults(SetOrgMachineDefaultsRequest) returns (SetOrgMachineDefaultsResponse);
   rpc GetOrgMachineDefaults(GetOrgMachineDefaultsRequest) returns (GetOrgMachineDefaultsResponse);
+
+  // How many versions of each of its snapshots the org keeps. Saving over a
+  // snapshot's name makes a new version; the org keeps the current one and
+  // the newest ones before it, up to this count, and older ones are deleted.
+  // An org without a setting follows the platform's, which keeps the current
+  // version alone unless the cluster's operator changed it. It applies to
+  // every snapshot of the org. Lowering it permanently deletes the versions
+  // beyond the new count within a minute: `dry_run` says how many first.
+  // Raising it keeps more from the next save on; a version already deleted
+  // does not come back.
+  // Set/Clear require org admin; Get is readable by any member.
+  rpc SetOrgSnapshotVersionsKeep(SetOrgSnapshotVersionsKeepRequest) returns (SetOrgSnapshotVersionsKeepResponse);
+  rpc GetOrgSnapshotVersionsKeep(GetOrgSnapshotVersionsKeepRequest) returns (GetOrgSnapshotVersionsKeepResponse);
 
   // The org's default for idle.ignore-outbound: whether a NEW
   // machine in the org starts with its idle clock ignoring outbound traffic
@@ -2551,6 +2585,73 @@ message GetSnapshotResponse {
   SnapshotInfo snapshot = 1;
 }
 
+message ListSnapshotVersionsRequest {
+  string name = 1;   // snapshot name or id
+  string org  = 2;   // org context (name or id); empty = active/anchor
+}
+message ListSnapshotVersionsResponse {
+  string snapshot_id = 1;
+  string name        = 2;
+  // Newest first. A version you may not use is left out: one saved from a
+  // private machine stays its creator's, even after a later save made the
+  // snapshot shared.
+  repeated SnapshotVersionInfo versions = 3;
+}
+
+// One version of a snapshot.
+message SnapshotVersionInfo {
+  uint64 version = 1;
+  // The version a create that names none uses. The newest ordinary save,
+  // unless SetSnapshotCurrentVersion chose another.
+  bool   current = 2;
+  // "ready", or "saving" for a save still in flight.
+  string status  = 3;
+  // Where its bytes are, as SnapshotInfo.storage: a machine can be created
+  // from it only while "local".
+  string storage = 4;
+  uint64 size_bytes   = 5;
+  int64  created_at   = 6;   // when it was saved; epoch MILLISECONDS
+  // The size of a machine created from it.
+  uint32 vcpu         = 7;
+  uint64 memory_bytes = 8;
+  // The guest OS of the machine it was saved from: "linux" or "windows".
+  string os = 9;
+  // Ready, and above the current version: saved staged
+  // (CreateStagedSnapshot), or set aside when an older version was made
+  // current. A machine is created from it only by naming it;
+  // SetSnapshotCurrentVersion makes it current.
+  bool staged = 10;
+}
+
+// Makes one of a snapshot's versions its current version: the one a machine
+// created from the snapshot gets when no version is named, and the one the
+// snapshot's size, saver and visibility are read from (so who can use the
+// snapshot follows the version that is current). Forward to a staged version,
+// or back to an older one: the ready versions above the new current one are
+// then staged (ListSnapshotVersions), and can be made current again. Nothing
+// is copied or deleted by the call.
+//
+// For anyone who may save over the snapshot and may use that version.
+// The version must be "ready" with storage "local", and the snapshot's own
+// storage "local": FAILED_PRECONDITION otherwise. NOT_FOUND for a version the
+// snapshot does not keep or the caller may not use. Naming the version that
+// is current already succeeds with `changed` false.
+message SetSnapshotCurrentVersionRequest {
+  // Snapshot name or id, or `name@4` to name the version too.
+  string snapshot = 1;
+  string org      = 2;   // org context (name or id); empty = active/anchor
+  // The version to make current, when `snapshot` names none. Naming two
+  // different ones is INVALID_ARGUMENT, and so is naming none.
+  optional uint64 version = 3;
+}
+message SetSnapshotCurrentVersionResponse {
+  string snapshot_id = 1;
+  string name        = 2;
+  uint64 version     = 3;   // the current version now
+  uint64 previous_version = 4;
+  bool   changed     = 5;   // false when it was the current version already
+}
+
 message DeleteSnapshotRequest {
   string name = 1;   // snapshot name or id
   string org  = 2;   // org context (name or id); empty = active/anchor
@@ -2582,7 +2683,7 @@ message UnarchiveSnapshotResponse {
 }
 
 message CreateVmFromSnapshotRequest {
-  string   snapshot = 1;   // snapshot name or id
+  string   snapshot = 1;   // snapshot name or id, or "<name>@<version>" (see `version`)
   string   name     = 2;   // new VM name (optional; auto-generated if empty)
   VmConfig config   = 3;   // optional overrides
   string   org      = 4;   // org context (name or id); empty = active/anchor
@@ -2603,6 +2704,13 @@ message CreateVmFromSnapshotRequest {
   // timer, so unset means none. See CreateVmRequest.delete_after_secs.
   optional uint64 delete_after_secs = 8;
   optional string delete_after_cron = 9;
+  // The version to create from; unset = the snapshot's current one. One of
+  // the versions ListSnapshotVersions shows as "ready" and "local": NOT_FOUND
+  // for a version the snapshot does not keep, FAILED_PRECONDITION for one
+  // still being saved or not on local disk. `snapshot` may name it instead,
+  // as "<name>@<version>" ("base@4"): the whole string is tried as a name
+  // first, so a snapshot whose own name ends that way still resolves.
+  optional uint64 version = 10;
 }
 // Returns a CreateVmResponse — identical shape to `new`, so the CLI renders it
 // the same way.
@@ -3306,6 +3414,41 @@ message GetOrgMachineDefaultsResponse {
 message GrantedMachineSize {
   uint32 vcpu         = 1;
   uint64 memory_bytes = 2;
+}
+
+message SetOrgSnapshotVersionsKeepRequest {
+  string org_id = 1;  // name or id; "" = your default org (the one a list with no org shows; an API key's own org)
+  // How many versions of each snapshot to keep, the current one included:
+  // 1 to `max_keep` (GetOrgSnapshotVersionsKeep). Absent clears the org's
+  // setting: its snapshots follow the platform's again.
+  optional uint32 keep = 2;
+  // Check the request and count what it would delete, and change nothing.
+  // Ask this before lowering the count or clearing it: the versions beyond
+  // the new count are deleted for good.
+  bool dry_run = 3;
+}
+
+message SetOrgSnapshotVersionsKeepResponse {
+  // The org's setting after this call (with `dry_run`: as it would be).
+  bool   set           = 1;  // the org has its own setting
+  uint32 keep          = 2;  // how many versions of its snapshots are kept
+  uint32 platform_keep = 3;  // the platform's count, which an org without a setting follows
+  uint32 max_keep      = 4;  // the most an org may set
+  // How many versions of the org's snapshots are deleted because of this
+  // change (older ones, and staged ones beyond the count), on the platform's
+  // next cleanup pass (within a minute). With `dry_run`, how many would be.
+  uint32 versions_deleted = 5;
+}
+
+message GetOrgSnapshotVersionsKeepRequest {
+  string org_id = 1;  // name or id; "" = your default org (the one a list with no org shows; an API key's own org)
+}
+
+message GetOrgSnapshotVersionsKeepResponse {
+  bool   set           = 1;  // the org has its own setting
+  uint32 keep          = 2;  // how many versions of its snapshots are kept now
+  uint32 platform_keep = 3;  // the platform's count, which an org without a setting follows
+  uint32 max_keep      = 4;  // the most an org may set
 }
 
 message SetOrgIdleIgnoreOutboundDefaultRequest {

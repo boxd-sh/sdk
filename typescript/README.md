@@ -1393,6 +1393,41 @@ snapshot starts the same restore and throws `ConflictError`: create again once
 `storage` is `"local"`. Saving over an archived snapshot's name needs no
 restore: the new version is saved to local disk and the snapshot is local again.
 
+Saving over a snapshot's name makes a new version, and the org keeps the newest
+ones (`orgs.setSnapshotVersionsKeep`; the current one alone unless that is
+raised). `snapshots.versions(name)` lists the versions a snapshot keeps, and a
+machine can be created from any of them that is `"ready"` and `"local"`:
+
+```typescript
+for (const v of await boxd.snapshots.versions("golden")) {   // newest first
+  v.version; v.current; v.status; v.storage; v.sizeBytes; v.createdAt;
+}
+await boxd.machines.create({ name: "from-v4", fromSnapshot: "golden", snapshotVersion: 4 });
+await boxd.machines.create({ name: "from-v4", fromSnapshot: "golden@4" });   // the same
+```
+
+A version that is no longer kept throws `NotFoundError`; one still being saved
+or not on local disk throws `ConflictError`.
+
+The **current** version is the one a machine created from the snapshot gets
+when no version is named. An ordinary save becomes current when it is ready. A
+staged save does not, so you can try a new version before machines start from
+it, and any ready version can be made current, forward or back:
+
+```typescript
+const s = await boxd.snapshots.create("build-box", "golden", { staged: true });   // saved beside the current one
+await boxd.machines.create({ name: "try-it", fromSnapshot: "golden", snapshotVersion: s.version });
+await boxd.snapshots.setCurrentVersion("golden", s.version);   // machines now start from it
+await boxd.snapshots.setCurrentVersion("golden", 4);           // go back to version 4
+```
+
+A staged version is `"saving"`, then `"ready"` with `staged` set in
+`snapshots.versions(name)`. After going back, the newer versions are kept as
+staged ones and can be made current again. `setCurrentVersion` returns the
+`version`, the `previousVersion` and whether anything `changed`. The first
+save of a name can't be staged, and a snapshot keeps as many staged versions
+as the org keeps versions: one more replaces the oldest staged one.
+
 A disk is always created writable; read-only is chosen per attachment. A disk
 can be attached to only one machine at a time.
 
@@ -1534,6 +1569,24 @@ r.machinesChanged, r.snapshotsChanged;    // unless newMachinesOnly: true
 const d = await boxd.orgs.getRdpDefault("acme");
 d.isSet, d.enabled;                       // isSet false = no default: RDP on
 await boxd.orgs.clearRdpDefault("acme");  // existing machines keep theirs
+```
+
+An org also sets how many versions of each of its snapshots are kept. Saving
+over a snapshot's name makes a new version; the org keeps the current one and
+the newest ones before it, up to this count, and older ones are deleted.
+Without a setting it follows the platform's count (the current version alone,
+unless the cluster's operator changed it). Lowering the count permanently
+deletes the versions beyond it, so ask with `dryRun: true` first. Setting or
+clearing it requires org admin; reading it doesn't.
+
+```typescript
+const k = await boxd.orgs.getSnapshotVersionsKeep("acme");
+k.isSet, k.keep;                          // isSet false = no setting, so keep is
+k.platformKeep, k.maxKeep;                // the platform's; maxKeep is the most allowed
+const r = await boxd.orgs.setSnapshotVersionsKeep("acme", { keep: 2, dryRun: true });
+r.versionsDeleted;                        // what keeping 2 would delete; nothing changed
+await boxd.orgs.setSnapshotVersionsKeep("acme", { keep: 2 });
+await boxd.orgs.clearSnapshotVersionsKeep("acme");   // follow the platform's count again
 ```
 
 An org has a machine limit: how many machines it may have at once. Any member

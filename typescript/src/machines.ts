@@ -5,6 +5,7 @@ import type { RegionOption } from "./regions.js";
 import { AsyncByteQueue, ExecStream } from "./exec.js";
 import {
   APIConnectionError,
+  APIStatusError,
   AuthenticationError,
   BoxdError,
   ConflictError,
@@ -190,6 +191,7 @@ export interface MachineCreateFromImageParams extends MachineCreateCommon {
    */
   os?: MachineOs;
   fromSnapshot?: never;
+  snapshotVersion?: never;
   spec?: never;
 }
 
@@ -207,6 +209,7 @@ export interface MachineCreateFromSpecParams extends Omit<MachineCreateCommon, "
   shared?: boolean;
   labels?: never;
   fromSnapshot?: never;
+  snapshotVersion?: never;
   image?: never;
   env?: never;
   cmd?: never;
@@ -225,7 +228,17 @@ export interface MachineCreateFromSpecParams extends Omit<MachineCreateCommon, "
  * one a compile error rather than a surprise at runtime.
  */
 export interface MachineCreateFromSnapshotParams extends MachineCreateCommon {
+  /**
+   * The snapshot to restore: its current version, or with `snapshotVersion`
+   * (or written `"base@4"`) another of the versions it keeps.
+   */
   fromSnapshot: string;
+  /**
+   * One of the versions the snapshot keeps (`snapshots.versions(name)`),
+   * instead of its current one. A version that is not kept is a
+   * `NotFoundError`.
+   */
+  snapshotVersion?: number;
   image?: never;
   shared?: never;
   env?: never;
@@ -741,6 +754,12 @@ export class Machines {
   }
 
   async create(params: MachineCreateParams = {}): Promise<Machine> {
+    if (params.snapshotVersion !== undefined && !params.fromSnapshot) {
+      throw new BoxdError(
+        "snapshotVersion names a version of fromSnapshot: pass " +
+          "create({ fromSnapshot, snapshotVersion })",
+      );
+    }
     if (params.fromSnapshot) {
       // Restoring a snapshot accepts only a name and an org — the machine is
       // always born at the size the snapshot was captured at (the server
@@ -756,9 +775,32 @@ export class Machines {
             "configure a new one",
         );
       }
+      if (params.snapshotVersion !== undefined) {
+        // A server from before snapshot versions ignores the version and would
+        // restore the snapshot's current one. It refuses this call, so the
+        // create is never sent to it; any other answer is the create's own to
+        // report.
+        try {
+          await this.transport.unary(
+            BoxdApiDefinition.methods.listSnapshotVersions,
+            { name: params.fromSnapshot, org: params.org ?? "" },
+            { region: params.region },
+          );
+        } catch (err) {
+          if (err instanceof BoxdError && err.grpcCode === GrpcStatus.UNIMPLEMENTED) {
+            throw new APIStatusError(
+              "this boxd can't create a machine from a snapshot's version yet (it runs " +
+                "an older version); nothing was created",
+              err.grpcCode,
+            );
+          }
+        }
+      }
       const resp = await this.transport.unary(BoxdApiDefinition.methods.createVmFromSnapshot,
         {
           snapshot: params.fromSnapshot,
+          // Unset is the snapshot's current version.
+          version: params.snapshotVersion,
           name: params.name ?? "",
           config: toVmConfig(params.config),
           org: params.org ?? "",

@@ -1169,15 +1169,57 @@ class Snapshot(BaseModel):
     Windows machines reports every snapshot as Linux."""
 
 
+class SnapshotVersion(BaseModel):
+    """One version of a snapshot. Saving over a snapshot's name makes a new
+    version; how many are kept is the org's setting
+    (:meth:`boxd.orgs.set_snapshot_versions_keep`)."""
+
+    version: int
+    current: bool
+    """True for the version a create that names none uses."""
+    status: str
+    """"ready", or "saving" for a save still in flight."""
+    staged: bool = False
+    """True for a ready version above the current one: saved staged
+    (``snapshots.create(..., staged=True)``), or set aside when an older
+    version was made current. A machine is created from it only by naming
+    it; :meth:`boxd.snapshots.set_current_version` makes it current."""
+    storage: str
+    """Where its bytes are, as :attr:`Snapshot.storage`. A machine can be
+    created from it only while this is "local"."""
+    size_bytes: int
+    created_at: datetime | None
+    """When this version was saved."""
+    vcpu: int
+    """The size of a machine created from it."""
+    memory_bytes: int
+    os: MachineOs | str = "linux"
+
+
 class CreatedSnapshot(BaseModel):
     id: str
     name: str
     version: int
     status: str
+    staged: bool = False
+    """True for a staged save: the version does not become the snapshot's
+    current one when it is ready."""
     paused_automations: int = 0
     """How many of the source machine's automations this version captured.
     Every machine created from it is born with them paused, as a fork is, so
     nothing runs twice; ``run restart <id>`` inside that machine starts one."""
+
+
+class SnapshotCurrentVersion(BaseModel):
+    """What :meth:`boxd.snapshots.set_current_version` did."""
+
+    id: str
+    name: str
+    version: int
+    """The snapshot's current version now."""
+    previous_version: int
+    changed: bool
+    """False when ``version`` was the current version already."""
 
 
 # ── Disks ────────────────────────────────────────────────────────────
@@ -1334,6 +1376,32 @@ class OrgMachineLimit(BaseModel):
     request: MachineLimitRequest | None
     """The open request for a higher limit, or None. The owner's message is
     never shown back."""
+
+
+class OrgSnapshotVersionsKeep(BaseModel):
+    """How many versions of each of its snapshots an org keeps."""
+
+    is_set: bool
+    """True when the org stores its own setting. False means its snapshots
+    follow the platform's count, which is what ``keep`` then holds."""
+    keep: int
+    """How many versions of each snapshot are kept, the current one
+    included."""
+    platform_keep: int
+    """The platform's count, whether or not the org has its own setting:
+    what clearing it would give."""
+    max_keep: int
+    """The most an org may set."""
+
+
+class OrgSnapshotVersionsKeepResult(OrgSnapshotVersionsKeep):
+    """What changing an org's snapshot version count did: the setting after
+    the change, and what it deletes. From a ``dry_run`` it is what the change
+    would do, with nothing changed."""
+
+    versions_deleted: int
+    """Older versions of the org's snapshots deleted because of the change,
+    within a minute of it. They cannot be brought back."""
 
 
 class OrgIdleIgnoreOutboundDefault(BaseModel):

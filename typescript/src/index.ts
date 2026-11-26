@@ -174,6 +174,7 @@ export type {
   OrgMachineDefaultsParams,
   OrgMachineLimitRequestParams,
   OrgRdpDefaultParams,
+  OrgSnapshotVersionsKeepParams,
   OrgUsageParams,
 } from "./orgs.js";
 export type { TimeBound } from "./utils.js";
@@ -254,6 +255,8 @@ export type {
   OrgMembers,
   OrgRdpDefault,
   OrgRdpDefaultResult,
+  OrgSnapshotVersionsKeep,
+  OrgSnapshotVersionsKeepResult,
   OrgRef,
   OrgRole,
   OrgUsage,
@@ -270,6 +273,8 @@ export type {
   SelfDeleteResult,
   Secret,
   Snapshot,
+  SnapshotCurrentVersion,
+  SnapshotVersion,
   StateSeconds,
   Team,
   TeamMember,

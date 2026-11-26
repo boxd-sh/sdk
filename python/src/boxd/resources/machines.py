@@ -24,7 +24,7 @@ from .. import spec as _spec
 from .._generated import api_pb2
 from .._regions import ALL, normalize
 from .._streaming import AsyncExecStream, ExecStream
-from ..errors import APIConnectionError, BoxdError, ConflictError
+from ..errors import APIConnectionError, APIStatusError, BoxdError, ConflictError
 from ..models import (
     Backup,
     BackupSchedule,
@@ -142,11 +142,35 @@ _TERMINAL_STATES = {"failed", "destroyed", "stopped"}
 _UPLOAD_CHUNK_BYTES = 1 << 20
 
 
+def _versions_probe(snapshot: str | None, org: str | None):
+    """The call a create with ``snapshot_version`` makes first. A server from
+    before snapshot versions ignores the version and would restore the
+    snapshot's current one; it refuses this call, so the create is never
+    sent to it."""
+    return (
+        "ListSnapshotVersions",
+        api_pb2.ListSnapshotVersionsRequest(name=snapshot or "", org=org or ""),
+    )
+
+
+def _raise_if_no_versions(err: BoxdError) -> None:
+    """Raise for a server that doesn't know snapshot versions. Any other
+    failure of the probe is left for the create itself to report."""
+    if isinstance(err, APIStatusError) and err.code == "unimplemented":
+        raise APIStatusError(
+            "this boxd can't create a machine from a snapshot's version yet (it "
+            "runs an older version); nothing was created",
+            code=err.code,
+            grpc_code=err.grpc_code,
+        ) from err
+
+
 def _create_request(
     *,
     name: str | None,
     image: str | None,
     from_snapshot: str | None,
+    snapshot_version: int | None = None,
     org: str | None,
     shared: bool,
     env: Mapping[str, str] | None,
@@ -210,6 +234,11 @@ def _create_request(
                 "a machine created for someone else is theirs to manage, so the create "
                 "can't also set delete_after or delete_after_cron",
             )
+    if snapshot_version is not None and not from_snapshot:
+        raise ValueError(
+            "snapshot_version names a version of from_snapshot: pass "
+            "create(from_snapshot=..., snapshot_version=...)"
+        )
     if from_snapshot:
         rejected = [
             label
@@ -242,6 +271,7 @@ def _create_request(
             isolated=isolated,
             config=config,
             labels=labels,
+            version=snapshot_version,
         )
         if wire_spec is not None:
             request.spec.CopyFrom(wire_spec)
@@ -652,6 +682,7 @@ class Machines(Namespace):
         *,
         image: str | None = None,
         from_snapshot: str | None = None,
+        snapshot_version: int | None = None,
         org: str | None = None,
         shared: bool = False,
         env: Mapping[str, str] | None = None,
@@ -677,6 +708,11 @@ class Machines(Namespace):
         region: str | None = None,
     ) -> Machine:
         """Create a machine. Pass `from_snapshot` to restore one instead.
+
+        ``from_snapshot`` restores the snapshot's current version.
+        ``snapshot_version`` restores another of the versions it keeps
+        (:meth:`boxd.snapshots.versions`); ``from_snapshot="base@4"`` says
+        the same. A version that is not kept raises ``NotFoundError``.
 
         The create call answers as soon as the machine is scheduled, with the
         whole machine (from a server that predates that, this re-reads it).
@@ -734,6 +770,7 @@ class Machines(Namespace):
             name=name,
             image=image,
             from_snapshot=from_snapshot,
+            snapshot_version=snapshot_version,
             org=org,
             shared=shared,
             env=env,
@@ -759,6 +796,11 @@ class Machines(Namespace):
                 volumes=volumes,
             ),
         )
+        if snapshot_version is not None:
+            try:
+                self._transport.call(*_versions_probe(from_snapshot, org), region=region)
+            except BoxdError as err:
+                _raise_if_no_versions(err)
         created = self._transport.call(method, request, region=region)
         # Non-zero only for a machine made from a snapshot, a team's default
         # one included.
@@ -2047,6 +2089,7 @@ class AsyncMachines(Namespace):
         *,
         image: str | None = None,
         from_snapshot: str | None = None,
+        snapshot_version: int | None = None,
         org: str | None = None,
         shared: bool = False,
         env: Mapping[str, str] | None = None,
@@ -2076,13 +2119,14 @@ class AsyncMachines(Namespace):
         The result is the whole machine. It is still only scheduled — call
         :meth:`wait_until_ready` before using it.
 
-        ``idle_ignore_outbound``, ``ssh``, ``os``, ``rdp``, ``labels``,
-        ``spec``: see :meth:`Machines.create`.
+        ``snapshot_version``, ``idle_ignore_outbound``, ``ssh``, ``os``,
+        ``rdp``, ``labels``, ``spec``: see :meth:`Machines.create`.
         """
         method, request = _create_request(
             name=name,
             image=image,
             from_snapshot=from_snapshot,
+            snapshot_version=snapshot_version,
             org=org,
             shared=shared,
             env=env,
@@ -2108,6 +2152,13 @@ class AsyncMachines(Namespace):
                 volumes=volumes,
             ),
         )
+        if snapshot_version is not None:
+            try:
+                await self._transport.call(
+                    *_versions_probe(from_snapshot, org), region=region
+                )
+            except BoxdError as err:
+                _raise_if_no_versions(err)
         created = await self._transport.call(method, request, region=region)
         return _with_paused_automations(
             await self._complete(

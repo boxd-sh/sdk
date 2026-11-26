@@ -162,10 +162,13 @@ def create_vm_from_snapshot(
     isolated: bool,
     config: api_pb2.VmConfig | None,
     labels: Mapping[str, str] | None = None,
+    version: int | None = None,
 ) -> api_pb2.CreateVmFromSnapshotRequest:
     # `isolated` is one-way: the server ORs it with the flag captured on the
     # snapshot, so False means "inherit", never "de-isolate".
     # `labels` are merged over the ones captured on the snapshot, key by key.
+    # `version` unset is the snapshot's current one; 0 is sent as given, for
+    # the server to refuse (versions start at 1).
     request = api_pb2.CreateVmFromSnapshotRequest(
         snapshot=snapshot,
         name=name or "",
@@ -173,6 +176,8 @@ def create_vm_from_snapshot(
         isolated=isolated,
         labels=dict(labels or {}),
     )
+    if version is not None:
+        request.version = version
     if config is not None:
         request.config.CopyFrom(config)
     return request

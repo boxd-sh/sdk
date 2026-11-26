@@ -104,6 +104,8 @@ from .models import (
     OrgRdpDefault,
     OrgRdpDefaultResult,
     OrgRef,
+    OrgSnapshotVersionsKeep,
+    OrgSnapshotVersionsKeepResult,
     OrgUsage,
     Proxy,
     RdpPassword,
@@ -113,6 +115,8 @@ from .models import (
     Screenshot,
     Secret,
     Snapshot,
+    SnapshotCurrentVersion,
+    SnapshotVersion,
     StateSeconds,
     Team,
     TeamMember,
@@ -449,13 +453,39 @@ def snapshot(msg, region: str | None = None) -> Snapshot:
     )
 
 
-def created_snapshot(msg) -> CreatedSnapshot:
+def snapshot_version(msg) -> SnapshotVersion:
+    return SnapshotVersion(
+        version=msg.version,
+        current=msg.current,
+        status=msg.status,
+        staged=msg.staged,
+        storage=msg.storage or "local",
+        size_bytes=msg.size_bytes,
+        created_at=_epoch_ms(msg.created_at),
+        vcpu=msg.vcpu,
+        memory_bytes=msg.memory_bytes,
+        os=msg.os or "linux",
+    )
+
+
+def created_snapshot(msg, *, staged: bool = False) -> CreatedSnapshot:
     return CreatedSnapshot(
         id=msg.snapshot_id,
         name=msg.name,
         version=msg.version,
         status=msg.status,
+        staged=staged,
         paused_automations=msg.paused_automations,
+    )
+
+
+def snapshot_current_version(msg) -> SnapshotCurrentVersion:
+    return SnapshotCurrentVersion(
+        id=msg.snapshot_id,
+        name=msg.name,
+        version=msg.version,
+        previous_version=msg.previous_version,
+        changed=msg.changed,
     )
 
 
@@ -919,6 +949,26 @@ def org_machine_limit(msg) -> OrgMachineLimit:
         vm_count=msg.vm_count,
         is_owner=msg.is_owner,
         request=machine_limit_request(msg.requested_at, msg.requested_max_vms),
+    )
+
+
+def org_snapshot_versions_keep(msg) -> OrgSnapshotVersionsKeep:
+    # `set` on the wire; `is_set` here, like `OrgMachineDefaults`.
+    return OrgSnapshotVersionsKeep(
+        is_set=msg.set,
+        keep=msg.keep,
+        platform_keep=msg.platform_keep,
+        max_keep=msg.max_keep,
+    )
+
+
+def org_snapshot_versions_keep_result(msg) -> OrgSnapshotVersionsKeepResult:
+    return OrgSnapshotVersionsKeepResult(
+        is_set=msg.set,
+        keep=msg.keep,
+        platform_keep=msg.platform_keep,
+        max_keep=msg.max_keep,
+        versions_deleted=msg.versions_deleted,
     )
 
 

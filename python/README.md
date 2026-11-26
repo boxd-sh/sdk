@@ -1344,6 +1344,40 @@ snapshot starts the same restore and raises `ConflictError`: create again once
 `storage` is `"local"`. Saving over an archived snapshot's name needs no
 restore: the new version is saved to local disk and the snapshot is local again.
 
+Saving over a snapshot's name makes a new version, and the org keeps the newest
+ones (`orgs.set_snapshot_versions_keep`; the current one alone unless that is
+raised). `snapshots.versions(name)` lists the versions a snapshot keeps, and a
+machine can be created from any of them that is `"ready"` and `"local"`:
+
+```python
+for v in boxd.snapshots.versions("golden"):          # newest first
+    v.version, v.current, v.status, v.storage, v.size_bytes, v.created_at
+boxd.machines.create("from-v4", from_snapshot="golden", snapshot_version=4)
+boxd.machines.create("from-v4", from_snapshot="golden@4")   # the same
+```
+
+A version that is no longer kept raises `NotFoundError`; one still being saved
+or not on local disk raises `ConflictError`.
+
+The **current** version is the one a machine created from the snapshot gets
+when no version is named. An ordinary save becomes current when it is ready. A
+staged save does not, so you can try a new version before machines start from
+it, and any ready version can be made current, forward or back:
+
+```python
+s = boxd.snapshots.create("build-box", "golden", staged=True)   # saved beside the current one
+boxd.machines.create("try-it", from_snapshot="golden", snapshot_version=s.version)
+boxd.snapshots.set_current_version("golden", s.version)         # machines now start from it
+boxd.snapshots.set_current_version("golden", 4)                 # go back to version 4
+```
+
+A staged version is `"saving"`, then `"ready"` with `staged` set in
+`snapshots.versions(name)`. After going back, the newer versions are kept as
+staged ones and can be made current again. `set_current_version` returns the
+`version`, the `previous_version` and whether anything `changed`. The first
+save of a name can't be staged, and a snapshot keeps as many staged versions
+as the org keeps versions: one more replaces the oldest staged one.
+
 A disk is always created writable; read-only is chosen per attachment. A disk
 can be attached to only one machine at a time.
 
@@ -1476,6 +1510,24 @@ r.machines_changed, r.snapshots_changed            # new_machines_only=True
 d = boxd.orgs.get_rdp_default("acme")
 d.is_set, d.enabled                                # is_set False = no default: RDP on
 boxd.orgs.clear_rdp_default("acme")                # existing machines keep theirs
+```
+
+An org also sets how many versions of each of its snapshots are kept. Saving
+over a snapshot's name makes a new version; the org keeps the current one and
+the newest ones before it, up to this count, and older ones are deleted.
+Without a setting it follows the platform's count (the current version alone,
+unless the cluster's operator changed it). Lowering the count permanently
+deletes the versions beyond it, so ask with `dry_run=True` first. Setting or
+clearing it requires org admin; reading it doesn't.
+
+```python
+k = boxd.orgs.get_snapshot_versions_keep("acme")
+k.is_set, k.keep                                   # is_set False = no setting, so keep is
+k.platform_keep, k.max_keep                        # the platform's; max_keep is the most allowed
+r = boxd.orgs.set_snapshot_versions_keep("acme", keep=2, dry_run=True)
+r.versions_deleted                                 # what keeping 2 would delete; nothing changed
+boxd.orgs.set_snapshot_versions_keep("acme", keep=2)
+boxd.orgs.clear_snapshot_versions_keep("acme")     # follow the platform's count again
 ```
 
 An org has a machine limit: how many machines it may have at once. Any member

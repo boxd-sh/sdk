@@ -26,11 +26,12 @@ import {
   ForkVmRequest,
   SetOrgIdleIgnoreOutboundDefaultRequest,
   SetOrgRdpDefaultRequest,
+  SetOrgSnapshotVersionsKeepRequest,
   type MessageFns,
 } from "../src/_generated/definitions.js";
 import { nodePlatform } from "../src/_platformNode.js";
 import type { MethodDef, Transport, UnaryOptions } from "../src/_rpc.js";
-import { BoxdError } from "../src/errors.js";
+import { APIStatusError, BoxdError, GrpcStatus, NotFoundError } from "../src/errors.js";
 import {
   AccountNamespace,
   ApiKeys,
@@ -1150,7 +1151,7 @@ describe("snapshots", () => {
     ]);
     const created = await new Snapshots(asTransport(t)).create("alpha", "base");
     expect(t.calls[0]!.req).toEqual({ vm: "alpha", name: "base" });
-    expect(created).toEqual({ id: "s1", name: "base", version: 1, status: "pending", pausedAutomations: 0 });
+    expect(created).toEqual({ id: "s1", name: "base", version: 1, status: "pending", staged: false, pausedAutomations: 0 });
   });
 
   it("get unwraps the response", async () => {
@@ -1352,6 +1353,142 @@ describe("env and secrets", () => {
 });
 
 // ── orgs, api keys, account ───────────────────────────────────────────────
+
+describe("snapshot versions", () => {
+  it("lists a snapshot's versions as sent, newest first", async () => {
+    const t = new FakeTransport([
+      {
+        snapshotId: "snap_1",
+        name: "base",
+        versions: [
+          { version: 6, current: false, status: "ready", staged: true, storage: "local", sizeBytes: 9, createdAt: 2, vcpu: 2, memoryBytes: 1, os: "linux" },
+          { version: 5, current: false, status: "saving", storage: "local", sizeBytes: 0, createdAt: 0, vcpu: 2, memoryBytes: 0, os: "" },
+          {
+            version: 4,
+            current: true,
+            status: "ready",
+            storage: "local",
+            sizeBytes: 2048,
+            createdAt: 1_800_000_000_000,
+            vcpu: 2,
+            memoryBytes: 8 * 1024 ** 3,
+            os: "linux",
+          },
+          { version: 3, current: false, status: "ready", storage: "archived", sizeBytes: 1, createdAt: 1, vcpu: 2, memoryBytes: 1, os: "windows" },
+        ],
+      },
+    ]);
+    const versions = await new Snapshots(asTransport(t)).versions("base", { org: "acme" });
+    expect(t.calls[0]!.method).toBe("ListSnapshotVersions");
+    expect(t.calls[0]!.req).toEqual({ name: "base", org: "acme" });
+    expect(versions.map((v) => [v.version, v.current, v.status, v.storage])).toEqual([
+      [6, false, "ready", "local"],
+      [5, false, "saving", "local"],
+      [4, true, "ready", "local"],
+      [3, false, "ready", "archived"],
+    ]);
+    // Only the ready version above the current one is staged.
+    expect(versions.map((v) => v.staged)).toEqual([true, false, false, false]);
+    expect(versions[2]).toEqual({
+      version: 4,
+      current: true,
+      status: "ready",
+      staged: false,
+      storage: "local",
+      sizeBytes: 2048,
+      createdAt: new Date(1_800_000_000_000),
+      vcpu: 2,
+      memoryBytes: 8 * 1024 ** 3,
+      os: "linux",
+    });
+    // Nothing saved yet reads as no time, and an unset OS as Linux.
+    expect(versions[1]!.createdAt).toBeNull();
+    expect(versions[1]!.os).toBe("linux");
+    expect(versions[3]!.os).toBe("windows");
+  });
+
+  it("creates from a version of a snapshot", async () => {
+    const t = new FakeTransport([
+      { vmId: "vm-1", name: "alpha" },
+      aVm(),
+      { snapshotId: "snap_1", name: "base", versions: [] },
+      { vmId: "vm-2", name: "beta" },
+      aVm(),
+      { vmId: "vm-3", name: "gamma" },
+      aVm(),
+    ]);
+    const machines = new Machines(asTransport(t));
+    // No version: the field stays unset, which is the snapshot's current one.
+    await machines.create({ name: "alpha", fromSnapshot: "base" });
+    expect(onTheWire(CreateVmFromSnapshotRequest, t.calls[0]!.req).version).toBeUndefined();
+    // A version asked for rides in its own field, after asking the server for
+    // the snapshot's versions (a server that doesn't know them refuses that).
+    await machines.create({ name: "beta", fromSnapshot: "base", snapshotVersion: 4, org: "acme" });
+    expect(t.calls[2]!.method).toBe("ListSnapshotVersions");
+    expect(t.calls[2]!.req).toEqual({ name: "base", org: "acme" });
+    const pinned = onTheWire(CreateVmFromSnapshotRequest, t.calls[3]!.req);
+    expect(t.calls[3]!.method).toBe("CreateVmFromSnapshot");
+    expect([pinned.snapshot, pinned.version]).toEqual(["base", 4]);
+    // `name@4` is the server's to read: it is sent as written.
+    await machines.create({ name: "gamma", fromSnapshot: "base@4" });
+    const written = onTheWire(CreateVmFromSnapshotRequest, t.calls[5]!.req);
+    expect([written.snapshot, written.version]).toEqual(["base@4", undefined]);
+  });
+
+  it("does not send a create from a version to a server without versions", async () => {
+    // An older server ignores the version and would restore the current one.
+    const t = new FakeTransport([new APIStatusError("unknown method", GrpcStatus.UNIMPLEMENTED)]);
+    await expect(
+      new Machines(asTransport(t)).create({ name: "beta", fromSnapshot: "base", snapshotVersion: 4 }),
+    ).rejects.toThrow(/snapshot's version/);
+    expect(t.calls.map((c) => c.method)).toEqual(["ListSnapshotVersions"]);
+    // Any other answer to the question is the create's own to report.
+    const other = new FakeTransport([
+      new NotFoundError("snapshot not found"),
+      new NotFoundError("snapshot 'base' has no version 4"),
+    ]);
+    await expect(
+      new Machines(asTransport(other)).create({ name: "beta", fromSnapshot: "base", snapshotVersion: 4 }),
+    ).rejects.toThrow(/has no version 4/);
+    expect(other.calls.map((c) => c.method)).toEqual(["ListSnapshotVersions", "CreateVmFromSnapshot"]);
+  });
+
+  it("sends a staged save as its own call", async () => {
+    const saved = { snapshotId: "snap_1", name: "base", version: 5, status: "pending" };
+    const t = new FakeTransport([saved, saved]);
+    const snapshots = new Snapshots(asTransport(t));
+    const plain = await snapshots.create("web", "base");
+    expect(t.calls[0]!.method).toBe("CreateSnapshot");
+    expect([plain.version, plain.staged]).toEqual([5, false]);
+    const staged = await snapshots.create("web", "base", { staged: true });
+    expect(t.calls[1]!.method).toBe("CreateStagedSnapshot");
+    expect(t.calls[1]!.req).toEqual({ vm: "web", name: "base" });
+    expect([staged.version, staged.staged]).toEqual([5, true]);
+    // A server from before staged saves refuses the call: nothing was saved.
+    const old = new FakeTransport([new APIStatusError("unknown method", GrpcStatus.UNIMPLEMENTED)]);
+    await expect(new Snapshots(asTransport(old)).create("web", "base", { staged: true })).rejects.toThrow(
+      /stage a save; nothing was saved/,
+    );
+  });
+
+  it("makes a version the snapshot's current one", async () => {
+    const t = new FakeTransport([
+      { snapshotId: "snap_1", name: "base", version: 3, previousVersion: 5, changed: true },
+    ]);
+    const moved = await new Snapshots(asTransport(t)).setCurrentVersion("base", 3, { org: "acme" });
+    expect(t.calls[0]!.method).toBe("SetSnapshotCurrentVersion");
+    expect(t.calls[0]!.req).toEqual({ snapshot: "base", org: "acme", version: 3 });
+    expect(moved).toEqual({ id: "snap_1", name: "base", version: 3, previousVersion: 5, changed: true });
+  });
+
+  it("snapshotVersion needs a snapshot", async () => {
+    const t = new FakeTransport([]);
+    await expect(
+      new Machines(asTransport(t)).create({ name: "alpha", snapshotVersion: 4 } as never),
+    ).rejects.toThrow(/fromSnapshot/);
+    expect(t.calls).toEqual([]);
+  });
+});
 
 describe("orgs", () => {
   it("marks the default org with a flag rather than a wrapper field", async () => {
@@ -1567,6 +1704,77 @@ describe("orgs", () => {
     const cleared = t.calls[4]!;
     expect(cleared.method).toBe("SetOrgRdpDefault");
     expect(onTheWire(SetOrgRdpDefaultRequest, cleared.req).enabled).toBeUndefined();
+  });
+
+  it("set/get/clear how many snapshot versions the org keeps", async () => {
+    const changed = { set: true, keep: 2, platformKeep: 1, maxKeep: 10, versionsDeleted: 4 };
+    const cleared = { set: false, keep: 1, platformKeep: 1, maxKeep: 10, versionsDeleted: 1 };
+    const t = new FakeTransport([
+      changed,
+      changed,
+      { set: true, keep: 2, platformKeep: 1, maxKeep: 10 },
+      { set: false, keep: 1, platformKeep: 1, maxKeep: 10 },
+      cleared,
+      cleared,
+    ]);
+    const orgs = new Orgs(asTransport(t));
+
+    // A dry run is the same call with `dryRun` set, and answers what the
+    // change would delete.
+    const preview = await orgs.setSnapshotVersionsKeep("o1", { keep: 2, dryRun: true });
+    expect(t.calls[0]!.method).toBe("SetOrgSnapshotVersionsKeep");
+    expect(t.calls[0]!.req).toEqual({ orgId: "o1", keep: 2, dryRun: true });
+    expect(preview.versionsDeleted).toBe(4);
+
+    expect(await orgs.setSnapshotVersionsKeep("o1", { keep: 2 })).toEqual({
+      isSet: true,
+      keep: 2,
+      platformKeep: 1,
+      maxKeep: 10,
+      versionsDeleted: 4,
+    });
+    expect(t.calls[1]!.req).toEqual({ orgId: "o1", keep: 2, dryRun: false });
+    expect(onTheWire(SetOrgSnapshotVersionsKeepRequest, t.calls[1]!.req).keep).toBe(2);
+
+    // `set` on the wire is `isSet` here; with no org setting, `keep` is the
+    // platform's count.
+    expect(await orgs.getSnapshotVersionsKeep("o1")).toEqual({
+      isSet: true,
+      keep: 2,
+      platformKeep: 1,
+      maxKeep: 10,
+    });
+    expect(t.calls[2]!.method).toBe("GetOrgSnapshotVersionsKeep");
+    expect(t.calls[2]!.req).toEqual({ orgId: "o1" });
+    expect((await orgs.getSnapshotVersionsKeep()).isSet).toBe(false);
+    expect(t.calls[3]!.req).toEqual({ orgId: "" });
+
+    // Clearing is the same RPC with `keep` ABSENT, and takes a dry run too.
+    expect((await orgs.clearSnapshotVersionsKeep("o1", { dryRun: true })).versionsDeleted).toBe(1);
+    expect(t.calls[4]!.method).toBe("SetOrgSnapshotVersionsKeep");
+    const dry = onTheWire(SetOrgSnapshotVersionsKeepRequest, t.calls[4]!.req);
+    expect(dry.keep).toBeUndefined();
+    expect(dry.dryRun).toBe(true);
+
+    expect(await orgs.clearSnapshotVersionsKeep("o1")).toEqual({
+      isSet: false,
+      keep: 1,
+      platformKeep: 1,
+      maxKeep: 10,
+      versionsDeleted: 1,
+    });
+    const real = onTheWire(SetOrgSnapshotVersionsKeepRequest, t.calls[5]!.req);
+    expect(real.keep).toBeUndefined();
+    expect(real.dryRun).toBe(false);
+  });
+
+  it("setSnapshotVersionsKeep without keep points at clear", async () => {
+    // Sending it absent would silently clear the setting, so `set` refuses it.
+    const t = new FakeTransport([]);
+    await expect(
+      new Orgs(asTransport(t)).setSnapshotVersionsKeep("o1", {} as never),
+    ).rejects.toThrow(/clearSnapshotVersionsKeep/);
+    expect(t.calls).toEqual([]);
   });
 
   it("setRdpDefault without enabled points at clear", async () => {

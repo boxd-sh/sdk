@@ -18,6 +18,8 @@ import {
   toOrgMembers,
   toOrgRdpDefault,
   toOrgRdpDefaultResult,
+  toOrgSnapshotVersionsKeep,
+  toOrgSnapshotVersionsKeepResult,
   toOrgUsage,
   toRegion,
   type BillingActivityEntry,
@@ -37,6 +39,8 @@ import {
   type OrgMembers,
   type OrgRdpDefault,
   type OrgRdpDefaultResult,
+  type OrgSnapshotVersionsKeep,
+  type OrgSnapshotVersionsKeepResult,
   type OrgUsage,
   type Region,
 } from "./models.js";
@@ -65,6 +69,24 @@ export interface OrgMachineDefaultsParams {
   vcpu?: number;
   /** One of the supported sizes: `"4G"`, `"8G"`, `"16G"`, `"32G"`. */
   memory?: string;
+}
+
+/**
+ * `keep` is required: leaving it out would clear the setting on the wire,
+ * which `clearSnapshotVersionsKeep` says out loud, so
+ * `setSnapshotVersionsKeep` refuses it instead.
+ */
+export interface OrgSnapshotVersionsKeepParams {
+  /**
+   * Versions of each snapshot to keep, the current one included: from 1 to
+   * the `maxKeep` that `getSnapshotVersionsKeep` reports.
+   */
+  keep: number;
+  /**
+   * Check the request and count what it would delete (`versionsDeleted`),
+   * and change nothing. Ask this before lowering the count.
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -316,6 +338,73 @@ export class Orgs {
     await this.transport.unary(BoxdApiDefinition.methods.setOrgMachineDefaults,
       { orgId: org, vcpu: undefined, memoryBytes: undefined },
     );
+  }
+
+  /**
+   * Set how many versions of each of its snapshots this org keeps. Requires
+   * org admin.
+   *
+   * Saving over a snapshot's name makes a new version. The org keeps the
+   * current one and the newest ones before it, up to `keep`, and older ones
+   * are deleted. It applies to every snapshot of the org.
+   *
+   * Lowering the count permanently deletes the versions beyond it, within a
+   * minute. Pass `dryRun: true` first to learn how many (`versionsDeleted`)
+   * without changing anything. Raising it keeps more from the next save on:
+   * a version already deleted does not come back.
+   *
+   * `org` defaults to your home org.
+   */
+  async setSnapshotVersionsKeep(
+    org = "",
+    params: OrgSnapshotVersionsKeepParams,
+  ): Promise<OrgSnapshotVersionsKeepResult> {
+    if (typeof params?.keep !== "number") {
+      throw new BoxdError(
+        "setSnapshotVersionsKeep needs keep, a number of versions. " +
+          "To drop the org's setting, call clearSnapshotVersionsKeep",
+      );
+    }
+    const resp = await this.transport.unary(BoxdApiDefinition.methods.setOrgSnapshotVersionsKeep, {
+      orgId: org,
+      keep: params.keep,
+      dryRun: params.dryRun ?? false,
+    });
+    return toOrgSnapshotVersionsKeepResult(resp);
+  }
+
+  /**
+   * How many versions of each of its snapshots the org keeps. Readable by
+   * any member. `isSet` false means the org stores no setting and `keep` is
+   * the platform's count.
+   */
+  async getSnapshotVersionsKeep(org = ""): Promise<OrgSnapshotVersionsKeep> {
+    const resp = await this.transport.unary(BoxdApiDefinition.methods.getOrgSnapshotVersionsKeep, {
+      orgId: org,
+    });
+    return toOrgSnapshotVersionsKeep(resp);
+  }
+
+  /**
+   * Drop the org's setting, so its snapshots follow the platform's count
+   * again. Requires org admin.
+   *
+   * When the platform keeps fewer versions than the org did, the older ones
+   * are permanently deleted within a minute: pass `dryRun: true` first to
+   * learn how many without changing anything.
+   */
+  async clearSnapshotVersionsKeep(
+    org = "",
+    params: { dryRun?: boolean } = {},
+  ): Promise<OrgSnapshotVersionsKeepResult> {
+    const resp = await this.transport.unary(BoxdApiDefinition.methods.setOrgSnapshotVersionsKeep, {
+      // `keep` is `optional` on the wire, and absence is what clears the
+      // setting.
+      orgId: org,
+      keep: undefined,
+      dryRun: params.dryRun ?? false,
+    });
+    return toOrgSnapshotVersionsKeepResult(resp);
   }
 
   /**

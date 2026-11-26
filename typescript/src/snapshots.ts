@@ -1,14 +1,18 @@
 import { ALL_REGIONS, eachRegion, normalizeRegion, notFoundElsewhere } from "./_regions.js";
 import type { Transport } from "./_rpc.js";
 import { BoxdApiDefinition } from "./_generated/definitions.js";
-import { NotFoundError } from "./errors.js";
+import { APIStatusError, BoxdError, GrpcStatus, NotFoundError } from "./errors.js";
 import {
   toCreatedSnapshot,
   toRegionalList,
   toSnapshot,
+  toSnapshotCurrentVersion,
+  toSnapshotVersion,
   type CreatedSnapshot,
   type RegionalList,
   type Snapshot,
+  type SnapshotCurrentVersion,
+  type SnapshotVersion,
 } from "./models.js";
 import type { RegionOption } from "./regions.js";
 import type {
@@ -23,8 +27,22 @@ import type {
 } from "./_generated/definitions.js";
 
 /**
+ * `err`, or for a server too old to know the call a sentence saying so
+ * (`what` it can't do yet).
+ */
+export function olderServer(err: unknown, what: string): unknown {
+  if (err instanceof BoxdError && err.grpcCode === GrpcStatus.UNIMPLEMENTED) {
+    return new APIStatusError(
+      `this boxd doesn't ${what} yet (it runs an older version)`,
+      err.grpcCode,
+    );
+  }
+  return err;
+}
+
+/**
  * Point-in-time machine captures (memory + disk), replicated across a few
- * workers and versioned latest-only. Boot one with
+ * workers. Saving over a name makes a new version; boot one with
  * `machines.create({ fromSnapshot })`.
  */
 export class Snapshots {
@@ -36,13 +54,36 @@ export class Snapshots {
    * `status` is `"pending"` until it does. The machine's running automations
    * are captured too, and every machine created from the snapshot starts
    * them paused (`pausedAutomations` says how many).
+   *
+   * `{ staged: true }` saves the version without making it the snapshot's
+   * current one: machines created from the snapshot keep getting the current
+   * version. Follow the save with `versions(name)` (the version is
+   * `"saving"`, then `"ready"` with `staged` set), create a machine from it
+   * with `machines.create({ fromSnapshot: name, snapshotVersion })`, and make
+   * it current with `setCurrentVersion(name, version)`. The snapshot must
+   * already have a version (`ConflictError` for the first save of a name). A
+   * snapshot keeps as many staged versions as the org keeps versions
+   * (`orgs.getSnapshotVersionsKeep`): one more replaces the oldest staged one.
    */
-  async create(machine: string, name: string, opts: RegionOption = {}): Promise<CreatedSnapshot> {
+  async create(
+    machine: string,
+    name: string,
+    opts: { staged?: boolean } & RegionOption = {},
+  ): Promise<CreatedSnapshot> {
     const req: CreateSnapshotRequest = { vm: machine, name };
-    const resp = await this.transport.unary(BoxdApiDefinition.methods.createSnapshot, req, {
-      region: opts.region,
-    });
-    const created = toCreatedSnapshot(resp);
+    const staged = opts.staged ?? false;
+    // A staged save is a call of its own, so that a server from before staged
+    // saves refuses it instead of saving a version that becomes current.
+    const method = staged
+      ? BoxdApiDefinition.methods.createStagedSnapshot
+      : BoxdApiDefinition.methods.createSnapshot;
+    let resp: CreateSnapshotResponse;
+    try {
+      resp = await this.transport.unary(method, req, { region: opts.region });
+    } catch (err) {
+      throw staged ? olderServer(err, "stage a save; nothing was saved") : err;
+    }
+    const created = toCreatedSnapshot(resp, staged);
     const n = created.pausedAutomations;
     if (n > 0) {
       console.warn(
@@ -68,6 +109,54 @@ export class Snapshots {
       );
     }
     return toSnapshot(resp.snapshot);
+  }
+
+  /**
+   * The versions a snapshot keeps, newest first.
+   *
+   * Saving over a snapshot's name makes a new version, and the org keeps the
+   * newest ones (`orgs.setSnapshotVersionsKeep`). Create a machine from one
+   * that is `"ready"` and `"local"` with
+   * `machines.create({ fromSnapshot: name, snapshotVersion: v.version })`. A
+   * version you may not use (saved from someone else's private machine) is
+   * not listed.
+   */
+  async versions(name: string, params: { org?: string } & RegionOption = {}): Promise<SnapshotVersion[]> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.listSnapshotVersions,
+      { name, org: params.org ?? "" },
+      { region: params.region },
+    );
+    return resp.versions.map(toSnapshotVersion);
+  }
+
+  /**
+   * Make `version` the snapshot's current version: the one a machine created
+   * from the snapshot gets when no version is named, and the one the
+   * snapshot's size, saver and visibility are read from.
+   *
+   * Forward to a staged version (`create(machine, name, { staged: true })`),
+   * or back to an older one. After going back, the ready versions above the
+   * new current one are staged (`versions(name)`), and can be made current
+   * again the same way. Nothing is copied or deleted by the call.
+   *
+   * For anyone who may save over the snapshot and may use that version. The
+   * version must be `"ready"` and `"local"`, and the snapshot itself
+   * `"local"` (`ConflictError` otherwise); `NotFoundError` for a version the
+   * snapshot does not keep. Naming the version that is current already
+   * succeeds, with `changed` false.
+   */
+  async setCurrentVersion(
+    name: string,
+    version: number,
+    params: { org?: string } & RegionOption = {},
+  ): Promise<SnapshotCurrentVersion> {
+    const resp = await this.transport.unary(
+      BoxdApiDefinition.methods.setSnapshotCurrentVersion,
+      { snapshot: name, org: params.org ?? "", version },
+      { region: params.region },
+    );
+    return toSnapshotCurrentVersion(resp);
   }
 
   /**

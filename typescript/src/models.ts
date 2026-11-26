@@ -32,6 +32,7 @@ import type {
   ExposePortResponse,
   GetBackupScheduleResponse,
   GetOrgIdleIgnoreOutboundDefaultResponse,
+  GetOrgSnapshotVersionsKeepResponse,
   GetOrgBotProtectionDefaultResponse,
   GetOrgMachineDefaultsResponse,
   GetOrgMachineLimitResponse,
@@ -56,7 +57,10 @@ import type {
   SetOrgIdleIgnoreOutboundDefaultResponse,
   SetOrgBotProtectionDefaultResponse,
   SetOrgRdpDefaultResponse,
+  SetOrgSnapshotVersionsKeepResponse,
   SnapshotInfo,
+  SetSnapshotCurrentVersionResponse,
+  SnapshotVersionInfo,
   TeamInfo,
   TeamMemberInfo,
   UsageRates as UsageRatesPb,
@@ -1238,6 +1242,53 @@ export function toSnapshot(s: SnapshotInfo, region?: string): Snapshot {
   };
 }
 
+/**
+ * One version of a snapshot. Saving over a snapshot's name makes a new
+ * version; how many are kept is the org's setting
+ * (`orgs.setSnapshotVersionsKeep`).
+ */
+export interface SnapshotVersion {
+  version: number;
+  /** `true` for the version a create that names none uses. */
+  current: boolean;
+  /** `"ready"`, or `"saving"` for a save still in flight. */
+  status: string;
+  /**
+   * `true` for a ready version above the current one: saved staged
+   * (`snapshots.create(machine, name, { staged: true })`), or set aside when
+   * an older version was made current. A machine is created from it only by
+   * naming it; `snapshots.setCurrentVersion` makes it current.
+   */
+  staged: boolean;
+  /**
+   * Where its bytes are, as {@link Snapshot.storage}. A machine can be created
+   * from it only while this is `"local"`.
+   */
+  storage: string;
+  sizeBytes: number;
+  /** When this version was saved. */
+  createdAt: Date | null;
+  /** The size of a machine created from it. */
+  vcpu: number;
+  memoryBytes: number;
+  os: MachineOs;
+}
+
+export function toSnapshotVersion(v: SnapshotVersionInfo): SnapshotVersion {
+  return {
+    version: v.version,
+    current: v.current,
+    status: v.status,
+    staged: v.staged ?? false,
+    storage: v.storage || "local",
+    sizeBytes: v.sizeBytes,
+    createdAt: optionalMillisToDate(v.createdAt),
+    vcpu: v.vcpu,
+    memoryBytes: v.memoryBytes,
+    os: (v.os || "linux") as MachineOs,
+  };
+}
+
 /** `CreateSnapshot` answers before the artifact lands, so it is its own shape. */
 export interface CreatedSnapshot {
   id: string;
@@ -1246,6 +1297,11 @@ export interface CreatedSnapshot {
   version: number;
   status: ArtifactStatus;
   /**
+   * `true` for a staged save: the version does not become the snapshot's
+   * current one when it is ready.
+   */
+  staged: boolean;
+  /**
    * How many of the source machine's automations this version captured.
    * Every machine created from it is born with them paused, as a fork is, so
    * nothing runs twice; `run restart <id>` inside that machine starts one.
@@ -1253,13 +1309,37 @@ export interface CreatedSnapshot {
   pausedAutomations: number;
 }
 
-export function toCreatedSnapshot(s: CreateSnapshotResponse): CreatedSnapshot {
+export function toCreatedSnapshot(s: CreateSnapshotResponse, staged = false): CreatedSnapshot {
   return {
     id: s.snapshotId,
     name: s.name,
     version: s.version,
     status: s.status as ArtifactStatus,
+    staged,
     pausedAutomations: s.pausedAutomations ?? 0,
+  };
+}
+
+/** What `snapshots.setCurrentVersion` did. */
+export interface SnapshotCurrentVersion {
+  id: string;
+  name: string;
+  /** The snapshot's current version now. */
+  version: number;
+  previousVersion: number;
+  /** `false` when `version` was the current version already. */
+  changed: boolean;
+}
+
+export function toSnapshotCurrentVersion(
+  r: SetSnapshotCurrentVersionResponse,
+): SnapshotCurrentVersion {
+  return {
+    id: r.snapshotId,
+    name: r.name,
+    version: r.version,
+    previousVersion: r.previousVersion,
+    changed: r.changed,
   };
 }
 
@@ -1613,6 +1693,56 @@ export function toOrgMachineLimit(d: GetOrgMachineLimitResponse): OrgMachineLimi
 
 export function toMachineLimitRequest(d: RequestOrgMachineLimitResponse): MachineLimitRequest {
   return { requestedAt: secondsToDate(d.requestedAt), maxVms: d.requestedMaxVms || null };
+}
+
+/** How many versions of each of its snapshots an org keeps. */
+export interface OrgSnapshotVersionsKeep {
+  /**
+   * `true` when the org stores its own setting. `false` means its snapshots
+   * follow the platform's count, which is what `keep` then holds.
+   */
+  isSet: boolean;
+  /** How many versions of each snapshot are kept, the current one included. */
+  keep: number;
+  /**
+   * The platform's count, whether or not the org has its own setting: what
+   * clearing it would give.
+   */
+  platformKeep: number;
+  /** The most an org may set. */
+  maxKeep: number;
+}
+
+export function toOrgSnapshotVersionsKeep(
+  d: GetOrgSnapshotVersionsKeepResponse,
+): OrgSnapshotVersionsKeep {
+  // `set` on the wire; `isSet` here, like `OrgMachineDefaults`.
+  return { isSet: d.set, keep: d.keep, platformKeep: d.platformKeep, maxKeep: d.maxKeep };
+}
+
+/**
+ * What changing an org's snapshot version count did: the setting after the
+ * change, and what it deletes. From a `dryRun` it is what the change would
+ * do, with nothing changed.
+ */
+export interface OrgSnapshotVersionsKeepResult extends OrgSnapshotVersionsKeep {
+  /**
+   * Older versions of the org's snapshots deleted because of the change,
+   * within a minute of it. They cannot be brought back.
+   */
+  versionsDeleted: number;
+}
+
+export function toOrgSnapshotVersionsKeepResult(
+  r: SetOrgSnapshotVersionsKeepResponse,
+): OrgSnapshotVersionsKeepResult {
+  return {
+    isSet: r.set,
+    keep: r.keep,
+    platformKeep: r.platformKeep,
+    maxKeep: r.maxKeep,
+    versionsDeleted: r.versionsDeleted,
+  };
 }
 
 /** Whether new machines in an org start with `idleIgnoreOutbound` on. */
